@@ -283,6 +283,20 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.assertEqual(self.backend.presence("cold-1"), SessionPresence.LIVE)
         self.assertEqual(self.backend.history("cold-1")[-1]["type"], "user/message")
 
+    def test_idle_attached_session_is_reused_without_resume_probe(self) -> None:
+        service = GatewayService(self.backend)
+        first = service.start("work", session_id="fresh-1")
+        self.assertEqual(first.action, "created")
+        self.server.sessions["fresh-1"]["running"] = False
+        self.server.calls.clear()
+
+        second = service.continue_session("fresh-1", "more work")
+        self.assertEqual(second.action, "reused")
+        self.assertNotIn("session.models", [method for method, _payload in self.server.calls])
+        self.server.sessions["fresh-1"]["running"] = False
+        self.assertEqual(self.backend.status("fresh-1")["state"], "live")
+        self.assertEqual(self.backend.status("fresh-1")["status"], "idle")
+
     def test_prompt_receipt_is_host_rpc_id_and_cancel_works(self) -> None:
         receipt = GatewayService(self.backend).start("work", session_id="fresh-1")
         self.assertEqual(receipt.action, "created")
@@ -290,7 +304,8 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.assertEqual(self.backend.status("fresh-1")["state"], "live")
         canceled = self.backend.cancel("fresh-1")
         self.assertTrue(canceled["canceled"])
-        self.assertEqual(self.backend.status("fresh-1")["state"], "persisted")
+        self.assertEqual(self.backend.status("fresh-1")["state"], "live")
+        self.assertEqual(self.backend.status("fresh-1")["status"], "idle")
 
 
 class FakeSubscription:

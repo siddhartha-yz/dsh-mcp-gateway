@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from dsh_mcp_gateway import build_mcp_server
-from dsh_mcp_gateway.backend import ColdResumeUnavailable, PublicSdkBackend, SessionCatalog
+from dsh_mcp_gateway.backend import ColdResumeUnavailable, PublicSdkBackend, PublicSdkBridge, SessionCatalog
 from dsh_mcp_gateway.routing import EnsureAction, GatewayService, SessionRouter
 from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 
@@ -137,16 +137,37 @@ class GatewayServiceTests(unittest.TestCase):
         )
 
 
+class FakeSubscription:
+    def __init__(self) -> None:
+        self.notifications: list[Any] = []
+        self.closed = False
+
+    def emit(self, notification: Any) -> None:
+        self.notifications.append(notification)
+
+    def drain(self, on_notification: Any) -> None:
+        pending, self.notifications = self.notifications, []
+        for notification in pending:
+            on_notification(notification)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class FakePublicSdkClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, list[dict[str, Any]]]] = []
         self.fail = False
+        self.subscription = FakeSubscription()
 
     def session_prompt(self, session_id: str, content_blocks: list[dict[str, Any]]) -> str:
         self.calls.append(("session_prompt", session_id, content_blocks))
         if self.fail:
             raise RuntimeError("sdk prompt failed")
         return "sdk-message-1"
+
+    def subscribe_notifications(self, notification_filter: Any = None) -> FakeSubscription:
+        return self.subscription
 
 
 class PublicSdkBackendTests(unittest.TestCase):
@@ -207,6 +228,26 @@ class PublicSdkBackendTests(unittest.TestCase):
             result = backend.cancel("s1")
             self.assertFalse(result["canceled"])
             self.assertEqual(result["reason"], "unsupported-by-public-sdk")
+
+    def test_notification_bridge_projects_sdk_events_without_owning_client(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakePublicSdkClient()
+            bridge = PublicSdkBridge(client, SessionCatalog(Path(tmp) / "sessions.json"))
+            GatewayService(bridge.backend).start("work", session_id="s1")
+            client.subscription.emit(
+                {"method": "session.status", "payload": {"sessionId": "s1", "status": "running"}}
+            )
+            client.subscription.emit(
+                {
+                    "method": "session.event",
+                    "payload": {"sessionId": "s1", "event": {"type": "goal/change", "seq": 4}},
+                }
+            )
+            bridge.poll_once()
+            self.assertEqual(bridge.backend.status("s1")["status"], "running")
+            self.assertEqual(bridge.backend.history("s1"), [{"type": "goal/change", "seq": 4}])
+            bridge.close()
+            self.assertTrue(client.subscription.closed)
 
 
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None

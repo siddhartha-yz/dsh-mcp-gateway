@@ -32,8 +32,16 @@ class DshControlBackend(DshSessionBackend, Protocol):
     def cancel(self, session_id: str) -> dict[str, Any]: ...
 
 
+class PublicSdkSubscription(Protocol):
+    def drain(self, on_notification: Any) -> None: ...
+
+    def close(self) -> None: ...
+
+
 class PublicSdkClient(Protocol):
     def session_prompt(self, session_id: str, content_blocks: list[dict[str, Any]]) -> str: ...
+
+    def subscribe_notifications(self, notification_filter: Any = None) -> PublicSdkSubscription: ...
 
 
 class ColdResumeUnavailable(RuntimeError):
@@ -89,6 +97,70 @@ class SessionCatalog:
             encoding="utf-8",
         )
         tmp.replace(self.path)
+
+
+class PublicSdkBridge:
+    """Project public-SDK notifications into a `PublicSdkBackend`.
+
+    The bridge does not own or close the SDK client itself. It owns only the
+    notification subscription, so client/runtime lifecycle can remain outside
+    this adapter while the MCP-facing state projection stays replaceable.
+    """
+
+    def __init__(
+        self,
+        client: PublicSdkClient,
+        catalog: SessionCatalog,
+        *,
+        poll_interval_s: float = 0.05,
+    ) -> None:
+        if poll_interval_s <= 0:
+            raise ValueError("poll_interval_s must be positive")
+        self.backend = PublicSdkBackend(client, catalog)
+        self._subscription = client.subscribe_notifications()
+        self._poll_interval_s = poll_interval_s
+        self._closed = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.last_error: BaseException | None = None
+
+    def start(self) -> None:
+        if self._closed.is_set():
+            raise RuntimeError("bridge is closed")
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run, name="dsh-public-sdk-events", daemon=True)
+        self._thread.start()
+
+    def poll_once(self) -> None:
+        if self._closed.is_set():
+            return
+        self._subscription.drain(self._record)
+
+    def close(self) -> None:
+        if self._closed.is_set():
+            return
+        self._closed.set()
+        self._subscription.close()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=max(1.0, self._poll_interval_s * 4))
+
+    def _run(self) -> None:
+        while not self._closed.is_set():
+            try:
+                self.poll_once()
+            except BaseException as exc:
+                self.last_error = exc
+                return
+            self._closed.wait(self._poll_interval_s)
+
+    def _record(self, notification: Any) -> None:
+        method = getattr(notification, "method", None)
+        payload = getattr(notification, "payload", None)
+        if method is None and isinstance(notification, dict):
+            method = notification.get("method")
+            payload = notification.get("payload") or notification.get("params")
+        if isinstance(method, str) and isinstance(payload, dict):
+            self.backend.observe_notification(method, payload)
 
 
 class PublicSdkBackend:

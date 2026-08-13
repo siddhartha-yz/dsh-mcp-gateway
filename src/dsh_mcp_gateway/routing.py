@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Any
 
-from .backend import DshSessionBackend
+from .backend import DshControlBackend, DshSessionBackend
 from .types import SessionHandle, SessionPresence
 
 
@@ -36,3 +37,45 @@ class SessionRouter:
             return EnsureResult(self._backend.create(session_id), EnsureAction.CREATED)
 
         raise AssertionError(f"unhandled session presence: {presence!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class PromptReceipt:
+    session_id: str
+    action: str
+    message_id: str
+
+    def as_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+class GatewayService:
+    """Stable control API that future MCP adapters can expose unchanged."""
+
+    def __init__(self, backend: DshControlBackend) -> None:
+        self._backend = backend
+        self._router = SessionRouter(backend)
+
+    def start(self, prompt: str, *, session_id: str | None = None) -> PromptReceipt:
+        ensured = self._router.ensure(session_id)
+        message_id = self._backend.prompt(ensured.handle.session_id, prompt)
+        return PromptReceipt(
+            session_id=ensured.handle.session_id,
+            action=ensured.action.value,
+            message_id=message_id,
+        )
+
+    def continue_session(self, session_id: str, prompt: str) -> PromptReceipt:
+        return self.start(prompt, session_id=session_id)
+
+    def status(self, session_id: str) -> dict[str, Any]:
+        return self._backend.status(session_id)
+
+    def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        return self._backend.history(session_id, limit=limit)
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        return self._backend.list_sessions()
+
+    def cancel(self, session_id: str) -> dict[str, Any]:
+        return self._backend.cancel(session_id)

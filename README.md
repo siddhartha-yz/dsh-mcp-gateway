@@ -30,7 +30,7 @@ A separate execution MCP such as local-shell-mcp can remain available *to the DS
 
 ## Current status
 
-Early architecture prototype.
+Early control-plane prototype.
 
 The first invariant implemented here is session routing:
 
@@ -46,7 +46,20 @@ requested session
 
 A persisted session must never silently fall back to `create` if resume fails; doing so turns a recoverable transport/runtime problem into a session-id collision or split-brain state.
 
-The real DSH transport, MCP surface, OAuth, event streaming, and restart supervisor are intentionally not committed yet. DeepSeek Harness is currently a developer preview, so those boundaries should be kept replaceable until its public control protocols settle.
+The transport-independent control service and MCP v2 tool surface are now implemented. The real DSH transport, OAuth, event streaming, and restart supervisor remain intentionally separate because DeepSeek Harness is currently a developer preview and its public control protocols are still settling.
+
+Current MCP tools:
+
+```text
+dsh_start
+dsh_continue
+dsh_status
+dsh_history
+dsh_list
+dsh_cancel
+```
+
+The MCP layer depends only on the stable gateway backend contract; it does not know whether DSH is reached through the Python SDK, ACP, a protocol-driver plugin, or a future official resumable API.
 
 ## Evidence behind the design
 
@@ -65,13 +78,20 @@ The same experiment also verified the current public Python SDK limitation: afte
 
 ## Development
 
-The current core has no third-party runtime dependencies:
+The routing/control core has no third-party runtime dependencies:
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for the boundary decisions.
+To exercise the real MCP v2 schemas as well:
+
+```sh
+python -m pip install -e '.[server]'
+python -m unittest discover -s tests -v
+```
+
+The server extra currently targets the stable MCP Python SDK v2 line (`mcp>=2,<3`). See [`docs/architecture.md`](docs/architecture.md) for the boundary decisions.
 
 ## Relationship to local-shell-mcp
 

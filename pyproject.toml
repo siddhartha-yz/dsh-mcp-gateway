@@ -11,6 +11,9 @@ requires-python = ">=3.11"
 authors = [{ name = "siddhartha-yz" }]
 dependencies = []
 
+[project.optional-dependencies]
+server = ["mcp>=2,<3"]
+
 [project.urls]
 Repository = "https://github.com/siddhartha-yz/dsh-mcp-gateway"
 Issues = "https://github.com/siddhartha-yz/dsh-mcp-gateway/issues"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from .types import SessionHandle, SessionPresence
 
@@ -13,3 +13,15 @@ class DshSessionBackend(Protocol):
     def resume(self, session_id: str) -> SessionHandle: ...
 
     def create(self, session_id: str | None = None) -> SessionHandle: ...
+
+
+class DshControlBackend(DshSessionBackend, Protocol):
+    def prompt(self, session_id: str, text: str) -> str: ...
+
+    def status(self, session_id: str) -> dict[str, Any]: ...
+
+    def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]: ...
+
+    def list_sessions(self) -> list[dict[str, Any]]: ...
+
+    def cancel(self, session_id: str) -> dict[str, Any]: ...

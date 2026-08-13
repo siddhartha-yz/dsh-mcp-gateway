@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from dsh_mcp_gateway import build_mcp_server
-from dsh_mcp_gateway.backend import ColdResumeUnavailable, PublicSdkBackend, PublicSdkBridge, SessionCatalog
+from dsh_mcp_gateway import build_mcp_server, build_public_sdk_gateway
+from dsh_mcp_gateway.backend import (
+    ColdResumeUnavailable,
+    ExperimentalWebHostBackend,
+    PublicSdkBackend,
+    PublicSdkBridge,
+    SessionCatalog,
+)
 from dsh_mcp_gateway.routing import EnsureAction, GatewayService, SessionRouter
 from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 
@@ -135,6 +144,153 @@ class GatewayServiceTests(unittest.TestCase):
             backend.calls,
             [("status", "s1"), ("history", "s1", 5), ("list_sessions",), ("cancel", "s1")],
         )
+
+
+class FakeWebHostHandler(BaseHTTPRequestHandler):
+    server: Any
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return None
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length))
+        method = body["method"]
+        payload = body["payload"]
+        self.server.calls.append((method, payload))
+        sessions = self.server.sessions
+        result: dict[str, Any]
+        if method == "host.describe":
+            result = {
+                "ok": True,
+                "value": {
+                    "version": "0.1.0-rc.6",
+                    "cwd": "/tmp/project",
+                    "attachedSessions": 0,
+                    "canOpenPath": False,
+                },
+            }
+        elif method == "session.list":
+            items = [
+                {
+                    "sessionId": session_id,
+                    "updatedAt": 1,
+                    "running": state["running"],
+                    "blank": False,
+                    "cwd": state["cwd"],
+                }
+                for session_id, state in sessions.items()
+            ]
+            result = {"ok": True, "value": {"items": items}}
+        elif method == "session.models":
+            session_id = payload["sessionId"]
+            if session_id not in sessions:
+                result = {
+                    "ok": False,
+                    "error": {
+                        "code": "session-not-found",
+                        "message": "missing",
+                        "details": {"sessionId": session_id},
+                    },
+                }
+            else:
+                sessions[session_id]["running"] = True
+                result = {
+                    "ok": True,
+                    "value": {
+                        "current": {"provider": "deepseek-official", "model": "deepseek-v4-flash"},
+                        "routable": True,
+                        "groups": [],
+                        "failures": [],
+                    },
+                }
+        elif method == "session.create":
+            session_id = payload.get("sessionId", "generated-web-session")
+            sessions[session_id] = {"running": True, "cwd": payload.get("cwd"), "events": []}
+            result = {"ok": True, "value": {"sessionId": session_id}}
+        elif method == "session.prompt":
+            session_id = payload["sessionId"]
+            sessions[session_id]["running"] = True
+            sessions[session_id]["events"].append(
+                {"type": "user/message", "seq": len(sessions[session_id]["events"]) + 1}
+            )
+            result = {"ok": True, "value": {"accepted": True}}
+        elif method == "session.history":
+            session_id = payload["sessionId"]
+            entries = [{"event": event} for event in sessions[session_id]["events"]]
+            result = {"ok": True, "value": {"events": entries, "hasMore": False}}
+        elif method == "session.cancel":
+            session_id = payload["sessionId"]
+            sessions[session_id]["running"] = False
+            result = {"ok": True, "value": {"accepted": True}}
+        else:
+            result = {"ok": False, "error": {"code": "bad-request", "message": method, "details": {}}}
+        response = json.dumps(
+            {
+                "type": "server-response",
+                "rpcId": body["rpcId"],
+                "result": result,
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+
+class ExperimentalWebHostBackendTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeWebHostHandler)
+        self.server.calls = []
+        self.server.sessions = {
+            "cold-1": {
+                "running": False,
+                "cwd": "/tmp/project",
+                "events": [{"type": "turn/end", "seq": 1}],
+            }
+        }
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address
+        self.backend = ExperimentalWebHostBackend(
+            f"http://{host}:{port}",
+            cwd="/tmp/project",
+        )
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def test_non_loopback_target_is_rejected_by_default(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no network authentication"):
+            ExperimentalWebHostBackend("http://example.com:3080", cwd="/tmp/project")
+
+    def test_host_descriptor_is_diagnostic_only(self) -> None:
+        descriptor = self.backend.describe_host()
+        self.assertEqual(descriptor["version"], "0.1.0-rc.6")
+        self.assertEqual([method for method, _payload in self.server.calls], ["host.describe"])
+
+    def test_cold_session_resumes_before_prompt_without_opening_a_turn(self) -> None:
+        receipt = GatewayService(self.backend).continue_session("cold-1", "continue")
+        self.assertEqual(receipt.action, "resumed")
+        self.assertEqual(receipt.session_id, "cold-1")
+        self.assertEqual(
+            [method for method, _payload in self.server.calls],
+            ["session.list", "session.list", "session.models", "session.prompt"],
+        )
+        self.assertEqual(self.backend.presence("cold-1"), SessionPresence.LIVE)
+        self.assertEqual(self.backend.history("cold-1")[-1]["type"], "user/message")
+
+    def test_prompt_receipt_is_host_rpc_id_and_cancel_works(self) -> None:
+        receipt = GatewayService(self.backend).start("work", session_id="fresh-1")
+        self.assertEqual(receipt.action, "created")
+        self.assertTrue(receipt.message_id)
+        self.assertEqual(self.backend.status("fresh-1")["state"], "live")
+        canceled = self.backend.cancel("fresh-1")
+        self.assertTrue(canceled["canceled"])
+        self.assertEqual(self.backend.status("fresh-1")["state"], "persisted")
 
 
 class FakeSubscription:
@@ -280,6 +436,24 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             backend.calls,
             [("presence", "s1"), ("create", "s1"), ("prompt", "s1", "do work")],
         )
+
+    async def test_public_sdk_factory_wires_mcp_to_event_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakePublicSdkClient()
+            gateway = build_public_sdk_gateway(client, Path(tmp) / "sessions.json")
+            started = await gateway.server.call_tool(
+                "dsh_start",
+                {"prompt": "do work", "session_id": "s1"},
+            )
+            self.assertEqual(started.structured_content["action"], "created")
+            client.subscription.emit(
+                {"method": "session.status", "payload": {"sessionId": "s1", "status": "running"}}
+            )
+            gateway.bridge.poll_once()
+            status = await gateway.server.call_tool("dsh_status", {"session_id": "s1"})
+            self.assertEqual(status.structured_content["status"], "running")
+            gateway.close()
+            self.assertTrue(client.subscription.closed)
 
 
 if __name__ == "__main__":

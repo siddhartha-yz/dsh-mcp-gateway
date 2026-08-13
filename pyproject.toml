@@ -11,8 +11,13 @@ requires-python = ">=3.11"
 authors = [{ name = "siddhartha-yz" }]
 dependencies = []
 
+[project.scripts]
+dsh-mcp-gateway = "dsh_mcp_gateway.cli:main"
+
 [project.optional-dependencies]
 server = ["mcp>=2,<3"]
+dsh = ["deepseek-harness-sdk==0.1.0rc6"]
+all = ["mcp>=2,<3", "deepseek-harness-sdk==0.1.0rc6"]
 
 [project.urls]
 Repository = "https://github.com/siddhartha-yz/dsh-mcp-gateway"

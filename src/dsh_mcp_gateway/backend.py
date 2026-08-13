@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import threading
 import uuid
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from .types import SessionHandle, SessionPresence
 
@@ -99,6 +104,217 @@ class SessionCatalog:
         tmp.replace(self.path)
 
 
+class ExperimentalWebHostError(RuntimeError):
+    """DSH developer-preview Web Host API transport or business failure."""
+
+
+class ExperimentalWebHostBackend:
+    """Cold-resumable adapter over DSH's developer-preview Web Host API.
+
+    This deliberately targets an external DSH Web Host rather than owning its
+    process. The Host API currently has no stable protocol version and DSH's Web
+    server has no authentication, so non-loopback targets are refused by
+    default. Put this gateway in front of a loopback/private DSH Host instead.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        cwd: str | os.PathLike[str],
+        timeout_s: float = 10.0,
+        allow_non_loopback: bool = False,
+    ) -> None:
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("base_url must be an absolute http(s) URL")
+        if timeout_s <= 0:
+            raise ValueError("timeout_s must be positive")
+        if not allow_non_loopback and not self._is_loopback_host(parsed.hostname):
+            raise ValueError(
+                "DSH Web Host has no network authentication; use a loopback base_url "
+                "or explicitly set allow_non_loopback=True behind a trusted private network"
+            )
+        self.base_url = base_url.rstrip("/")
+        self.cwd = str(Path(cwd).resolve())
+        self.timeout_s = timeout_s
+
+    @staticmethod
+    def _is_loopback_host(host: str) -> bool:
+        if host.lower() == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def describe_host(self) -> dict[str, Any]:
+        """Return the Host diagnostic descriptor.
+
+        `version` is currently a DSH placeholder, not a protocol compatibility
+        marker, so this method must not be used as a schema-version gate.
+        """
+        return self._call("host.describe", {})
+
+    def presence(self, session_id: str) -> SessionPresence:
+        for item in self.list_sessions():
+            if item.get("session_id") != session_id:
+                continue
+            return SessionPresence.LIVE if item.get("state") == "live" else SessionPresence.PERSISTED
+        return SessionPresence.ABSENT
+
+    def reuse(self, session_id: str) -> SessionHandle:
+        if self.presence(session_id) is not SessionPresence.LIVE:
+            raise KeyError(session_id)
+        return SessionHandle(session_id)
+
+    def resume(self, session_id: str) -> SessionHandle:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        # session.models is intentionally turn-free but resolves through the
+        # Host's shared agent resolver, which cold-resumes ordinary sessions.
+        self._call("session.models", {"sessionId": session_id})
+        return SessionHandle(session_id)
+
+    def create(self, session_id: str | None = None) -> SessionHandle:
+        payload: dict[str, Any] = {"cwd": self.cwd}
+        if session_id is not None:
+            payload["sessionId"] = session_id
+        value = self._call("session.create", payload)
+        created = value.get("sessionId")
+        if not isinstance(created, str) or not created:
+            raise ExperimentalWebHostError("session.create returned no sessionId")
+        return SessionHandle(created)
+
+    def prompt(self, session_id: str, text: str) -> str:
+        rpc_id, value = self._call_with_id(
+            "session.prompt",
+            {
+                "sessionId": session_id,
+                "mode": "queue",
+                "content": [{"type": "text", "text": text}],
+            },
+        )
+        if value.get("accepted") is not True:
+            raise ExperimentalWebHostError("session.prompt was not accepted")
+        # The Host does not return a MessageId; its durable user/message source
+        # carries this exact rpcId, so it is the stable admission receipt.
+        return rpc_id
+
+    def status(self, session_id: str) -> dict[str, Any]:
+        presence = self.presence(session_id)
+        if presence is SessionPresence.ABSENT:
+            return {"session_id": session_id, "state": "absent"}
+        for item in self.list_sessions():
+            if item.get("session_id") == session_id:
+                return item
+        return {"session_id": session_id, "state": "absent"}
+
+    def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 or limit > 1000:
+            raise ValueError("limit must be an integer in [1, 1000]")
+        value = self._call(
+            "session.history",
+            {"sessionId": session_id, "maxMessages": limit},
+        )
+        entries = value.get("events")
+        if not isinstance(entries, list):
+            raise ExperimentalWebHostError("session.history returned invalid events")
+        events: list[dict[str, Any]] = []
+        for entry in entries:
+            if isinstance(entry, dict) and isinstance(entry.get("event"), dict):
+                events.append(dict(entry["event"]))
+        return events[-limit:]
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        value = self._call("session.list", {})
+        items = value.get("items")
+        if not isinstance(items, list):
+            raise ExperimentalWebHostError("session.list returned invalid items")
+        result: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("sessionId"), str):
+                continue
+            result.append(
+                {
+                    "session_id": item["sessionId"],
+                    "state": "live" if item.get("running") is True else "persisted",
+                    "status": "running" if item.get("running") is True else "cold",
+                    "updated_at": item.get("updatedAt"),
+                    "cwd": item.get("cwd"),
+                    "blank": item.get("blank"),
+                    "agent_preset": item.get("agentPreset"),
+                }
+            )
+        return result
+
+    def cancel(self, session_id: str) -> dict[str, Any]:
+        try:
+            value = self._call("session.cancel", {"sessionId": session_id})
+        except ExperimentalWebHostError as exc:
+            return {"session_id": session_id, "canceled": False, "reason": str(exc)}
+        return {
+            "session_id": session_id,
+            "canceled": value.get("accepted") is True,
+        }
+
+    def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        _rpc_id, value = self._call_with_id(method, payload)
+        return value
+
+    def _call_with_id(self, method: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        rpc_id = str(uuid.uuid4())
+        body = json.dumps(
+            {
+                "type": "client-request",
+                "rpcId": rpc_id,
+                "method": method,
+                "payload": payload,
+            },
+            separators=(",", ":"),
+        ).encode()
+        request = Request(
+            f"{self.base_url}/api/{method}",
+            data=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_s) as response:
+                raw = response.read()
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            raise ExperimentalWebHostError(
+                f"{method} transport failed with HTTP {exc.code}: {detail[:500]}"
+            ) from exc
+        except URLError as exc:
+            raise ExperimentalWebHostError(f"{method} transport failed: {exc.reason}") from exc
+        except (HTTPException, OSError) as exc:
+            raise ExperimentalWebHostError(f"{method} transport failed: {exc}") from exc
+        try:
+            envelope = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ExperimentalWebHostError(f"{method} returned invalid JSON") from exc
+        if not isinstance(envelope, dict) or envelope.get("type") != "server-response":
+            raise ExperimentalWebHostError(f"{method} returned invalid response envelope")
+        if envelope.get("rpcId") != rpc_id:
+            raise ExperimentalWebHostError(f"{method} rpcId mismatch")
+        result = envelope.get("result")
+        if not isinstance(result, dict):
+            raise ExperimentalWebHostError(f"{method} returned invalid result")
+        if result.get("ok") is not True:
+            error = result.get("error")
+            if isinstance(error, dict):
+                code = error.get("code", "unknown")
+                message = error.get("message", "unknown DSH Web Host error")
+                raise ExperimentalWebHostError(f"{method} [{code}]: {message}")
+            raise ExperimentalWebHostError(f"{method} failed")
+        value = result.get("value")
+        if not isinstance(value, dict):
+            raise ExperimentalWebHostError(f"{method} returned a non-object value")
+        return rpc_id, value
+
+
 class PublicSdkBridge:
     """Project public-SDK notifications into a `PublicSdkBackend`.
 
@@ -148,7 +364,7 @@ class PublicSdkBridge:
         while not self._closed.is_set():
             try:
                 self.poll_once()
-            except BaseException as exc:
+            except Exception as exc:  # noqa: BLE001 - SDK subscription is an external transport boundary.
                 self.last_error = exc
                 return
             self._closed.wait(self._poll_interval_s)

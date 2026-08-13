@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
 
 from dsh_mcp_gateway import build_mcp_server
+from dsh_mcp_gateway.backend import ColdResumeUnavailable, PublicSdkBackend, SessionCatalog
 from dsh_mcp_gateway.routing import EnsureAction, GatewayService, SessionRouter
 from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 
@@ -132,6 +135,78 @@ class GatewayServiceTests(unittest.TestCase):
             backend.calls,
             [("status", "s1"), ("history", "s1", 5), ("list_sessions",), ("cancel", "s1")],
         )
+
+
+class FakePublicSdkClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, list[dict[str, Any]]]] = []
+        self.fail = False
+
+    def session_prompt(self, session_id: str, content_blocks: list[dict[str, Any]]) -> str:
+        self.calls.append(("session_prompt", session_id, content_blocks))
+        if self.fail:
+            raise RuntimeError("sdk prompt failed")
+        return "sdk-message-1"
+
+
+class PublicSdkBackendTests(unittest.TestCase):
+    def test_catalog_survives_gateway_process_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            first = SessionCatalog(path)
+            first.add("s1")
+            second = SessionCatalog(path)
+            self.assertTrue(second.contains("s1"))
+            self.assertEqual(second.ids(), ["s1"])
+
+    def test_live_prompt_then_notifications_project_status_and_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakePublicSdkClient()
+            backend = PublicSdkBackend(client, SessionCatalog(Path(tmp) / "sessions.json"))
+            receipt = GatewayService(backend).start("work", session_id="s1")
+            self.assertEqual(receipt.action, "created")
+            self.assertEqual(receipt.message_id, "sdk-message-1")
+            self.assertEqual(backend.presence("s1"), SessionPresence.LIVE)
+            backend.observe_notification("session.status", {"sessionId": "s1", "status": "running"})
+            backend.observe_notification(
+                "session.event",
+                {"sessionId": "s1", "event": {"type": "turn/start", "seq": 1}},
+            )
+            self.assertEqual(backend.status("s1")["status"], "running")
+            self.assertEqual(backend.history("s1"), [{"type": "turn/start", "seq": 1}])
+
+    def test_failed_first_prompt_rolls_back_catalog_allocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            client = FakePublicSdkClient()
+            client.fail = True
+            backend = PublicSdkBackend(client, SessionCatalog(path))
+            with self.assertRaisesRegex(RuntimeError, "sdk prompt failed"):
+                GatewayService(backend).start("work", session_id="s1")
+            self.assertEqual(backend.presence("s1"), SessionPresence.ABSENT)
+            self.assertFalse(SessionCatalog(path).contains("s1"))
+
+    def test_restart_detects_persisted_id_and_fails_before_sdk_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            first_client = FakePublicSdkClient()
+            first = PublicSdkBackend(first_client, SessionCatalog(path))
+            GatewayService(first).start("work", session_id="s1")
+
+            second_client = FakePublicSdkClient()
+            restarted = PublicSdkBackend(second_client, SessionCatalog(path))
+            self.assertEqual(restarted.presence("s1"), SessionPresence.PERSISTED)
+            with self.assertRaisesRegex(ColdResumeUnavailable, "cannot cold-resume"):
+                GatewayService(restarted).continue_session("s1", "continue")
+            self.assertEqual(second_client.calls, [])
+
+    def test_public_sdk_cancel_is_explicitly_unsupported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(Path(tmp) / "sessions.json"))
+            GatewayService(backend).start("work", session_id="s1")
+            result = backend.cancel("s1")
+            self.assertFalse(result["canceled"])
+            self.assertEqual(result["reason"], "unsupported-by-public-sdk")
 
 
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None

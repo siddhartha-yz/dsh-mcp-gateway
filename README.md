@@ -46,7 +46,9 @@ requested session
 
 A persisted session must never silently fall back to `create` if resume fails; doing so turns a recoverable transport/runtime problem into a session-id collision or split-brain state.
 
-The transport-independent control service and MCP v2 tool surface are now implemented. The real DSH transport, OAuth, event streaming, and restart supervisor remain intentionally separate because DeepSeek Harness is currently a developer preview and its public control protocols are still settling.
+The transport-independent control service and MCP v2 tool surface are now implemented. `PublicSdkBackend` also covers the live-session path for an injected public DSH SDK client and persists a small gateway-owned session catalog. That catalog is deliberately used to recognize known ids after restart so the gateway fails closed instead of recreating them.
+
+Cold resume, OAuth, a production event bridge, and restart supervision remain intentionally separate because DeepSeek Harness is currently a developer preview and its public control protocols are still settling. With the current public SDK, a catalogued cold session raises `ColdResumeUnavailable` before any new prompt is sent.
 
 Current MCP tools:
 

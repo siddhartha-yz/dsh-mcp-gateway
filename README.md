@@ -46,9 +46,11 @@ requested session
 
 A persisted session must never silently fall back to `create` if resume fails; doing so turns a recoverable transport/runtime problem into a session-id collision or split-brain state.
 
-The transport-independent control service and MCP v2 tool surface are now implemented. `PublicSdkBackend` also covers the live-session path for an injected public DSH SDK client and persists a small gateway-owned session catalog. That catalog is deliberately used to recognize known ids after restart so the gateway fails closed instead of recreating them.
+The transport-independent control service and MCP v2 tool surface are implemented. `PublicSdkBackend` covers the live-session path for an injected public DSH SDK client and persists a small gateway-owned session catalog. That catalog deliberately recognizes known ids after restart so this transport fails closed instead of recreating them; with the current public SDK, a catalogued cold session raises `ColdResumeUnavailable` before any new prompt is sent.
 
-Cold resume, OAuth, a production event bridge, and restart supervision remain intentionally separate because DeepSeek Harness is currently a developer preview and its public control protocols are still settling. With the current public SDK, a catalogued cold session raises `ColdResumeUnavailable` before any new prompt is sent.
+For restart-capable operation, `ExperimentalWebHostBackend` targets the DSH developer-preview Web Host API behind loopback/private networking. It has been validated against the official `@deepseek-ai/dsh@0.1.0-rc.6` runtime: a persisted session can be reopened after the entire DSH Host process is stopped and restarted with the same `DSH_HOME`, and a later prompt continues the same durable history. The adapter also exposes explicit CAS-based goal status/resume/pause controls.
+
+An embedded OAuth prototype is present for MCP deployments: persisted dynamic clients/tokens, an owner approval page, refresh-token rotation, resource-bound access tokens, and MCP SDK authorization routes. The issuer is canonicalized once so metadata, RFC 9207 callback `iss`, and token claims use the same URL. This remains experimental infrastructure rather than a production security claim; the intended deployment keeps the DSH Host on loopback and terminates public HTTPS in front of the gateway.
 
 Current MCP tools:
 
@@ -59,6 +61,9 @@ dsh_status
 dsh_history
 dsh_list
 dsh_cancel
+dsh_goal_status
+dsh_goal_resume
+dsh_goal_pause
 ```
 
 The MCP layer depends only on the stable gateway backend contract; it does not know whether DSH is reached through the Python SDK, ACP, a protocol-driver plugin, or a future official resumable API.
@@ -67,7 +72,9 @@ The MCP layer depends only on the stable gateway backend contract; it does not k
 
 A local proof of concept using DeepSeek Harness `0.1.0rc6` verified that an initial controlling request can return while a DSH goal continues issuing autonomous goal rounds in the same live runtime. A later controller can send another prompt to the same live session and the model receives the retained history.
 
-The same experiment also verified the current public Python SDK limitation: after a fresh runtime starts over an existing persisted session, sending the same session id follows the create path and fails with a persisted-log id collision rather than cold-resuming. That is the first transport gap this project intends to isolate cleanly rather than work around in application code.
+The current public Python SDK still cannot cold-resume an existing persisted session: a fresh SDK runtime follows the create path and hits a persisted-log id collision. The experimental Web Host adapter closes that transport gap without changing the MCP/service contract. In a real rc6 restart test, the first turn produced 22 durable events; after stopping and restarting the whole Host, the same session resumed, accepted a second turn, and retained both prompts in one history (37 events, two `turn/end` records).
+
+Goal lifecycle has a separate safety boundary. DSH deliberately does not persist process-local goal activation: after session resume, a durable goal may still be `phase=active` while automatic continuation remains disarmed. A real rc6 test confirmed that cold-resuming the Agent did not create a new goal round; an explicit `goal.resume` CAS mutation re-armed continuation. The gateway therefore exposes explicit goal controls rather than silently auto-rearming goals after restart.
 
 ## Milestone 1: persistent DSH session over MCP
 

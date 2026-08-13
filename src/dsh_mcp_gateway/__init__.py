@@ -65,6 +65,21 @@ def build_mcp_server(
         """Cancel active work in a DSH session without replacing that session."""
         return service.cancel(session_id)
 
+    @mcp.tool(name="dsh_goal_status")
+    def dsh_goal_status(session_id: str) -> dict[str, Any]:
+        """Read the durable current goal projection for one DSH session."""
+        return service.goal_status(session_id)
+
+    @mcp.tool(name="dsh_goal_resume")
+    def dsh_goal_resume(session_id: str) -> dict[str, Any]:
+        """Explicitly re-arm/resume the current goal using its latest durable CAS revision."""
+        return service.goal_resume(session_id)
+
+    @mcp.tool(name="dsh_goal_pause")
+    def dsh_goal_pause(session_id: str) -> dict[str, Any]:
+        """Pause the current goal using its latest durable CAS revision."""
+        return service.goal_pause(session_id)
+
     return mcp
 
 

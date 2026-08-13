@@ -13,6 +13,7 @@ from dsh_mcp_gateway import build_mcp_server, build_public_sdk_gateway
 from dsh_mcp_gateway.backend import (
     ColdResumeUnavailable,
     ExperimentalWebHostBackend,
+    GoalControlUnavailable,
     PublicSdkBackend,
     PublicSdkBridge,
     SessionCatalog,
@@ -64,6 +65,18 @@ class FakeBackend:
     def cancel(self, session_id: str) -> dict[str, Any]:
         self.calls.append(("cancel", session_id))
         return {"session_id": session_id, "canceled": True}
+
+    def goal_status(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("goal_status", session_id))
+        return {"session_id": session_id, "goal": None}
+
+    def goal_resume(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("goal_resume", session_id))
+        return {"session_id": session_id, "action": "resumed"}
+
+    def goal_pause(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("goal_pause", session_id))
+        return {"session_id": session_id, "action": "paused"}
 
 
 class SessionRouterTests(unittest.TestCase):
@@ -206,7 +219,12 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
                 }
         elif method == "session.create":
             session_id = payload.get("sessionId", "generated-web-session")
-            sessions[session_id] = {"running": True, "cwd": payload.get("cwd"), "events": []}
+            sessions[session_id] = {
+                "running": True,
+                "cwd": payload.get("cwd"),
+                "events": [],
+                "goal": None,
+            }
             result = {"ok": True, "value": {"sessionId": session_id}}
         elif method == "session.prompt":
             session_id = payload["sessionId"]
@@ -217,8 +235,43 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
             result = {"ok": True, "value": {"accepted": True}}
         elif method == "session.history":
             session_id = payload["sessionId"]
-            entries = [{"event": event} for event in sessions[session_id]["events"]]
-            result = {"ok": True, "value": {"events": entries, "hasMore": False}}
+            state = sessions[session_id]
+            entries = [{"event": event} for event in state["events"]]
+            result = {
+                "ok": True,
+                "value": {
+                    "events": entries,
+                    "hasMore": False,
+                    "projections": {
+                        "asOfSeq": len(state["events"]),
+                        "values": {"goal": state.get("goal")},
+                    },
+                },
+            }
+        elif method in {"goal.resume", "goal.pause"}:
+            session_id = payload["sessionId"]
+            state = sessions[session_id]
+            projection = state.get("goal")
+            if not isinstance(projection, dict) or not isinstance(projection.get("goal"), dict):
+                result = {
+                    "ok": False,
+                    "error": {"code": "goal-missing", "message": "no current goal", "details": {}},
+                }
+            else:
+                goal = projection["goal"]
+                expected_ref = {"id": goal["id"], "revision": goal["revision"]}
+                if payload.get("ref") != expected_ref:
+                    result = {
+                        "ok": False,
+                        "error": {"code": "goal-stale-ref", "message": "stale goal ref", "details": {}},
+                    }
+                else:
+                    goal["revision"] += 1
+                    goal["phase"] = "active" if method == "goal.resume" else "paused"
+                    result = {
+                        "ok": True,
+                        "value": {"ref": {"id": goal["id"], "revision": goal["revision"]}},
+                    }
         elif method == "session.cancel":
             session_id = payload["sessionId"]
             sessions[session_id]["running"] = False
@@ -248,6 +301,7 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
                 "running": False,
                 "cwd": "/tmp/project",
                 "events": [{"type": "turn/end", "seq": 1}],
+                "goal": None,
             }
         }
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -266,6 +320,10 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
     def test_non_loopback_target_is_rejected_by_default(self) -> None:
         with self.assertRaisesRegex(ValueError, "no network authentication"):
             ExperimentalWebHostBackend("http://example.com:3080", cwd="/tmp/project")
+
+    def test_goal_status_rejects_unknown_session(self) -> None:
+        with self.assertRaises(KeyError):
+            self.backend.goal_status("missing")
 
     def test_host_descriptor_is_diagnostic_only(self) -> None:
         descriptor = self.backend.describe_host()
@@ -296,6 +354,36 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.server.sessions["fresh-1"]["running"] = False
         self.assertEqual(self.backend.status("fresh-1")["state"], "live")
         self.assertEqual(self.backend.status("fresh-1")["status"], "idle")
+
+    def test_goal_resume_uses_projection_cas_after_cold_attach(self) -> None:
+        self.server.sessions["cold-1"]["goal"] = {
+            "goal": {
+                "id": "goal-1",
+                "revision": 7,
+                "objective": "continue after restart",
+                "phase": "active",
+                "maxGoalRounds": 20,
+            },
+            "roundsStarted": 3,
+            "createdAt": 1,
+            "updatedAt": 2,
+        }
+        self.server.calls.clear()
+
+        status = self.backend.goal_status("cold-1")
+        self.assertEqual(status["goal"]["goal"]["revision"], 7)
+        self.assertEqual(status["activation"], "not-exposed-by-durable-projection")
+
+        resumed = self.backend.goal_resume("cold-1")
+        self.assertEqual(resumed["previous_ref"], {"id": "goal-1", "revision": 7})
+        self.assertEqual(resumed["ref"], {"id": "goal-1", "revision": 8})
+        goal_resume_calls = [payload for method, payload in self.server.calls if method == "goal.resume"]
+        self.assertEqual(goal_resume_calls, [{"sessionId": "cold-1", "ref": {"id": "goal-1", "revision": 7}}])
+        self.assertEqual(self.backend.presence("cold-1"), SessionPresence.LIVE)
+
+        paused = self.backend.goal_pause("cold-1")
+        self.assertEqual(paused["previous_ref"], {"id": "goal-1", "revision": 8})
+        self.assertEqual(paused["ref"], {"id": "goal-1", "revision": 9})
 
     def test_prompt_receipt_is_host_rpc_id_and_cancel_works(self) -> None:
         receipt = GatewayService(self.backend).start("work", session_id="fresh-1")
@@ -400,6 +488,17 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertFalse(result["canceled"])
             self.assertEqual(result["reason"], "unsupported-by-public-sdk")
 
+    def test_public_sdk_goal_controls_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(Path(tmp) / "sessions.json"))
+            GatewayService(backend).start("work", session_id="s1")
+            with self.assertRaises(GoalControlUnavailable):
+                backend.goal_status("s1")
+            with self.assertRaises(GoalControlUnavailable):
+                backend.goal_resume("s1")
+            with self.assertRaises(GoalControlUnavailable):
+                backend.goal_pause("s1")
+
     def test_notification_bridge_projects_sdk_events_without_owning_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()
@@ -432,7 +531,17 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
         tools = await server.list_tools()
         self.assertEqual(
             [tool.name for tool in tools],
-            ["dsh_start", "dsh_continue", "dsh_status", "dsh_history", "dsh_list", "dsh_cancel"],
+            [
+                "dsh_start",
+                "dsh_continue",
+                "dsh_status",
+                "dsh_history",
+                "dsh_list",
+                "dsh_cancel",
+                "dsh_goal_status",
+                "dsh_goal_resume",
+                "dsh_goal_pause",
+            ],
         )
         start = tools[0]
         self.assertEqual(start.input_schema["required"], ["prompt"])

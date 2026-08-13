@@ -36,6 +36,12 @@ class DshControlBackend(DshSessionBackend, Protocol):
 
     def cancel(self, session_id: str) -> dict[str, Any]: ...
 
+    def goal_status(self, session_id: str) -> dict[str, Any]: ...
+
+    def goal_resume(self, session_id: str) -> dict[str, Any]: ...
+
+    def goal_pause(self, session_id: str) -> dict[str, Any]: ...
+
 
 class PublicSdkSubscription(Protocol):
     def drain(self, on_notification: Any) -> None: ...
@@ -51,6 +57,10 @@ class PublicSdkClient(Protocol):
 
 class ColdResumeUnavailable(RuntimeError):
     """The current public DSH SDK cannot reopen an on-disk session."""
+
+
+class GoalControlUnavailable(RuntimeError):
+    """The selected DSH transport does not expose durable goal controls."""
 
 
 class SessionCatalog:
@@ -229,10 +239,7 @@ class ExperimentalWebHostBackend:
     def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 or limit > 1000:
             raise ValueError("limit must be an integer in [1, 1000]")
-        value = self._call(
-            "session.history",
-            {"sessionId": session_id, "maxMessages": limit},
-        )
+        value = self._history_page(session_id, limit=limit)
         entries = value.get("events")
         if not isinstance(entries, list):
             raise ExperimentalWebHostError("session.history returned invalid events")
@@ -241,6 +248,44 @@ class ExperimentalWebHostBackend:
             if isinstance(entry, dict) and isinstance(entry.get("event"), dict):
                 events.append(dict(entry["event"]))
         return events[-limit:]
+
+    def goal_status(self, session_id: str) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        projection = self._goal_projection(session_id)
+        return {
+            "session_id": session_id,
+            "goal": projection,
+            "activation": "not-exposed-by-durable-projection" if projection is not None else None,
+        }
+
+    def goal_resume(self, session_id: str) -> dict[str, Any]:
+        self._ensure_attached(session_id)
+        projection = self._goal_projection(session_id)
+        if projection is None:
+            raise ExperimentalWebHostError(f"session {session_id!r} has no current goal")
+        ref = self._goal_ref(projection)
+        value = self._call("goal.resume", {"sessionId": session_id, "ref": ref})
+        return {
+            "session_id": session_id,
+            "action": "resumed",
+            "previous_ref": ref,
+            "ref": value.get("ref"),
+        }
+
+    def goal_pause(self, session_id: str) -> dict[str, Any]:
+        self._ensure_attached(session_id)
+        projection = self._goal_projection(session_id)
+        if projection is None:
+            raise ExperimentalWebHostError(f"session {session_id!r} has no current goal")
+        ref = self._goal_ref(projection)
+        value = self._call("goal.pause", {"sessionId": session_id, "ref": ref})
+        return {
+            "session_id": session_id,
+            "action": "paused",
+            "previous_ref": ref,
+            "ref": value.get("ref"),
+        }
 
     def list_sessions(self) -> list[dict[str, Any]]:
         value = self._call("session.list", {})
@@ -278,6 +323,45 @@ class ExperimentalWebHostBackend:
             "session_id": session_id,
             "canceled": value.get("accepted") is True,
         }
+
+    def _history_page(self, session_id: str, *, limit: int = 100) -> dict[str, Any]:
+        return self._call(
+            "session.history",
+            {"sessionId": session_id, "maxMessages": limit},
+        )
+
+    def _goal_projection(self, session_id: str) -> dict[str, Any] | None:
+        value = self._history_page(session_id, limit=1)
+        projections = value.get("projections")
+        if not isinstance(projections, dict):
+            return None
+        values = projections.get("values")
+        if not isinstance(values, dict):
+            return None
+        goal = values.get("goal")
+        if goal is None:
+            return None
+        if not isinstance(goal, dict):
+            raise ExperimentalWebHostError("session.history returned invalid goal projection")
+        return dict(goal)
+
+    @staticmethod
+    def _goal_ref(projection: dict[str, Any]) -> dict[str, Any]:
+        goal = projection.get("goal")
+        if not isinstance(goal, dict):
+            raise ExperimentalWebHostError("goal projection has no goal snapshot")
+        goal_id = goal.get("id")
+        revision = goal.get("revision")
+        if not isinstance(goal_id, str) or not goal_id or not isinstance(revision, int) or isinstance(revision, bool):
+            raise ExperimentalWebHostError("goal projection has invalid CAS ref")
+        return {"id": goal_id, "revision": revision}
+
+    def _ensure_attached(self, session_id: str) -> None:
+        presence = self.presence(session_id)
+        if presence is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        if presence is SessionPresence.PERSISTED:
+            self.resume(session_id)
 
     def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         _rpc_id, value = self._call_with_id(method, payload)
@@ -515,3 +599,18 @@ class PublicSdkBackend:
             "canceled": False,
             "reason": "unsupported-by-public-sdk" if presence is SessionPresence.LIVE else "not-live",
         }
+
+    def goal_status(self, session_id: str) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose durable goal projection reads")
+
+    def goal_resume(self, session_id: str) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose goal.resume")
+
+    def goal_pause(self, session_id: str) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose goal.pause")

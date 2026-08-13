@@ -58,6 +58,11 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             admin_pin="123456",
         )
 
+    def test_issuer_is_canonicalized_once_for_metadata_and_callbacks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            self.assertEqual(config.issuer_url, "http://127.0.0.1:8000/")
+
     async def test_clients_and_rotated_tokens_survive_provider_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
@@ -86,7 +91,9 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             request_id = parse_qs(urlparse(target).query)["request"][0]
             redirect = await provider.approve(request_id)
             assert redirect is not None
-            code = parse_qs(urlparse(redirect).query)["code"][0]
+            redirect_query = parse_qs(urlparse(redirect).query)
+            self.assertEqual(redirect_query["iss"], [config.issuer_url])
+            code = redirect_query["code"][0]
             auth_code = await provider.load_authorization_code(client, code)
             assert auth_code is not None
             tokens = await provider.exchange_authorization_code(client, auth_code)
@@ -129,7 +136,9 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             request_id = parse_qs(urlparse(target).query)["request"][0]
             redirect = await provider.approve(request_id)
             assert redirect is not None
-            code = parse_qs(urlparse(redirect).query)["code"][0]
+            redirect_query = parse_qs(urlparse(redirect).query)
+            self.assertEqual(redirect_query["iss"], [config.issuer_url])
+            code = redirect_query["code"][0]
             auth_code = await provider.load_authorization_code(client, code)
             assert auth_code is not None
             tokens = await provider.exchange_authorization_code(client, auth_code)

@@ -28,11 +28,33 @@ Preferred order:
 2. A small DSH protocol-driver plugin using the documented `ctx.agents` create/resume seam.
 3. A temporary product API adapter only when clearly marked experimental.
 
-Current ACP is not sufficient for this role because its documented surface is fresh-session-only.
+Current ACP is not sufficient for this role because its documented surface is fresh-session-only. The current restart-capable implementation therefore uses option 3: `ExperimentalWebHostBackend`, isolated behind the stable backend contract and restricted to loopback by default. It has been exercised against the official rc6 Web Host, including a full Host stop/restart over the same persisted session.
 
 ## Process model
 
 An MCP request should enqueue or steer a DSH session and return a receipt/session id. It should not remain open for the autonomous goal's whole lifetime. DSH continues independently, while observation belongs to separate status/event calls or streams. A later MCP/chat session reconnects using the durable session id.
+
+## Goal activation is separate from session persistence
+
+DSH persists goal phase/revision/history but deliberately does not persist process-local continuation authority. After a session is resumed, a durable goal can remain `phase=active` while automatic goal rounds are disarmed. The gateway must not reinterpret session cold-resume as authorization to continue autonomous work.
+
+Goal mutations therefore use the Host goal domain directly:
+
+```text
+session.history projections.values.goal
+        |
+        v
+current {id, revision}
+        |
+        +-- goal.resume(ref)
+        `-- goal.pause(ref)
+```
+
+The CAS ref is re-read for every mutation. A goal may change phase or revision between two control calls; such races are reported by DSH rather than hidden with an automatic retry. In particular, a resumed goal may become blocked or complete before a later pause request arrives.
+
+## Security boundary
+
+The DSH Web Host is treated as an unauthenticated internal runtime endpoint and is loopback-only by default. Public clients terminate at the OAuth-protected MCP gateway; production deployment should place HTTPS in front of the gateway rather than exposing the raw DSH Host.
 
 ## Future composition
 

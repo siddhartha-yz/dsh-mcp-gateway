@@ -45,6 +45,7 @@ class EmbeddedOAuthConfig:
     def __post_init__(self) -> None:
         if not self.issuer_url:
             raise ValueError("issuer_url is required")
+        object.__setattr__(self, "issuer_url", f"{self.issuer_url.rstrip('/')}/")
         if not self.resource_url:
             raise ValueError("resource_url is required")
         if len(self.admin_pin) < 6:

@@ -79,3 +79,12 @@ class GatewayService:
 
     def cancel(self, session_id: str) -> dict[str, Any]:
         return self._backend.cancel(session_id)
+
+    def goal_status(self, session_id: str) -> dict[str, Any]:
+        return self._backend.goal_status(session_id)
+
+    def goal_resume(self, session_id: str) -> dict[str, Any]:
+        return self._backend.goal_resume(session_id)
+
+    def goal_pause(self, session_id: str) -> dict[str, Any]:
+        return self._backend.goal_pause(session_id)

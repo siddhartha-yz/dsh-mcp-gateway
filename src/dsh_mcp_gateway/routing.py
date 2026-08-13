@@ -83,6 +83,19 @@ class GatewayService:
     def goal_status(self, session_id: str) -> dict[str, Any]:
         return self._backend.goal_status(session_id)
 
+    def goal_create(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        return self._backend.goal_create(
+            session_id,
+            objective,
+            max_goal_rounds=max_goal_rounds,
+        )
+
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         return self._backend.goal_resume(session_id)
 

@@ -38,9 +38,11 @@ An MCP request should enqueue or steer a DSH session and return a receipt/sessio
 
 DSH persists goal phase/revision/history but deliberately does not persist process-local continuation authority. After a session is resumed, a durable goal can remain `phase=active` while automatic goal rounds are disarmed. The gateway must not reinterpret session cold-resume as authorization to continue autonomous work.
 
-Goal mutations therefore use the Host goal domain directly:
+Goal control therefore uses the Host goal domain directly. New autonomous work is armed deterministically with `goal.create(sessionId, objective, maxGoalRounds?)`; later lifecycle mutations are CAS-guarded from the durable projection:
 
 ```text
+goal.create(objective, maxGoalRounds?)
+
 session.history projections.values.goal
         |
         v

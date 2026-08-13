@@ -70,6 +70,19 @@ def build_mcp_server(
         """Read the durable current goal projection for one DSH session."""
         return service.goal_status(session_id)
 
+    @mcp.tool(name="dsh_goal_create")
+    def dsh_goal_create(
+        session_id: str,
+        objective: str,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        """Create and arm a durable DSH goal for an existing session."""
+        return service.goal_create(
+            session_id,
+            objective,
+            max_goal_rounds=max_goal_rounds,
+        )
+
     @mcp.tool(name="dsh_goal_resume")
     def dsh_goal_resume(session_id: str) -> dict[str, Any]:
         """Explicitly re-arm/resume the current goal using its latest durable CAS revision."""

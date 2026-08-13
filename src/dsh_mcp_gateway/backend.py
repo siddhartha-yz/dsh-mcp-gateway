@@ -38,6 +38,14 @@ class DshControlBackend(DshSessionBackend, Protocol):
 
     def goal_status(self, session_id: str) -> dict[str, Any]: ...
 
+    def goal_create(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]: ...
+
     def goal_resume(self, session_id: str) -> dict[str, Any]: ...
 
     def goal_pause(self, session_id: str) -> dict[str, Any]: ...
@@ -257,6 +265,36 @@ class ExperimentalWebHostBackend:
             "session_id": session_id,
             "goal": projection,
             "activation": "not-exposed-by-durable-projection" if projection is not None else None,
+        }
+
+    def goal_create(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        objective = objective.strip()
+        if not objective:
+            raise ValueError("objective must be non-empty")
+        if max_goal_rounds is not None and (
+            not isinstance(max_goal_rounds, int)
+            or isinstance(max_goal_rounds, bool)
+            or max_goal_rounds <= 0
+        ):
+            raise ValueError("max_goal_rounds must be a positive integer")
+        self._ensure_attached(session_id)
+        payload: dict[str, Any] = {"sessionId": session_id, "objective": objective}
+        if max_goal_rounds is not None:
+            payload["maxGoalRounds"] = max_goal_rounds
+        value = self._call("goal.create", payload)
+        ref = value.get("ref")
+        if not isinstance(ref, dict):
+            raise ExperimentalWebHostError("goal.create returned invalid ref")
+        return {
+            "session_id": session_id,
+            "action": "created",
+            "ref": ref,
         }
 
     def goal_resume(self, session_id: str) -> dict[str, Any]:
@@ -604,6 +642,17 @@ class PublicSdkBackend:
         if self.presence(session_id) is SessionPresence.ABSENT:
             raise KeyError(session_id)
         raise GoalControlUnavailable("the current public DSH SDK does not expose durable goal projection reads")
+
+    def goal_create(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose goal.create")
 
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         if self.presence(session_id) is SessionPresence.ABSENT:

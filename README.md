@@ -48,7 +48,7 @@ A persisted session must never silently fall back to `create` if resume fails; d
 
 The transport-independent control service and MCP v2 tool surface are implemented. `PublicSdkBackend` covers the live-session path for an injected public DSH SDK client and persists a small gateway-owned session catalog. That catalog deliberately recognizes known ids after restart so this transport fails closed instead of recreating them; with the current public SDK, a catalogued cold session raises `ColdResumeUnavailable` before any new prompt is sent.
 
-For restart-capable operation, `ExperimentalWebHostBackend` targets the DSH developer-preview Web Host API behind loopback/private networking. It has been validated against the official `@deepseek-ai/dsh@0.1.0-rc.6` runtime: a persisted session can be reopened after the entire DSH Host process is stopped and restarted with the same `DSH_HOME`, and a later prompt continues the same durable history. The adapter also exposes explicit CAS-based goal status/resume/pause controls.
+For restart-capable operation, `ExperimentalWebHostBackend` targets the DSH developer-preview Web Host API behind loopback/private networking. It has been validated against the official `@deepseek-ai/dsh@0.1.0-rc.6` runtime: a persisted session can be reopened after the entire DSH Host process is stopped and restarted with the same `DSH_HOME`, and a later prompt continues the same durable history. The adapter also exposes structured goal creation plus explicit CAS-based goal status/resume/pause controls.
 
 An embedded OAuth prototype is present for MCP deployments: persisted dynamic clients/tokens, an owner approval page, refresh-token rotation, resource-bound access tokens, and MCP SDK authorization routes. The issuer is canonicalized once so metadata, RFC 9207 callback `iss`, and token claims use the same URL. This remains experimental infrastructure rather than a production security claim; the intended deployment keeps the DSH Host on loopback and terminates public HTTPS in front of the gateway.
 
@@ -62,6 +62,7 @@ dsh_history
 dsh_list
 dsh_cancel
 dsh_goal_status
+dsh_goal_create
 dsh_goal_resume
 dsh_goal_pause
 ```

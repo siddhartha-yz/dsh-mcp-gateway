@@ -70,6 +70,16 @@ class FakeBackend:
         self.calls.append(("goal_status", session_id))
         return {"session_id": session_id, "goal": None}
 
+    def goal_create(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(("goal_create", session_id, objective, max_goal_rounds))
+        return {"session_id": session_id, "action": "created", "ref": {"id": "g1", "revision": 1}}
+
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         self.calls.append(("goal_resume", session_id))
         return {"session_id": session_id, "action": "resumed"}
@@ -248,6 +258,28 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
                     },
                 },
             }
+        elif method == "goal.create":
+            session_id = payload["sessionId"]
+            state = sessions[session_id]
+            if state.get("goal") is not None:
+                result = {
+                    "ok": False,
+                    "error": {"code": "goal-exists", "message": "current goal exists", "details": {}},
+                }
+            else:
+                state["goal"] = {
+                    "goal": {
+                        "id": "goal-created-1",
+                        "revision": 1,
+                        "objective": payload["objective"],
+                        "phase": "active",
+                        "maxGoalRounds": payload.get("maxGoalRounds", 256),
+                    },
+                    "roundsStarted": 0,
+                    "createdAt": 1,
+                    "updatedAt": 1,
+                }
+                result = {"ok": True, "value": {"ref": {"id": "goal-created-1", "revision": 1}}}
         elif method in {"goal.resume", "goal.pause"}:
             session_id = payload["sessionId"]
             state = sessions[session_id]
@@ -354,6 +386,35 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.server.sessions["fresh-1"]["running"] = False
         self.assertEqual(self.backend.status("fresh-1")["state"], "live")
         self.assertEqual(self.backend.status("fresh-1")["status"], "idle")
+
+    def test_goal_create_is_structured_and_arms_existing_session(self) -> None:
+        created = self.backend.goal_create(
+            "cold-1",
+            "  finish the durable task  ",
+            max_goal_rounds=5,
+        )
+        self.assertEqual(created["action"], "created")
+        self.assertEqual(created["ref"], {"id": "goal-created-1", "revision": 1})
+        create_calls = [payload for method, payload in self.server.calls if method == "goal.create"]
+        self.assertEqual(
+            create_calls,
+            [
+                {
+                    "sessionId": "cold-1",
+                    "objective": "finish the durable task",
+                    "maxGoalRounds": 5,
+                }
+            ],
+        )
+        status = self.backend.goal_status("cold-1")
+        self.assertEqual(status["goal"]["goal"]["objective"], "finish the durable task")
+        self.assertEqual(status["goal"]["goal"]["maxGoalRounds"], 5)
+
+    def test_goal_create_validates_objective_and_round_cap(self) -> None:
+        with self.assertRaisesRegex(ValueError, "objective"):
+            self.backend.goal_create("cold-1", "   ")
+        with self.assertRaisesRegex(ValueError, "max_goal_rounds"):
+            self.backend.goal_create("cold-1", "work", max_goal_rounds=0)
 
     def test_goal_resume_uses_projection_cas_after_cold_attach(self) -> None:
         self.server.sessions["cold-1"]["goal"] = {
@@ -495,6 +556,8 @@ class PublicSdkBackendTests(unittest.TestCase):
             with self.assertRaises(GoalControlUnavailable):
                 backend.goal_status("s1")
             with self.assertRaises(GoalControlUnavailable):
+                backend.goal_create("s1", "work", max_goal_rounds=5)
+            with self.assertRaises(GoalControlUnavailable):
                 backend.goal_resume("s1")
             with self.assertRaises(GoalControlUnavailable):
                 backend.goal_pause("s1")
@@ -539,6 +602,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_list",
                 "dsh_cancel",
                 "dsh_goal_status",
+                "dsh_goal_create",
                 "dsh_goal_resume",
                 "dsh_goal_pause",
             ],
@@ -560,6 +624,20 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             backend.calls,
             [("presence", "s1"), ("create", "s1"), ("prompt", "s1", "do work")],
         )
+
+    async def test_goal_create_tool_returns_structured_ref(self) -> None:
+        backend = FakeBackend(SessionPresence.LIVE)
+        server = build_mcp_server(GatewayService(backend))
+        result = await server.call_tool(
+            "dsh_goal_create",
+            {"session_id": "s1", "objective": "finish work", "max_goal_rounds": 12},
+        )
+        self.assertFalse(result.is_error)
+        self.assertEqual(
+            result.structured_content,
+            {"session_id": "s1", "action": "created", "ref": {"id": "g1", "revision": 1}},
+        )
+        self.assertEqual(backend.calls, [("goal_create", "s1", "finish work", 12)])
 
     async def test_public_sdk_factory_wires_mcp_to_event_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

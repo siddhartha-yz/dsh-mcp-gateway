@@ -93,7 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"(reported version {host_descriptor.get('version', 'unknown')}; diagnostic only)"
     )
     print(f"MCP gateway listening on http://{args.bind_host}:{args.port}/mcp")
-    print(f"OAuth issuer: {public_base}")
+    print(f"OAuth issuer: {oauth.issuer_url}")
     server.run(
         transport="streamable-http",
         host=args.bind_host,

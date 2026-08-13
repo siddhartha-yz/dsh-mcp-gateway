@@ -16,7 +16,11 @@ if MCP_AVAILABLE:
     from mcp.server.auth.provider import AuthorizationParams
     from mcp.shared.auth import OAuthClientInformationFull
 
-    from dsh_mcp_gateway.oauth import EmbeddedOAuthConfig, EmbeddedOAuthProvider
+    from dsh_mcp_gateway.oauth import (
+        EmbeddedOAuthConfig,
+        EmbeddedOAuthProvider,
+        PinAttemptLimiter,
+    )
 
 
 class FakeBackend:
@@ -62,6 +66,18 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             self.assertEqual(config.issuer_url, "http://127.0.0.1:8000/")
+
+    def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
+        limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)
+        self.assertTrue(limiter.allowed("a"))
+        limiter.fail("a")
+        limiter.fail("a")
+        self.assertFalse(limiter.allowed("a"))
+        self.assertTrue(limiter.allowed("b"))
+        limiter.fail("b")
+        self.assertFalse(limiter.allowed("c"))
+        limiter.clear("a")
+        self.assertFalse(limiter.allowed("a"))
 
     async def test_clients_and_rotated_tokens_survive_provider_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

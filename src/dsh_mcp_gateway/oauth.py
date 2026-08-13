@@ -548,23 +548,39 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
 
 
 class PinAttemptLimiter:
-    def __init__(self, *, limit: int = 5, window_s: float = 300.0) -> None:
+    def __init__(
+        self,
+        *,
+        limit: int = 5,
+        global_limit: int = 20,
+        window_s: float = 300.0,
+    ) -> None:
+        if limit <= 0 or global_limit <= 0 or window_s <= 0:
+            raise ValueError("PIN attempt limits and window must be positive")
         self.limit = limit
+        self.global_limit = global_limit
         self.window_s = window_s
         self._lock = threading.Lock()
         self._failures: dict[str, deque[float]] = defaultdict(deque)
+        self._global_failures: deque[float] = deque()
+
+    def _prune(self, failures: deque[float], now: float) -> None:
+        while failures and now - failures[0] > self.window_s:
+            failures.popleft()
 
     def allowed(self, source: str) -> bool:
         now = time.monotonic()
         with self._lock:
             failures = self._failures[source]
-            while failures and now - failures[0] > self.window_s:
-                failures.popleft()
-            return len(failures) < self.limit
+            self._prune(failures, now)
+            self._prune(self._global_failures, now)
+            return len(failures) < self.limit and len(self._global_failures) < self.global_limit
 
     def fail(self, source: str) -> None:
+        now = time.monotonic()
         with self._lock:
-            self._failures[source].append(time.monotonic())
+            self._failures[source].append(now)
+            self._global_failures.append(now)
 
     def clear(self, source: str) -> None:
         with self._lock:

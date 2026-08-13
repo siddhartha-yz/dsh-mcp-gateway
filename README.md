@@ -103,6 +103,41 @@ python -m unittest discover -s tests -v
 
 The server extra currently targets the stable MCP Python SDK v2 line (`mcp>=2,<3`). See [`docs/architecture.md`](docs/architecture.md) for the boundary decisions.
 
+## Run the gateway
+
+The current deployable path expects an external DSH Web Host on loopback and puts the OAuth/MCP gateway in front of it. The gateway itself also binds loopback by default; terminate public HTTPS with a reverse proxy or tunnel.
+
+```sh
+python -m pip install -e '.[server]'
+
+export DSH_MCP_GATEWAY_ADMIN_PIN='choose-a-long-owner-pin'
+
+dsh-mcp-gateway \
+  --dsh-web-url http://127.0.0.1:3080 \
+  --dsh-cwd /path/to/agent/workspace \
+  --public-base-url https://gateway.example.com
+```
+
+The public MCP endpoint is `<public-base-url>/mcp`. Do not expose the raw DSH Web Host directly; the experimental adapter refuses non-loopback DSH targets by default.
+
+A deterministic long-task flow is:
+
+```text
+dsh_start(prompt, optional session_id)
+        -> returns session_id
+
+dsh_goal_create(session_id, objective, optional max_goal_rounds)
+        -> creates + arms the durable goal
+
+later chat / MCP session
+        -> dsh_status / dsh_history / dsh_goal_status
+        -> dsh_continue for steering
+
+if the DSH Host itself restarted
+        -> session cold-resumes when addressed again
+        -> dsh_goal_resume explicitly re-arms autonomous continuation
+```
+
 ## Relationship to local-shell-mcp
 
 This repository is independent from `fwerkor/local-shell-mcp`.

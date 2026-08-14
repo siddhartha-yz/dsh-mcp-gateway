@@ -8,13 +8,13 @@ It may own ChatGPT-facing OAuth/MCP transport, public access glue, capability pr
 
 local-shell-mcp is an implementation/reference source for proven public-tunnel, OAuth/remote-MCP, remote-worker, browser, and other differentiated execution capabilities. It is not the primary harness in this architecture.
 
-The first implementation of this boundary is deliberately small. A DSH-resident Cordis plugin reads `ctx.tools.schemas()` and executes calls with `ctx.tools.execute()`. The public OAuth/MCP gateway talks only to that loopback bridge and exposes a generic catalog/call pair to ChatGPT. Consequently DSH tool plugins remain the capability owners and continue through DSH's own registration, policy, and execution pipeline.
+The first implementation of this boundary is deliberately small. A DSH-resident Cordis plugin reads `ctx.tools.schemas()` and executes calls with `ctx.tools.execute()`. The public OAuth/MCP gateway talks only to that loopback bridge and dynamically projects those DSH schemas as first-class MCP tools. Consequently DSH tool plugins remain the capability owners and continue through DSH's own registration, policy, and execution pipeline.
 
 ```text
 community DSH plugin -> ctx.tools -> loopback bridge -> OAuth/MCP adapter -> ChatGPT Web
 ```
 
-This is a stepping stone rather than the final UX: the next adapter improvement is first-class dynamic MCP projection of those DSH schemas. Agent-scoped capabilities require an explicit ChatGPT scope/authority mapping and are not implicitly promoted to global calls.
+Projection is catalog-driven rather than wrapper-driven: each MCP `tools/list` reads the current global DSH ToolRuntime view, so a newly loaded compatible DSH tool can appear without gateway code changes or restart. The generic catalog/call pair remains only as a compatibility/debugging escape hatch. Agent-scoped capabilities require an explicit ChatGPT scope/authority mapping and are not implicitly promoted to global calls.
 
 The sections below document substantial prototype work that predates this clarified product boundary. They remain useful engineering evidence, but any gateway-owned session/goal/continuation design described below is **not automatically a current product requirement**. When a section conflicts with `AGENTS.md`, `AGENTS.md` is authoritative.
 

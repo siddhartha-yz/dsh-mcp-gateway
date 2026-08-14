@@ -55,12 +55,14 @@ OAuth MCP gateway
 ChatGPT Web
 ```
 
-The gateway exposes two generic MCP operations in harness mode:
+The gateway now projects DSH ToolRuntime schemas as first-class MCP tools in harness mode. On every MCP `tools/list`, it reads the current DSH catalog and exposes compatible DSH tool names/descriptions/JSON parameter schemas directly to ChatGPT; calls to those projected tools are forwarded back through `ctx.tools.execute(...)`, so DSH policy/guards remain authoritative.
+
+Two generic MCP operations remain available as a compatibility/debugging escape hatch:
 
 - `dsh_tool_catalog`: reads the current DSH `ToolRuntime` schema catalog.
 - `dsh_tool_call`: executes a discovered tool through DSH's guarded `ToolRuntime` pipeline.
 
-This means adding another global DSH tool plugin does not require another Python wrapper. The current bridge is intentionally a minimal proof of the generic seam; the next product milestone is projecting DSH schemas as first-class MCP tools rather than making ChatGPT go through the two meta-tools. Agent-scoped DSH capabilities also need an explicit ChatGPT authority/scope design before they can be exposed safely.
+This means adding another global DSH tool plugin does not require another Python wrapper or gateway restart; it appears on the next MCP tool-list refresh. Agent-scoped DSH capabilities still need an explicit ChatGPT authority/scope design before they can be exposed safely, and automatic MCP `tools/list_changed` notification is a later refinement rather than a prerequisite for direct projection.
 
 The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).
 

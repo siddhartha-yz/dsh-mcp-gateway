@@ -7,7 +7,7 @@ from os import PathLike
 from typing import Any
 
 from .backend import PublicSdkBridge, PublicSdkClient, SessionCatalog
-from .harness_bridge import HarnessBridgeClient
+from .harness_bridge import HarnessBridgeClient, HarnessProjectionMixin
 from .routing import GatewayService
 from .session_runtime import DurableSessionRuntime
 
@@ -44,6 +44,12 @@ def build_mcp_server(
     )
 
     server_cls = _server_cls or MCPServer
+    if harness_bridge is not None:
+        server_cls = type(
+            "HarnessProjectedMCPServer",
+            (HarnessProjectionMixin, server_cls),
+            {},
+        )
     mcp = server_cls(
         "dsh-mcp-gateway",
         version=__version__,
@@ -57,9 +63,10 @@ def build_mcp_server(
             )
         ),
         instructions=(
-            "DSH is the harness authority and ChatGPT is the reasoning agent. Use dsh_tool_catalog to discover "
-            "the current DSH ToolRuntime surface and dsh_tool_call to execute a discovered capability. Newly loaded "
-            "DSH tool plugins appear through the same generic bridge without a bespoke ChatGPT wrapper."
+            "DSH is the harness authority and ChatGPT is the reasoning agent. DSH ToolRuntime capabilities are "
+            "projected as first-class MCP tools and should be called directly. Newly loaded global DSH tool plugins "
+            "appear on the next tools/list refresh without a bespoke ChatGPT wrapper. dsh_tool_catalog and "
+            "dsh_tool_call remain only as compatibility/debugging fallbacks."
             if harness_bridge is not None
             else (
             "Use session_manage(action='start') before substantial work, keep the returned session_id and "
@@ -78,6 +85,8 @@ def build_mcp_server(
         auth_server_provider=auth_server_provider,
         auth=auth,
     )
+    if harness_bridge is not None:
+        mcp._dsh_harness_bridge = harness_bridge
 
     if harness_bridge is not None:
 

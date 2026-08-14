@@ -57,7 +57,7 @@ class HarnessBridgeClientTests(unittest.TestCase):
 
 
 class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
-    async def test_harness_mode_exposes_only_generic_dsh_capability_bridge(self) -> None:
+    async def test_harness_mode_projects_dsh_tools_as_first_class_mcp_tools(self) -> None:
         class FakeBridge:
             def tools(self):
                 return [{"name": "community_echo", "description": "echo", "parameters": {"type": "object"}}]
@@ -66,8 +66,58 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
                 return {"isError": False, "value": {"name": name, "arguments": arguments or {}}, "content": []}
 
         server = build_mcp_server(None, harness_bridge=FakeBridge())
-        names = {tool.name for tool in await server.list_tools()}
-        self.assertEqual(names, {"dsh_tool_catalog", "dsh_tool_call"})
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        self.assertEqual(set(tools), {"community_echo", "dsh_tool_catalog", "dsh_tool_call"})
+        self.assertEqual(tools["community_echo"].input_schema, {"type": "object"})
+        self.assertEqual(tools["community_echo"].meta, {"dsh/projected": True})
+
+        result = await server.call_tool("community_echo", {"text": "hello"})
+        self.assertFalse(result.is_error)
+        self.assertEqual(
+            result.structured_content,
+            {"value": {"name": "community_echo", "arguments": {"text": "hello"}}},
+        )
+
+    async def test_projected_catalog_is_dynamic_without_gateway_restart(self) -> None:
+        class FakeBridge:
+            def __init__(self):
+                self.catalog = [{"name": "first", "description": "first", "parameters": {"type": "object"}}]
+
+            def tools(self):
+                return list(self.catalog)
+
+            def call(self, name, arguments=None):
+                return {"isError": False, "value": name, "content": []}
+
+        bridge = FakeBridge()
+        server = build_mcp_server(None, harness_bridge=bridge)
+        first = {tool.name for tool in await server.list_tools()}
+        self.assertIn("first", first)
+        self.assertNotIn("second", first)
+
+        bridge.catalog.append({"name": "second", "description": "second", "parameters": {"type": "object"}})
+        second = {tool.name for tool in await server.list_tools()}
+        self.assertIn("second", second)
+
+    async def test_gateway_tool_names_win_over_dsh_projection_collisions(self) -> None:
+        class FakeBridge:
+            def tools(self):
+                return [
+                    {
+                        "name": "dsh_tool_catalog",
+                        "description": "should not shadow gateway catalog",
+                        "parameters": {"type": "object"},
+                    }
+                ]
+
+            def call(self, name, arguments=None):
+                raise AssertionError("reserved gateway tool must not dispatch to DSH")
+
+        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        tools = [tool for tool in await server.list_tools() if tool.name == "dsh_tool_catalog"]
+        self.assertEqual(len(tools), 1)
+        result = await server.call_tool("dsh_tool_catalog", {})
+        self.assertEqual(result.structured_content["count"], 1)
 
 
 if __name__ == "__main__":

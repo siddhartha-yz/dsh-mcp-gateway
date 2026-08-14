@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 from dataclasses import dataclass
@@ -11,6 +12,101 @@ from urllib.request import Request, urlopen
 
 class HarnessBridgeError(RuntimeError):
     """The local DSH ChatGPT bridge could not serve a capability request."""
+
+
+def _projected_tool(schema: dict[str, Any]):
+    """Convert one DSH ToolRuntime schema into an MCP first-class tool schema."""
+    try:
+        from mcp.types import Tool as MCPTool
+    except ImportError as exc:  # pragma: no cover - optional server dependency boundary
+        raise RuntimeError("MCP dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
+
+    name = schema.get("name")
+    description = schema.get("description")
+    parameters = schema.get("parameters")
+    if not isinstance(name, str) or not name.strip():
+        raise HarnessBridgeError("DSH bridge returned a tool without a valid name")
+    if description is not None and not isinstance(description, str):
+        raise HarnessBridgeError(f"DSH tool {name!r} returned a non-string description")
+    if not isinstance(parameters, dict):
+        raise HarnessBridgeError(f"DSH tool {name!r} returned a non-object parameter schema")
+    return MCPTool(
+        name=name,
+        description=description or "DSH Harness capability",
+        input_schema=dict(parameters),
+        meta={"dsh/projected": True},
+    )
+
+
+def _tool_result(result: dict[str, Any]):
+    """Translate a DSH ToolRuntime execution result into an MCP call result."""
+    try:
+        from mcp.types import CallToolResult, TextContent
+    except ImportError as exc:  # pragma: no cover - optional server dependency boundary
+        raise RuntimeError("MCP dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
+
+    is_error = bool(result.get("isError"))
+    text_parts: list[str] = []
+    raw_content = result.get("content")
+    if isinstance(raw_content, list):
+        for block in raw_content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                text_parts.append(block["text"])
+
+    structured: dict[str, Any] = {}
+    if "value" in result:
+        structured["value"] = result["value"]
+    if "meta" in result:
+        structured["meta"] = result["meta"]
+    if "additionalContexts" in result:
+        structured["additionalContexts"] = result["additionalContexts"]
+    if is_error and isinstance(result.get("error"), dict):
+        structured["error"] = result["error"]
+        message = result["error"].get("message")
+        if isinstance(message, str) and not text_parts:
+            text_parts.append(message)
+    if not text_parts:
+        fallback = structured if structured else result
+        text_parts.append(json.dumps(fallback, ensure_ascii=False, separators=(",", ":")))
+
+    return CallToolResult(
+        content=[TextContent(type="text", text="\n".join(text_parts))],
+        structured_content=structured or None,
+        is_error=is_error,
+    )
+
+
+class HarnessProjectionMixin:
+    """Project DSH ToolRuntime schemas directly into the MCP tool surface.
+
+    The catalog is read on every tools/list request, so a newly loaded DSH
+    community tool can appear without adding a gateway wrapper or restarting
+    the gateway. Tool execution still goes through DSH ToolRuntime.
+    """
+
+    _dsh_harness_bridge: HarnessBridgeClient | None = None
+
+    async def list_tools(self):
+        base_tools = await super().list_tools()
+        bridge = self._dsh_harness_bridge
+        if bridge is None:
+            return base_tools
+        schemas = await asyncio.to_thread(bridge.tools)
+        reserved = {tool.name for tool in base_tools}
+        projected = []
+        for schema in schemas:
+            tool = _projected_tool(schema)
+            if tool.name in reserved:
+                continue
+            projected.append(tool)
+        return [*base_tools, *projected]
+
+    async def call_tool(self, name, arguments, context=None):
+        bridge = self._dsh_harness_bridge
+        if bridge is None or self._tool_manager.get_tool(name) is not None:
+            return await super().call_tool(name, arguments, context)
+        result = await asyncio.to_thread(bridge.call, name, arguments)
+        return _tool_result(result)
 
 
 @dataclass(slots=True)

@@ -21,7 +21,7 @@ The raw DSH Web Host is not an authenticated public API and must stay on loopbac
 
 ## Tested runtime boundary
 
-The current experimental Web Host adapter is tested against `@deepseek-ai/dsh@0.1.0-rc.6`. Pin that version for a deployment that should match the repository's integration evidence. DSH is a developer-preview dependency, so upgrade it deliberately and run the gateway test suite before changing the pin.
+The current experimental Web Host adapter is tested against `@deepseek-ai/dsh@0.1.0-rc.6` using Node `24.19.0`. The Node value records the runtime used for this repository's real integration evidence; the rc6 package does not declare an `engines` requirement, so it is not presented as an upstream minimum. Pin the DSH version for a deployment that should match the repository's evidence. DSH is a developer-preview dependency, so upgrade it deliberately and run the gateway test suite before changing the pin.
 
 A practical layout is:
 
@@ -51,7 +51,7 @@ sudo install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway
 Install the DSH runtime at the path used by the service template and pin the tested release:
 
 ```sh
-sudo npm install --prefix /opt/dsh-runtime @deepseek-ai/dsh@0.1.0-rc.6
+sudo npm install --prefix /opt/dsh-runtime --save-exact @deepseek-ai/dsh@0.1.0-rc.6
 ```
 
 Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environment:

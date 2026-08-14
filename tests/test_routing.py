@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from dsh_mcp_gateway import build_mcp_server, build_public_sdk_gateway
+from dsh_mcp_gateway import __version__, build_mcp_server, build_public_sdk_gateway
 from dsh_mcp_gateway.backend import (
     ColdResumeUnavailable,
     ExperimentalWebHostBackend,
@@ -591,6 +591,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_exact_tool_surface_and_start_schema(self) -> None:
         backend = FakeBackend(SessionPresence.ABSENT)
         server = build_mcp_server(GatewayService(backend))
+        self.assertEqual(server.version, __version__)
         tools = await server.list_tools()
         self.assertEqual(
             [tool.name for tool in tools],

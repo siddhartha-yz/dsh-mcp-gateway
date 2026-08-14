@@ -26,6 +26,7 @@ def build_mcp_server(
 
     mcp = MCPServer(
         "dsh-mcp-gateway",
+        version=__version__,
         description="Control long-lived DeepSeek Harness agent sessions.",
         instructions=(
             "Use dsh_start for a new task and keep its session_id. "

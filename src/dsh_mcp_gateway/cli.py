@@ -64,6 +64,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parsed_public = urlparse(public_base)
     if parsed_public.scheme != "https" or not parsed_public.hostname:
         raise SystemExit("--public-base-url must be an absolute https:// origin")
+    if parsed_public.username is not None or parsed_public.password is not None:
+        raise SystemExit("--public-base-url must not contain user info")
     if parsed_public.path not in {"", "/"} or parsed_public.query or parsed_public.fragment:
         raise SystemExit("--public-base-url must be an origin without a path, query, or fragment")
     admin_pin = os.environ.get("DSH_MCP_GATEWAY_ADMIN_PIN", "")
@@ -71,6 +73,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("DSH_MCP_GATEWAY_ADMIN_PIN is required")
 
     try:
+        from mcp.server.transport_security import TransportSecuritySettings
+
         from .oauth import EmbeddedOAuthConfig
     except ImportError as exc:
         raise SystemExit("install dsh-mcp-gateway[server] to run the HTTP/OAuth gateway") from exc
@@ -88,6 +92,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         admin_pin=admin_pin,
     )
     server, _provider = build_embedded_oauth_server(GatewayService(backend), oauth)
+    public_host = parsed_public.netloc
+    allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
+    if parsed_public.port is None:
+        host_for_port = f"[{parsed_public.hostname}]" if ":" in parsed_public.hostname else parsed_public.hostname
+        allowed_hosts.append(f"{host_for_port}:443")
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(dict.fromkeys(allowed_hosts)),
+        allowed_origins=[
+            public_base,
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+        ],
+    )
     print(
         f"DSH Web Host reachable at {backend.base_url} "
         f"(reported version {host_descriptor.get('version', 'unknown')}; diagnostic only)"
@@ -100,6 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         port=args.port,
         streamable_http_path="/mcp",
         json_response=True,
+        transport_security=transport_security,
     )
     return 0
 

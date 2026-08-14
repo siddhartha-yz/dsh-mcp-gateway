@@ -77,6 +77,8 @@ The current public Python SDK still cannot cold-resume an existing persisted ses
 
 Goal lifecycle has a separate safety boundary. DSH deliberately does not persist process-local goal activation: after session resume, a durable goal may still be `phase=active` while automatic continuation remains disarmed. A real rc6 test confirmed that cold-resuming the Agent did not create a new goal round; an explicit `goal.resume` CAS mutation re-armed continuation. The gateway therefore exposes explicit goal controls rather than silently auto-rearming goals after restart.
 
+A public HTTPS development smoke test also exercised the complete client-facing chain through a temporary reverse proxy: dynamic client registration, PKCE authorization, owner PIN approval, authorization-code exchange, MCP initialization/tool discovery, `dsh_start`, structured `dsh_goal_create`, closing that MCP session, reconnecting from a second MCP session to the same DSH session, reading status/history/goal state, sending `dsh_continue`, and refresh-token rotation. The test exposed an important deployment requirement: MCP DNS-rebinding protection must explicitly allow the declared public reverse-proxy Host/Origin while the process itself remains bound to loopback.
+
 ## Milestone 1: persistent DSH session over MCP
 
 - Start a DSH session from an MCP client.
@@ -118,7 +120,7 @@ dsh-mcp-gateway \
   --public-base-url https://gateway.example.com
 ```
 
-The public MCP endpoint is `<public-base-url>/mcp`. Do not expose the raw DSH Web Host directly; the experimental adapter refuses non-loopback DSH targets by default.
+The public MCP endpoint is `<public-base-url>/mcp`. Do not expose the raw DSH Web Host directly; the experimental adapter refuses non-loopback DSH targets by default. The CLI keeps MCP DNS-rebinding protection enabled and allowlists only the declared public origin plus loopback Host/Origin values, so reverse proxying does not require disabling transport security.
 
 A deterministic long-task flow is:
 

@@ -18,6 +18,10 @@ class CliTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "origin without a path"):
             main(["--public-base-url", "https://gateway.example.com/prefix"])
 
+    def test_rejects_public_origin_with_user_info(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "must not contain user info"):
+            main(["--public-base-url", "https://user:pass@gateway.example.com"])
+
     def test_non_loopback_bind_requires_explicit_opt_in(self) -> None:
         with self.assertRaisesRegex(SystemExit, "must be loopback"):
             main(
@@ -67,13 +71,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(config.issuer_url, "https://gateway.example.com/")
         self.assertEqual(config.resource_url, "https://gateway.example.com/mcp")
         self.assertEqual(config.state_db, Path(tmp).resolve() / "oauth.sqlite3")
-        fake_server.run.assert_called_once_with(
-            transport="streamable-http",
-            host="127.0.0.1",
-            port=9876,
-            streamable_http_path="/mcp",
-            json_response=True,
-        )
+        fake_server.run.assert_called_once()
+        run_kwargs = fake_server.run.call_args.kwargs
+        self.assertEqual(run_kwargs["transport"], "streamable-http")
+        self.assertEqual(run_kwargs["host"], "127.0.0.1")
+        self.assertEqual(run_kwargs["port"], 9876)
+        self.assertEqual(run_kwargs["streamable_http_path"], "/mcp")
+        self.assertTrue(run_kwargs["json_response"])
+        security = run_kwargs["transport_security"]
+        self.assertTrue(security.enable_dns_rebinding_protection)
+        self.assertIn("gateway.example.com", security.allowed_hosts)
+        self.assertIn("gateway.example.com:443", security.allowed_hosts)
+        self.assertIn("127.0.0.1:*", security.allowed_hosts)
+        self.assertIn("https://gateway.example.com", security.allowed_origins)
 
 
 if __name__ == "__main__":

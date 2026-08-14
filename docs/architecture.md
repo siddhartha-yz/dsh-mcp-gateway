@@ -58,6 +58,8 @@ The CAS ref is re-read for every mutation. A goal may change phase or revision b
 
 The DSH Web Host is treated as an unauthenticated internal runtime endpoint and is loopback-only by default. Public clients terminate at the OAuth-protected MCP gateway; production deployment should place HTTPS in front of the gateway rather than exposing the raw DSH Host.
 
+The gateway listener and the public MCP origin are separate concepts. The process can remain bound to `127.0.0.1` while a reverse proxy presents `https://gateway.example.com`. MCP's DNS-rebinding protection must remain enabled in that topology, with the declared public Host/Origin explicitly allowlisted alongside loopback values. Passing only the loopback bind host to the MCP SDK is insufficient: its secure localhost default accepts only localhost Host headers and will reject an authenticated reverse-proxied `/mcp` request. The CLI therefore derives transport-security allowlists from `--public-base-url` rather than disabling the protection.
+
 ## Future composition
 
 ```text

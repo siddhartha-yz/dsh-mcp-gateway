@@ -112,7 +112,7 @@ For contributor development, install the shared lint/test extra so local checks 
 
 ```sh
 python -m pip install -e '.[dev]'
-ruff check src tests
+ruff check src tests scripts
 python -m unittest discover -s tests -v
 ```
 

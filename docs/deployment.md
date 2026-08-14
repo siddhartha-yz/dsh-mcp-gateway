@@ -62,19 +62,20 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --constraint deploy/server-constraints.txt -e '.[server]'
 ```
 
-`pyproject.toml` intentionally keeps the broader `mcp>=2,<3` compatibility range so the normal CI lane detects regressions against newer MCP v2 releases. `deploy/server-constraints.txt` is the separate known-good deployment snapshot and is exercised by its own clean Python 3.12 CI job. Regenerate that snapshot deliberately when upgrading the server dependency graph; do not treat an incidental reinstall as an upgrade.
+`pyproject.toml` intentionally keeps the broader `mcp>=2,<3` compatibility range so the normal CI lane detects regressions against newer MCP v2 releases. `deploy/server-constraints.txt` is the separate known-good deployment snapshot and is exercised by its own clean Python 3.12 CI job. The same lane runs `scripts/verify-server-constraints.py`, which rejects a newly added direct `server` dependency unless the snapshot contains an exact `==` pin for it; this prevents a forgotten constraint update from silently turning the supposedly locked deployment back into a floating install. Regenerate that snapshot deliberately when upgrading the server dependency graph; do not treat an incidental reinstall as an upgrade.
 
-Before relying on the deployment, run the runtime-compatible test suite:
+Before relying on the deployment, verify that every direct `server` runtime requirement is covered by an exact known-good pin, then run the runtime-compatible test suite:
 
 ```sh
+python3 scripts/verify-server-constraints.py
 .venv/bin/python -m unittest discover -s tests -q
-.venv/bin/python -m compileall -q src tests
+.venv/bin/python -m compileall -q src tests scripts
 ./scripts/verify-systemd.sh
 ```
 
 `verify-systemd.sh` is unprivileged: it validates the checked-in unit directives with `systemd-analyze verify` while substituting only the example `ExecStart` binary paths in temporary copies.
 
-Linting belongs to the contributor/CI environment (`python -m pip install -e '.[dev]' && ruff check src tests`) rather than the minimal production runtime.
+Linting belongs to the contributor/CI environment (`python -m pip install -e '.[dev]' && ruff check src tests scripts`) rather than the minimal production runtime.
 
 ## Secrets and environment
 

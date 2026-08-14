@@ -67,7 +67,10 @@ Before relying on the deployment, run the runtime-compatible test suite:
 ```sh
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python -m compileall -q src tests
+./scripts/verify-systemd.sh
 ```
+
+`verify-systemd.sh` is unprivileged: it validates the checked-in unit directives with `systemd-analyze verify` while substituting only the example `ExecStart` binary paths in temporary copies.
 
 Linting belongs to the contributor/CI environment (`python -m pip install -e '.[dev]' && ruff check src tests`) rather than the minimal production runtime.
 

@@ -62,6 +62,9 @@ jobs:
           dsh-mcp-gateway --help
           python -m pip check
 
+      - name: Verify systemd unit syntax
+        run: ./scripts/verify-systemd.sh
+
   dsh-sdk:
     name: DSH SDK integration imports
     runs-on: ubuntu-latest

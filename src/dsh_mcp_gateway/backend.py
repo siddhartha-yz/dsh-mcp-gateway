@@ -196,13 +196,15 @@ class ExperimentalWebHostBackend:
         except ValueError:
             return False
 
-    def describe_host(self) -> dict[str, Any]:
+    def describe_host(self, *, timeout_s: float | None = None) -> dict[str, Any]:
         """Return the Host diagnostic descriptor.
 
         `version` is currently a DSH placeholder, not a protocol compatibility
         marker, so this method must not be used as a schema-version gate.
+        A caller may supply a shorter timeout for liveness/readiness probes
+        without changing the normal control-RPC timeout.
         """
-        return self._call("host.describe", {})
+        return self._call("host.describe", {}, timeout_s=timeout_s)
 
     def presence(self, session_id: str) -> SessionPresence:
         for item in self.list_sessions():
@@ -560,11 +562,26 @@ class ExperimentalWebHostBackend:
         if presence is SessionPresence.PERSISTED:
             self.resume(session_id)
 
-    def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
-        _rpc_id, value = self._call_with_id(method, payload)
+    def _call(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        _rpc_id, value = self._call_with_id(method, payload, timeout_s=timeout_s)
         return value
 
-    def _call_with_id(self, method: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    def _call_with_id(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        *,
+        timeout_s: float | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        if timeout_s is not None and timeout_s <= 0:
+            raise ValueError("timeout_s must be positive when supplied")
+        effective_timeout = self.timeout_s if timeout_s is None else timeout_s
         rpc_id = str(uuid.uuid4())
         body = json.dumps(
             {
@@ -582,7 +599,7 @@ class ExperimentalWebHostBackend:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout_s) as response:
+            with urlopen(request, timeout=effective_timeout) as response:
                 raw = response.read()
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")

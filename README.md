@@ -136,7 +136,7 @@ dsh-mcp-gateway \
 
 The public MCP endpoint is `<public-base-url>/mcp`. Do not expose the raw DSH Web Host directly; the experimental adapter refuses non-loopback DSH targets by default. The CLI keeps MCP DNS-rebinding protection enabled and allowlists only the declared public origin plus loopback Host/Origin values, so reverse proxying does not require disabling transport security.
 
-Deployment probes are intentionally small and unauthenticated: `GET /healthz` reports only that the gateway process is serving HTTP, while `GET /readyz` additionally probes the configured DSH Web Host and returns 503 when that dependency is unavailable. Gateway startup itself does not require the DSH Host to be reachable, so dependency readiness is not conflated with process liveness. Neither route returns the DSH descriptor, workspace path, provider, or transport error details; both are `Cache-Control: no-store`.
+Deployment probes are intentionally small and unauthenticated: `GET /healthz` reports only that the gateway process is serving HTTP, while `GET /readyz` additionally probes the configured DSH Web Host and returns 503 when that dependency is unavailable. Readiness uses a dedicated 1-second Host diagnostic timeout rather than the normal 10-second control-RPC timeout, so a wedged dependency does not hold monitoring requests open for a full business-operation timeout. Gateway startup itself does not require the DSH Host to be reachable, so dependency readiness is not conflated with process liveness. Neither route returns the DSH descriptor, workspace path, provider, or transport error details; both are `Cache-Control: no-store`.
 
 A deterministic long-task flow is:
 

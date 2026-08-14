@@ -116,6 +116,7 @@ class HealthRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health.headers["cache-control"], "no-store")
 
         ready = await routes["/readyz"].endpoint(Mock())
+        backend.describe_host.assert_called_once_with(timeout_s=1.0)
         self.assertEqual(ready.status_code, 200)
         self.assertEqual(json.loads(ready.body), {"ok": True, "dependency": "dsh-web-host"})
         self.assertNotIn("secret", ready.body.decode())
@@ -131,6 +132,7 @@ class HealthRouteTests(unittest.IsolatedAsyncioTestCase):
         routes = {route.path: route for route in server._custom_starlette_routes}
 
         ready = await routes["/readyz"].endpoint(Mock())
+        backend.describe_host.assert_called_once_with(timeout_s=1.0)
         self.assertEqual(ready.status_code, 503)
         self.assertEqual(json.loads(ready.body), {"ok": False, "dependency": "dsh-web-host"})
         self.assertNotIn("private transport detail", ready.body.decode())

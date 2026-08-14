@@ -35,7 +35,7 @@ def install_health_routes(server, backend) -> None:
     @server.custom_route("/readyz", methods=["GET"], include_in_schema=False)
     async def readyz(_request):
         try:
-            await asyncio.to_thread(backend.describe_host)
+            await asyncio.to_thread(backend.describe_host, timeout_s=1.0)
         except Exception:  # noqa: BLE001 - dependency failures collapse to a non-sensitive readiness result.
             return JSONResponse(
                 {"ok": False, "dependency": "dsh-web-host"},

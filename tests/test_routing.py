@@ -8,6 +8,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from dsh_mcp_gateway import __version__, build_mcp_server, build_public_sdk_gateway
 from dsh_mcp_gateway.backend import (
@@ -788,6 +789,42 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         descriptor = self.backend.describe_host()
         self.assertEqual(descriptor["version"], "0.1.0-rc.6")
         self.assertEqual([method for method, _payload in self.server.calls], ["host.describe"])
+
+    def test_host_descriptor_can_override_transport_timeout(self) -> None:
+        observed_timeouts: list[float] = []
+
+        class FakeResponse:
+            def __init__(self, payload: bytes) -> None:
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return self.payload
+
+        def fake_urlopen(request, *, timeout: float):
+            observed_timeouts.append(timeout)
+            request_body = json.loads(request.data)
+            payload = json.dumps(
+                {
+                    "type": "server-response",
+                    "rpcId": request_body["rpcId"],
+                    "result": {"ok": True, "value": {"version": "0.0.1"}},
+                }
+            ).encode()
+            return FakeResponse(payload)
+
+        with patch("dsh_mcp_gateway.backend.urlopen", side_effect=fake_urlopen):
+            descriptor = self.backend.describe_host(timeout_s=0.25)
+
+        self.assertEqual(descriptor, {"version": "0.0.1"})
+        self.assertEqual(observed_timeouts, [0.25])
+        with self.assertRaisesRegex(ValueError, "timeout_s"):
+            self.backend.describe_host(timeout_s=0)
 
     def test_cold_session_resumes_before_prompt_without_opening_a_turn(self) -> None:
         receipt = GatewayService(self.backend).continue_session("cold-1", "continue")

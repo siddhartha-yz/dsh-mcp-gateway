@@ -29,6 +29,7 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.routing import Route
 
 
 @dataclass(frozen=True, slots=True)
@@ -795,6 +796,47 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
             state=pending.state,
             iss=self.config.issuer_url,
         )
+
+
+def advertise_public_client_auth_methods(app: Any, auth: Any) -> None:
+    """Patch MCP 2.0 AS metadata to advertise its implemented public-client auth.
+
+    MCP 2.0's token/revocation authenticators accept DCR clients registered with
+    ``token_endpoint_auth_method=none`` at the token endpoint, but its metadata
+    builder currently advertises only the two client-secret methods. Rebuild
+    only the metadata route from the SDK's own metadata/CORS primitives and add
+    that implemented token capability; all protocol handlers remain upstream-owned.
+    """
+    from mcp.server.auth.handlers.metadata import MetadataHandler
+    from mcp.server.auth.routes import build_metadata, cors_middleware
+    from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+
+    registration = auth.client_registration_options or ClientRegistrationOptions()
+    revocation = auth.revocation_options or RevocationOptions()
+    metadata = build_metadata(
+        auth.issuer_url,
+        auth.service_documentation_url,
+        registration,
+        revocation,
+        supports_identity_assertion=auth.identity_assertion_enabled,
+    )
+    token_methods = list(metadata.token_endpoint_auth_methods_supported or ())
+    if "none" not in token_methods:
+        token_methods.append("none")
+    metadata.token_endpoint_auth_methods_supported = token_methods
+
+    metadata_path = "/.well-known/oauth-authorization-server"
+    for index, route in enumerate(app.routes):
+        if not isinstance(route, Route) or route.path != metadata_path:
+            continue
+        app.routes[index] = Route(
+            metadata_path,
+            endpoint=cors_middleware(MetadataHandler(metadata).handle, ["GET", "OPTIONS"]),
+            methods=["GET", "OPTIONS"],
+            name=route.name,
+        )
+        return
+    raise RuntimeError("MCP authorization-server metadata route was not found")
 
 
 class PinAttemptLimiter:

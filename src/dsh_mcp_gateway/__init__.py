@@ -17,6 +17,7 @@ def build_mcp_server(
     *,
     auth_server_provider: Any | None = None,
     auth: Any | None = None,
+    _server_cls: Any | None = None,
 ) -> Any:
     """Build the MCP v2 tool surface around an injected gateway service."""
     try:
@@ -38,7 +39,8 @@ def build_mcp_server(
         openWorldHint=True,
     )
 
-    mcp = MCPServer(
+    server_cls = _server_cls or MCPServer
+    mcp = server_cls(
         "dsh-mcp-gateway",
         version=__version__,
         description="Control long-lived DeepSeek Harness agent sessions.",
@@ -172,6 +174,7 @@ class PublicSdkGateway:
 def build_embedded_oauth_server(service: GatewayService, config: Any) -> tuple[Any, Any]:
     """Build a self-contained OAuth-protected MCP server plus its provider."""
     try:
+        from mcp.server import MCPServer
         from mcp.server.auth.settings import (
             AuthSettings,
             ClientRegistrationOptions,
@@ -181,7 +184,17 @@ def build_embedded_oauth_server(service: GatewayService, config: Any) -> tuple[A
     except ImportError as exc:  # pragma: no cover - installation boundary
         raise RuntimeError("MCP auth dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
 
-    from .oauth import EmbeddedOAuthProvider, install_approval_route
+    from .oauth import (
+        EmbeddedOAuthProvider,
+        advertise_public_client_auth_methods,
+        install_approval_route,
+    )
+
+    class EmbeddedOAuthMCPServer(MCPServer):
+        def streamable_http_app(self, *args: Any, **kwargs: Any) -> Any:
+            app = super().streamable_http_app(*args, **kwargs)
+            advertise_public_client_auth_methods(app, self.settings.auth)
+            return app
 
     provider = EmbeddedOAuthProvider(config)
     scopes = list(config.scopes)
@@ -197,7 +210,12 @@ def build_embedded_oauth_server(service: GatewayService, config: Any) -> tuple[A
         ),
         revocation_options=RevocationOptions(enabled=True),
     )
-    server = build_mcp_server(service, auth_server_provider=provider, auth=auth)
+    server = build_mcp_server(
+        service,
+        auth_server_provider=provider,
+        auth=auth,
+        _server_cls=EmbeddedOAuthMCPServer,
+    )
     install_approval_route(server, provider)
     return server, provider
 

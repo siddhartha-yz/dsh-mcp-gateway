@@ -745,7 +745,19 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             with TestClient(app) as client:
                 metadata = client.get("/.well-known/oauth-authorization-server")
                 self.assertEqual(metadata.status_code, 200)
-                self.assertIn("offline_access", metadata.json()["scopes_supported"])
+                metadata_json = metadata.json()
+                self.assertIn("offline_access", metadata_json["scopes_supported"])
+                self.assertIn("none", metadata_json["token_endpoint_auth_methods_supported"])
+                self.assertNotIn("none", metadata_json["revocation_endpoint_auth_methods_supported"])
+                metadata_options = client.options(
+                    "/.well-known/oauth-authorization-server",
+                    headers={
+                        "Origin": "https://example.com",
+                        "Access-Control-Request-Method": "GET",
+                    },
+                )
+                self.assertEqual(metadata_options.status_code, 200)
+                self.assertEqual(metadata_options.headers["access-control-allow-origin"], "*")
                 protected = client.get("/.well-known/oauth-protected-resource/mcp")
                 self.assertEqual(protected.status_code, 200)
                 self.assertEqual(protected.json()["scopes_supported"], ["dsh:control"])

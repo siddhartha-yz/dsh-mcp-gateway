@@ -119,7 +119,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.dsh_web_url,
         cwd=args.dsh_cwd,
     )
-    host_descriptor = backend.describe_host()
     state_dir = Path(args.state_dir).resolve()
     oauth = EmbeddedOAuthConfig(
         issuer_url=public_base,
@@ -144,10 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "http://[::1]:*",
         ],
     )
-    print(
-        f"DSH Web Host reachable at {backend.base_url} "
-        f"(reported version {host_descriptor.get('version', 'unknown')}; diagnostic only)"
-    )
+    print(f"DSH Web Host configured at {backend.base_url}; readiness is checked via /readyz")
     print(f"MCP gateway listening on http://{args.bind_host}:{args.port}/mcp")
     print(f"OAuth issuer: {oauth.issuer_url}")
     server.run(

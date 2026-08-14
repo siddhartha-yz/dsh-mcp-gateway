@@ -44,7 +44,7 @@ class CliTests(unittest.TestCase):
     def test_happy_path_builds_loopback_oauth_gateway_with_canonical_issuer(self) -> None:
         fake_backend = Mock()
         fake_backend.base_url = "http://127.0.0.1:3080"
-        fake_backend.describe_host.return_value = {"version": "0.0.1"}
+        fake_backend.describe_host.side_effect = RuntimeError("DSH not ready yet")
         fake_server = Mock()
 
         with (
@@ -68,6 +68,7 @@ class CliTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
+        fake_backend.describe_host.assert_not_called()
         config = build_server.call_args.args[1]
         self.assertEqual(config.issuer_url, "https://gateway.example.com/")
         self.assertEqual(config.resource_url, "https://gateway.example.com/mcp")

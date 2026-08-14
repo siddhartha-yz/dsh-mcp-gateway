@@ -380,6 +380,72 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         assert tokens.refresh_token is not None
         return config, provider, client, tokens
 
+    async def test_authorization_code_is_single_use_under_concurrent_exchange(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            provider = EmbeddedOAuthProvider(config)
+            client = OAuthClientInformationFull(
+                client_id="client-1",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code", "refresh_token"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(client)
+            target = await provider.authorize(
+                client,
+                AuthorizationParams(
+                    state=None,
+                    scopes=["dsh:control"],
+                    code_challenge="challenge",
+                    redirect_uri="http://127.0.0.1:9999/callback",
+                    redirect_uri_provided_explicitly=True,
+                    resource=config.resource_url,
+                ),
+            )
+            request_id = parse_qs(urlparse(target).query)["request"][0]
+            redirect = await provider.approve(request_id)
+            assert redirect is not None
+            code = parse_qs(urlparse(redirect).query)["code"][0]
+            auth_code = await provider.load_authorization_code(client, code)
+            assert auth_code is not None
+
+            results = await asyncio.gather(
+                provider.exchange_authorization_code(client, auth_code),
+                provider.exchange_authorization_code(client, auth_code),
+                return_exceptions=True,
+            )
+            failures = [result for result in results if isinstance(result, TokenError)]
+            successes = [result for result in results if not isinstance(result, Exception)]
+            self.assertEqual(len(successes), 1)
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0].error, "invalid_grant")
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM authorization_codes").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT count(*) FROM access_tokens").fetchone()[0], 1)
+                self.assertEqual(db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0], 1)
+
+    async def test_refresh_token_is_single_use_under_concurrent_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config, provider, client, tokens = await self.issue_tokens(Path(tmp))
+            refresh = await provider.load_refresh_token(client, tokens.refresh_token)
+            assert refresh is not None
+
+            results = await asyncio.gather(
+                provider.exchange_refresh_token(client, refresh, ["dsh:control"]),
+                provider.exchange_refresh_token(client, refresh, ["dsh:control"]),
+                return_exceptions=True,
+            )
+            failures = [result for result in results if isinstance(result, TokenError)]
+            successes = [result for result in results if not isinstance(result, Exception)]
+            self.assertEqual(len(successes), 1)
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0].error, "invalid_grant")
+            self.assertIsNone(await provider.load_refresh_token(client, tokens.refresh_token))
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0], 1)
+
     async def test_revoking_access_token_revokes_entire_grant_family(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _config, provider, client, tokens = await self.issue_tokens(Path(tmp))

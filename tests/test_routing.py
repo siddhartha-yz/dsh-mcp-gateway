@@ -518,6 +518,33 @@ class GatewayServiceTests(unittest.TestCase):
         self.assertFalse(result["has_more"])
         self.assertEqual(backend.calls, [("messages", "s1", 42, 20)])
 
+    def test_list_sessions_page_bounds_output_and_returns_offset_cursor(self) -> None:
+        backend = FakeBackend(SessionPresence.ABSENT)
+        backend.list_sessions = lambda: [
+            {"session_id": "s1"},
+            {"session_id": "s2"},
+            {"session_id": "s3"},
+        ]
+        service = GatewayService(backend)
+        first = service.list_sessions_page(limit=2)
+        second = service.list_sessions_page(limit=2, offset=first["next_offset"])
+        self.assertEqual(first, {
+            "items": [{"session_id": "s1"}, {"session_id": "s2"}],
+            "total": 3,
+            "has_more": True,
+            "next_offset": 2,
+        })
+        self.assertEqual(second, {
+            "items": [{"session_id": "s3"}],
+            "total": 3,
+            "has_more": False,
+            "next_offset": None,
+        })
+        with self.assertRaisesRegex(ValueError, "limit"):
+            service.list_sessions_page(limit=101)
+        with self.assertRaisesRegex(ValueError, "offset"):
+            service.list_sessions_page(offset=-1)
+
     def test_search_sessions_delegates_without_session_routing(self) -> None:
         backend = FakeBackend(SessionPresence.ABSENT)
         result = GatewayService(backend).search_sessions("remembered phrase")
@@ -1602,6 +1629,8 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(start.input_schema["properties"]), {"prompt", "session_id"})
 
         by_name = {tool.name: tool for tool in tools}
+        self.assertEqual(set(by_name["dsh_list"].input_schema["properties"]), {"limit", "offset"})
+        self.assertEqual(by_name["dsh_list"].input_schema.get("required", []), [])
         for name in (
             "dsh_status",
             "dsh_history",
@@ -1680,6 +1709,26 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.structured_content["messages"][0]["text"], "latest answer")
         self.assertEqual(result.structured_content["next_before_seq"], None)
         self.assertEqual(backend.calls, [("messages", "s1", 42, 20)])
+
+    async def test_list_tool_returns_bounded_page(self) -> None:
+        backend = FakeBackend(SessionPresence.PERSISTED)
+        backend.list_sessions = lambda: [
+            {"session_id": "s1"},
+            {"session_id": "s2"},
+            {"session_id": "s3"},
+        ]
+        server = build_mcp_server(GatewayService(backend))
+        result = await server.call_tool("dsh_list", {"limit": 2, "offset": 1})
+        self.assertFalse(result.is_error)
+        self.assertEqual(
+            result.structured_content,
+            {
+                "items": [{"session_id": "s2"}, {"session_id": "s3"}],
+                "total": 3,
+                "has_more": False,
+                "next_offset": None,
+            },
+        )
 
     async def test_search_tool_returns_structured_session_match(self) -> None:
         backend = FakeBackend(SessionPresence.PERSISTED)

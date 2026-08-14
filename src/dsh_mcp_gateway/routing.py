@@ -127,6 +127,23 @@ class GatewayService:
     def list_sessions(self) -> list[dict[str, Any]]:
         return self._backend.list_sessions()
 
+    def list_sessions_page(self, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer in [1, 100]")
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        items = self._backend.list_sessions()
+        page = items[offset : offset + limit]
+        total = len(items)
+        consumed = offset + len(page)
+        has_more = consumed < total
+        return {
+            "items": page,
+            "total": total,
+            "has_more": has_more,
+            "next_offset": consumed if has_more else None,
+        }
+
     def search_sessions(self, query: str) -> dict[str, Any]:
         return self._backend.search_sessions(query)
 

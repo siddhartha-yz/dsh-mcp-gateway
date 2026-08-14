@@ -101,9 +101,9 @@ def build_mcp_server(
         )
 
     @mcp.tool(name="dsh_list", annotations=read_only)
-    def dsh_list() -> list[dict[str, Any]]:
-        """List sessions visible to the configured DSH backend."""
-        return service.list_sessions()
+    def dsh_list(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        """List one bounded page of sessions; use next_offset to continue through the current snapshot."""
+        return service.list_sessions_page(limit=limit, offset=offset)
 
     @mcp.tool(name="dsh_search", annotations=read_only)
     def dsh_search(query: str) -> dict[str, Any]:

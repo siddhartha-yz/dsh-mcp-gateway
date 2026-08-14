@@ -22,6 +22,15 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("AGENTS.md", architecture)
         self.assertIn("give ChatGPT Web a mature DSH Harness", architecture)
 
+    def test_dsh_bridge_uses_native_tool_runtime_seam(self) -> None:
+        plugin = (ROOT / "dsh-bridge-plugin" / "index.js").read_text(encoding="utf-8")
+        overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
+
+        self.assertIn("ctx.tools.schemas()", plugin)
+        self.assertIn("ctx.tools.execute", plugin)
+        self.assertNotIn("DEEPSEEK_API_KEY", plugin)
+        self.assertIn("dsh-bridge-plugin/index.js", overlay)
+
 
 if __name__ == "__main__":
     unittest.main()

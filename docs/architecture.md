@@ -8,9 +8,17 @@ It may own ChatGPT-facing OAuth/MCP transport, public access glue, capability pr
 
 local-shell-mcp is an implementation/reference source for proven public-tunnel, OAuth/remote-MCP, remote-worker, browser, and other differentiated execution capabilities. It is not the primary harness in this architecture.
 
-The sections below document substantial prototype work that predates this clarified product boundary. They remain useful engineering evidence, but any gateway-owned session/goal/continuation design described below is **not automatically a current product requirement**. When a section conflicts with `AGENTS.md`, `AGENTS.md` is authoritative until this document is refactored.
+The first implementation of this boundary is deliberately small. A DSH-resident Cordis plugin reads `ctx.tools.schemas()` and executes calls with `ctx.tools.execute()`. The public OAuth/MCP gateway talks only to that loopback bridge and exposes a generic catalog/call pair to ChatGPT. Consequently DSH tool plugins remain the capability owners and continue through DSH's own registration, policy, and execution pipeline.
 
-## Session routing invariant
+```text
+community DSH plugin -> ctx.tools -> loopback bridge -> OAuth/MCP adapter -> ChatGPT Web
+```
+
+This is a stepping stone rather than the final UX: the next adapter improvement is first-class dynamic MCP projection of those DSH schemas. Agent-scoped capabilities require an explicit ChatGPT scope/authority mapping and are not implicitly promoted to global calls.
+
+The sections below document substantial prototype work that predates this clarified product boundary. They remain useful engineering evidence, but any gateway-owned session/goal/continuation design described below is **not automatically a current product requirement**. When a section conflicts with `AGENTS.md`, `AGENTS.md` is authoritative.
+
+## Historical prototype: session routing invariant
 
 Before sending a prompt, the gateway distinguishes three states:
 

@@ -1,0 +1,7 @@
+# Primary ChatGPT -> DSH Harness bridge.
+# The production layout installs this repository at /srv/dsh-mcp-gateway.
+# The plugin exposes only loopback DSH Web Host routes; public OAuth remains
+# owned by dsh-mcp-gateway.
+- insert:
+    - id: chatgpt-harness-bridge
+      name: /srv/dsh-mcp-gateway/dsh-bridge-plugin/index.js

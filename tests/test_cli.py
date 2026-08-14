@@ -186,6 +186,34 @@ class CliTests(unittest.TestCase):
         self.assertIn("127.0.0.1:*", security.allowed_hosts)
         self.assertIn("https://gateway.example.com", security.allowed_origins)
 
+    def test_primary_harness_mode_wires_generic_bridge_without_gateway_session_runtime(self) -> None:
+        fake_bridge = Mock()
+        fake_bridge.base_url = "http://127.0.0.1:3080"
+        fake_server = Mock()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            patch("dsh_mcp_gateway.cli.HarnessBridgeClient", return_value=fake_bridge) as bridge_cls,
+            patch(
+                "dsh_mcp_gateway.cli.build_embedded_oauth_server",
+                return_value=(fake_server, Mock()),
+            ) as build_server,
+        ):
+            result = main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--state-dir",
+                    tmp,
+                    "--dsh-harness-url",
+                    "http://127.0.0.1:3080",
+                ]
+            )
+        self.assertEqual(result, 0)
+        bridge_cls.assert_called_once_with("http://127.0.0.1:3080")
+        self.assertIsNone(build_server.call_args.kwargs["session_runtime"])
+        self.assertIs(build_server.call_args.kwargs["harness_bridge"], fake_bridge)
+
     def test_legacy_dsh_web_host_is_explicit_opt_in(self) -> None:
         fake_backend = Mock()
         fake_backend.base_url = "http://127.0.0.1:3080"
@@ -226,6 +254,19 @@ class HealthRouteTests(unittest.IsolatedAsyncioTestCase):
         ready = await routes["/readyz"].endpoint(Mock())
         self.assertEqual(ready.status_code, 200)
         self.assertEqual(json.loads(ready.body), {"ok": True, "dependency": "runtime-state"})
+
+    async def test_harness_bridge_readiness_checks_dsh_catalog(self) -> None:
+        from mcp.server import MCPServer
+
+        server = MCPServer("health-test")
+        bridge = Mock()
+        bridge.tools.return_value = [{"name": "echo"}]
+        install_health_routes(server, harness_bridge=bridge)
+        routes = {route.path: route for route in server._custom_starlette_routes}
+        ready = await routes["/readyz"].endpoint(Mock())
+        bridge.tools.assert_called_once_with()
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(json.loads(ready.body), {"ok": True, "dependency": "dsh-harness-bridge"})
 
     async def test_health_and_ready_routes_are_minimal_and_no_store(self) -> None:
         from mcp.server import MCPServer

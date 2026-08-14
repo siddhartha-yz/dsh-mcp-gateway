@@ -29,60 +29,46 @@ ChatGPT Web Chat
 
 The adapter should be as thin and generic as practical. DSH is the harness/runtime authority; local-shell-mcp is primarily a source of proven public-tunnel/OAuth/remote-worker patterns and selected differentiated execution capabilities, not the primary harness.
 
-## Relationship to local-shell-mcp v4
+## Relationship to local-shell-mcp
 
-The design follows the direction now implemented on `fwerkor/local-shell-mcp`'s `feat/logical-session-runtime-v4` branch:
+local-shell-mcp is not the harness core here. Its useful contributions are the proven ChatGPT Remote MCP/OAuth and public-tunnel patterns plus differentiated execution capabilities such as remote workers and browser control. Those capabilities may be composed behind DSH when useful.
 
-- a durable logical Session is independent of one ChatGPT run;
-- `resume(..., takeover=true)` creates a new run lease and supersedes the older run;
-- meaningful progress is checkpointed semantically instead of copying every tool result;
-- a Live Workspace/MCP App can use `@modelcontextprotocol/ext-apps` `app.updateModelContext(...)` plus `app.sendMessage(...)` to request another ChatGPT continuation after inactivity;
-- continuation resumes the same durable Session rather than invoking a second model provider.
-
-The goal here is to reuse or remain compatible with those runtime semantics rather than duplicate local-shell-mcp's execution tools.
+The recent LSM session/continuation work remains useful reference material, but this repository does not copy that runtime into the gateway. DSH owns harness lifecycle and capability composition.
 
 ## Current status
 
-The model-provider-free logical-session core is implemented with SQLite persistence.
-
-`session_manage` currently supports:
+The first direct DSH Harness seam is implemented. A tiny DSH-resident Cordis plugin uses DSH's own `ctx.tools` registry:
 
 ```text
-start   -> create logical Session + active ChatGPT run lease
-get     -> read full durable handoff state
-list    -> rediscover recent Sessions with compact progress
-report  -> persist semantic checkpoint/progress
-resume  -> create a new run; takeover=true supersedes an old active run
-finish  -> complete Session and release run lease
-cancel  -> cancel Session and release run lease
+DSH tool/community plugin
+        | ctx.tools.register(...)
+        v
+DSH ToolRuntime
+        | schemas() / execute()
+        v
+loopback ChatGPT bridge
+        |
+        v
+OAuth MCP gateway
+        |
+        v
+ChatGPT Web
 ```
 
-A mutating call must carry the current `session_run_id`. Once another ChatGPT run takes over, the old run id can no longer mutate that Session.
+The gateway exposes two generic MCP operations in harness mode:
 
-Example flow:
+- `dsh_tool_catalog`: reads the current DSH `ToolRuntime` schema catalog.
+- `dsh_tool_call`: executes a discovered tool through DSH's guarded `ToolRuntime` pipeline.
 
-```text
-ChatGPT run A
-  -> session_manage(action="start", objective="...")
-  <- session_id + active_run.run_id
-  -> do local-shell-mcp work
-  -> session_manage(action="report", session_run_id=..., summary=..., next=...)
+This means adding another global DSH tool plugin does not require another Python wrapper. The current bridge is intentionally a minimal proof of the generic seam; the next product milestone is projecting DSH schemas as first-class MCP tools rather than making ChatGPT go through the two meta-tools. Agent-scoped DSH capabilities also need an explicit ChatGPT authority/scope design before they can be exposed safely.
 
-run A ends / is replaced
-
-ChatGPT run B
-  -> session_manage(action="resume", session_id=..., takeover=true)
-  <- same durable task state + new active_run.run_id
-  -> continue from checkpoint
-```
-
-The next core milestone is the MCP App continuation bridge: claim an eligible inactive plan/session, update ChatGPT model context with the checkpoint, then call `app.sendMessage(...)` so ChatGPT itself starts the next continuation run.
+The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).
 
 ## OAuth / MCP
 
 The existing embedded OAuth implementation is retained. It provides persisted dynamic client registration, PKCE/public-client support, owner approval, resource/issuer-bound tokens, refresh rotation, revocation, bounded registration state, and DNS-rebinding protection for the public MCP endpoint.
 
-The default server mode requires no model provider and no DSH process:
+The primary harness mode requires no model provider API key. Run the DSH Web Host with the bridge overlay, then point the OAuth gateway at its loopback bridge:
 
 ```sh
 python -m pip install --constraint deploy/server-constraints.txt -e '.[server]'
@@ -91,6 +77,7 @@ export DSH_MCP_GATEWAY_ADMIN_PIN='choose-a-long-owner-pin'
 
 dsh-mcp-gateway \
   --public-base-url https://gateway.example.com \
+  --dsh-harness-url http://127.0.0.1:3080 \
   --state-dir .dsh-mcp-gateway
 ```
 
@@ -100,7 +87,7 @@ The public endpoint is:
 https://gateway.example.com/mcp
 ```
 
-`GET /healthz` checks the gateway process. In the default ChatGPT runtime mode, `GET /readyz` checks that the local runtime state initialized; it does not probe any LLM provider.
+`GET /healthz` checks the gateway process. In harness mode, `GET /readyz` checks the loopback DSH capability bridge; it never probes an LLM provider.
 
 ## Optional legacy DSH adapter
 
@@ -115,7 +102,7 @@ dsh-mcp-gateway \
 
 Only when this option is supplied are the legacy `dsh_*` MCP tools registered and `/readyz` made dependent on that Host. Historical evidence, goal-round experiments, deployment material, and rc6 restart notes are preserved in [`docs/legacy-dsh-prototype.md`](docs/legacy-dsh-prototype.md).
 
-No DeepSeek API key is required for the default runtime.
+No DeepSeek API key is required for the primary ChatGPT-to-DSH harness path.
 
 ## Development
 
@@ -129,13 +116,13 @@ The server dependency graph used by CI is pinned in [`deploy/server-constraints.
 
 ## Design invariants
 
-- ChatGPT is the only reasoning Agent in the primary architecture.
-- Session state survives MCP reconnects and gateway process restarts.
-- A stale ChatGPT run cannot mutate a Session after takeover.
-- Handoff state is semantic and bounded; it is not an unbounded transcript dump.
-- Continuation means triggering another ChatGPT run, not secretly switching to another model.
-- Execution capabilities should come from local-shell-mcp or another execution MCP rather than being reimplemented here.
-- Legacy DSH-specific behavior stays optional and isolated behind its adapter.
+- ChatGPT is the only primary reasoning Agent.
+- DSH is the harness/runtime authority.
+- DSH community capabilities should cross the adapter generically rather than acquire bespoke gateway wrappers.
+- Tool execution stays inside DSH's own guarded `ToolRuntime` pipeline.
+- The public OAuth/MCP boundary stays outside the loopback DSH Web Host.
+- local-shell-mcp is an optional execution/access provider and reference, not the primary harness.
+- Gateway-owned session/continuation experiments are legacy work, not the current architecture.
 
 ## License
 

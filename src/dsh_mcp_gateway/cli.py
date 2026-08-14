@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from . import build_embedded_oauth_server
 from .backend import ExperimentalWebHostBackend
+from .harness_bridge import HarnessBridgeClient
 from .routing import GatewayService
 from .session_runtime import DurableSessionRuntime
 
@@ -38,7 +39,7 @@ def build_transport_security(public_base: str):
     )
 
 
-def install_health_routes(server, backend=None) -> None:
+def install_health_routes(server, backend=None, harness_bridge=None) -> None:
     """Install minimal unauthenticated deployment probes.
 
     Runtime-only mode has no model-side dependency, so readiness means the
@@ -59,6 +60,19 @@ def install_health_routes(server, backend=None) -> None:
 
     @server.custom_route("/readyz", methods=["GET"], include_in_schema=False)
     async def readyz(_request):
+        if harness_bridge is not None:
+            try:
+                await asyncio.to_thread(harness_bridge.tools)
+            except Exception:  # noqa: BLE001 - dependency failures collapse to a non-sensitive readiness result.
+                return JSONResponse(
+                    {"ok": False, "dependency": "dsh-harness-bridge"},
+                    status_code=503,
+                    headers={"Cache-Control": "no-store"},
+                )
+            return JSONResponse(
+                {"ok": True, "dependency": "dsh-harness-bridge"},
+                headers={"Cache-Control": "no-store"},
+            )
         if backend is None:
             return JSONResponse(
                 {"ok": True, "dependency": "runtime-state"},
@@ -82,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dsh-mcp-gateway",
         description="Expose a durable ChatGPT runtime as an OAuth-protected MCP server.",
+    )
+    parser.add_argument(
+        "--dsh-harness-url",
+        default=None,
+        help="Primary DSH Harness bridge origin, normally loopback (for example http://127.0.0.1:3080).",
     )
     parser.add_argument(
         "--dsh-web-url",
@@ -169,6 +188,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ImportError as exc:
         raise SystemExit("install dsh-mcp-gateway[server] to run the HTTP/OAuth gateway") from exc
 
+    harness_bridge = None
+    if args.dsh_harness_url:
+        try:
+            harness_bridge = HarnessBridgeClient(args.dsh_harness_url)
+        except ValueError as exc:
+            raise SystemExit(f"invalid --dsh-harness-url: {exc}") from exc
+
     backend = None
     service = None
     if args.dsh_web_url:
@@ -190,15 +216,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_client_metadata_bytes=args.max_client_metadata_bytes,
         max_registration_request_bytes=args.max_registration_request_bytes,
     )
-    session_runtime = DurableSessionRuntime(state_dir / "sessions.sqlite3")
+    session_runtime = None if harness_bridge is not None else DurableSessionRuntime(state_dir / "sessions.sqlite3")
     server, _provider = build_embedded_oauth_server(
         service,
         oauth,
         session_runtime=session_runtime,
+        harness_bridge=harness_bridge,
     )
-    install_health_routes(server, backend)
-    if backend is None:
-        print("ChatGPT runtime mode enabled; no model provider or DSH Web Host is configured")
+    install_health_routes(server, backend, harness_bridge)
+    if harness_bridge is not None:
+        print(f"DSH Harness bridge configured at {harness_bridge.base_url}; ChatGPT remains the reasoning agent")
+    elif backend is None:
+        print("Legacy standalone session runtime enabled; no DSH Harness bridge is configured")
     else:
         print(f"Legacy DSH Web Host configured at {backend.base_url}; readiness is checked via /readyz")
     print(f"MCP gateway listening on http://{args.bind_host}:{args.port}/mcp")

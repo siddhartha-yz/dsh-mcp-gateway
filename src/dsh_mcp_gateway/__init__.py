@@ -7,6 +7,7 @@ from os import PathLike
 from typing import Any
 
 from .backend import PublicSdkBridge, PublicSdkClient, SessionCatalog
+from .harness_bridge import HarnessBridgeClient
 from .routing import GatewayService
 from .session_runtime import DurableSessionRuntime
 
@@ -17,6 +18,7 @@ def build_mcp_server(
     service: GatewayService | None,
     *,
     session_runtime: DurableSessionRuntime | None = None,
+    harness_bridge: HarnessBridgeClient | None = None,
     auth_server_provider: Any | None = None,
     auth: Any | None = None,
     _server_cls: Any | None = None,
@@ -46,11 +48,20 @@ def build_mcp_server(
         "dsh-mcp-gateway",
         version=__version__,
         description=(
-            "Durable ChatGPT runtime control plane with an experimental legacy DSH adapter."
-            if session_runtime is not None
-            else "Control long-lived DeepSeek Harness agent sessions."
+            "Expose DSH Harness capabilities to ChatGPT Web."
+            if harness_bridge is not None
+            else (
+                "Legacy durable ChatGPT runtime control plane with an experimental DSH adapter."
+                if session_runtime is not None
+                else "Control long-lived DeepSeek Harness agent sessions."
+            )
         ),
         instructions=(
+            "DSH is the harness authority and ChatGPT is the reasoning agent. Use dsh_tool_catalog to discover "
+            "the current DSH ToolRuntime surface and dsh_tool_call to execute a discovered capability. Newly loaded "
+            "DSH tool plugins appear through the same generic bridge without a bespoke ChatGPT wrapper."
+            if harness_bridge is not None
+            else (
             "Use session_manage(action='start') before substantial work, keep the returned session_id and "
             "active_run.run_id as session_run_id, and report semantic checkpoints. A later ChatGPT run should call "
             "session_manage(action='resume', session_id=..., takeover=true) before continuing. "
@@ -62,10 +73,24 @@ def build_mcp_server(
                 "dsh_history_page only when raw event detail is needed. Use dsh_search to recover an older session "
                 "from remembered message text, then dsh_continue to steer it later."
             )
+            )
         ),
         auth_server_provider=auth_server_provider,
         auth=auth,
     )
+
+    if harness_bridge is not None:
+
+        @mcp.tool(name="dsh_tool_catalog", annotations=read_only)
+        def dsh_tool_catalog() -> dict[str, Any]:
+            """List the current DSH ToolRuntime schemas exposed by installed DSH plugins."""
+            tools = harness_bridge.tools()
+            return {"tools": tools, "count": len(tools)}
+
+        @mcp.tool(name="dsh_tool_call", annotations=consequential_control)
+        def dsh_tool_call(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+            """Execute one discovered DSH tool through DSH's guarded ToolRuntime pipeline."""
+            return harness_bridge.call(name, arguments)
 
     if session_runtime is not None:
 
@@ -233,6 +258,7 @@ def build_embedded_oauth_server(
     config: Any,
     *,
     session_runtime: DurableSessionRuntime | None = None,
+    harness_bridge: HarnessBridgeClient | None = None,
 ) -> tuple[Any, Any]:
     """Build a self-contained OAuth-protected MCP server plus its provider."""
     try:
@@ -280,6 +306,7 @@ def build_embedded_oauth_server(
     server = build_mcp_server(
         service,
         session_runtime=session_runtime,
+        harness_bridge=harness_bridge,
         auth_server_provider=provider,
         auth=auth,
         _server_cls=EmbeddedOAuthMCPServer,

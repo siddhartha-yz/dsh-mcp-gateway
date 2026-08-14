@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "deploy" / "systemd"
 DSH_DEPLOY = ROOT / "deploy" / "dsh"
 DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
+DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 
 
@@ -161,13 +162,44 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-harness", deployment)
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-mcp-gateway", deployment)
         self.assertIn("/opt/dsh-runtime/node/bin/node", deployment)
-        self.assertIn("/opt/dsh-runtime/node/bin/npm install", deployment)
+        self.assertIn("/opt/dsh-runtime/node/bin/npm ci", deployment)
+        self.assertIn("python3 scripts/verify-dsh-runtime-lock.py", deployment)
         self.assertIn("python3 scripts/preflight-deployment.py", deployment)
         self.assertIn("python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com", deployment)
         self.assertLess(
             deployment.index("python3 scripts/preflight-deployment.py"),
             deployment.index("systemctl enable --now dsh-web-host.service"),
         )
+
+    def test_dsh_runtime_lock_verifier_accepts_repository_lock_and_rejects_root_drift(self) -> None:
+        accepted = subprocess.run(
+            [sys.executable, str(DSH_LOCK_VERIFY)],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertIn("dsh-runtime-lock-ok", accepted.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / "package.json", root / "package.json")
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / "package-lock.json", root / "package-lock.json")
+            package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+            package["dependencies"]["@deepseek-ai/dsh"] = "0.1.0-rc.999"
+            (root / "package.json").write_text(json.dumps(package), encoding="utf-8")
+            rejected = subprocess.run(
+                [sys.executable, str(DSH_LOCK_VERIFY), "--root", str(root)],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("exact tested @deepseek-ai/dsh dependency", rejected.stderr)
 
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:
         gateway_env = (SYSTEMD / "gateway.env.example").read_text(encoding="utf-8")
@@ -226,7 +258,11 @@ class DeploymentPreflightTests(unittest.TestCase):
         (paths["gateway_root"] / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
         deploy_dir = paths["gateway_root"] / "deploy"
         (deploy_dir / "systemd").mkdir(parents=True)
+        (deploy_dir / "dsh-runtime").mkdir(parents=True)
         shutil.copy2(ROOT / "deploy" / "server-constraints.txt", deploy_dir / "server-constraints.txt")
+        for filename in ("package.json", "package-lock.json"):
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / filename, deploy_dir / "dsh-runtime" / filename)
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / filename, paths["dsh_runtime"] / filename)
         for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service"):
             shutil.copy2(SYSTEMD / filename, deploy_dir / "systemd" / filename)
             shutil.copy2(SYSTEMD / filename, paths["systemd_dir"] / filename)
@@ -340,6 +376,8 @@ class DeploymentPreflightTests(unittest.TestCase):
             package.write_text(json.dumps({"version": "0.1.0-rc.999"}), encoding="utf-8")
             paths["node"].write_text("#!/bin/sh\necho v99.0.0\n", encoding="utf-8")
             paths["node"].chmod(0o755)
+            installed_lock = paths["dsh_runtime"] / "package-lock.json"
+            installed_lock.write_text(installed_lock.read_text(encoding="utf-8") + "\n", encoding="utf-8")
             installed = paths["systemd_dir"] / "dsh-web-host.service"
             installed.write_text(installed.read_text(encoding="utf-8") + "\n# drift\n", encoding="utf-8")
 
@@ -349,6 +387,7 @@ class DeploymentPreflightTests(unittest.TestCase):
             failed = {check["name"] for check in report["checks"] if not check["ok"]}
             self.assertIn("Node pinned version", failed)
             self.assertIn("DSH pinned version", failed)
+            self.assertIn("installed DSH package-lock.json", failed)
             self.assertIn("installed dsh-web-host.service", failed)
 
 

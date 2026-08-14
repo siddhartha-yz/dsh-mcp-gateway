@@ -167,16 +167,16 @@ def check_executable(preflight: Preflight, name: str, path: Path) -> None:
     preflight.add(name, ok, f"{path} ({'executable' if ok else 'missing or not executable'})")
 
 
-def check_unit_matches(preflight: Preflight, name: str, installed: Path, template: Path) -> None:
+def check_file_matches(preflight: Preflight, name: str, installed: Path, template: Path) -> None:
     if not installed.is_file() or not template.is_file():
         preflight.add(name, False, f"installed={installed.is_file()} template={template.is_file()}")
         return
     try:
         ok = installed.read_bytes() == template.read_bytes()
     except OSError as exc:
-        preflight.add(name, False, f"cannot compare unit files: {type(exc).__name__}")
+        preflight.add(name, False, f"cannot compare files: {type(exc).__name__}")
         return
-    preflight.add(name, ok, "installed unit matches checked-in template" if ok else "installed unit differs from template")
+    preflight.add(name, ok, "installed file matches checked-in source" if ok else "installed file differs from checked-in source")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -271,6 +271,15 @@ def main(argv: list[str] | None = None) -> int:
             f"version={rendered!r}; expected={expected_rendered!r}",
         )
 
+    repo_dsh_runtime = args.gateway_root / "deploy" / "dsh-runtime"
+    for filename in ("package.json", "package-lock.json"):
+        check_file_matches(
+            p,
+            f"installed DSH {filename}",
+            args.dsh_runtime / filename,
+            repo_dsh_runtime / filename,
+        )
+
     dsh_bin = args.dsh_runtime / "node_modules" / ".bin" / "dsh"
     dsh_package = args.dsh_runtime / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
     check_executable(p, "DSH executable", dsh_bin)
@@ -352,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_systemd = args.gateway_root / "deploy" / "systemd"
     for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service"):
-        check_unit_matches(
+        check_file_matches(
             p,
             f"installed {filename}",
             args.systemd_dir / filename,

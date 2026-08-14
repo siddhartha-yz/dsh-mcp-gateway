@@ -16,7 +16,7 @@ This checklist defines the boundary between the current development prototype an
 - [x] Rebuilding the OAuth/MCP server around the same SQLite state preserves old access-token authentication; a new MCP transport session is negotiated and the pre-restart refresh token rotates once with replay rejected as `invalid_grant`.
 - [x] Anonymous DCR input is bounded before parsing (raw `POST /register` body) and before persistence (normalized client metadata), including streamed bodies without `Content-Length`.
 - [x] Gateway liveness is independent from DSH readiness; a missing/wedged Host leaves `/healthz` live and `/readyz` bounded to the dedicated short probe timeout.
-- [x] Wheel/core CLI smoke, Python 3.11/3.12 tests, all-extras imports, locked server dependency graph, systemd parser checks, and the repository test suite run in CI.
+- [x] Wheel/core CLI smoke, Python 3.11/3.12 tests, all-extras imports, the locked Python server graph, the exact DSH rc6 npm graph (587 transitive entries with sha512 integrity), systemd parser checks, and the repository test suite are verifier/CI-backed; the example DSH service pins its self-contained Node runtime to 24.19.0.
 - [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound.
 
 ## Release-blocking drills

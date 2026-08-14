@@ -55,14 +55,18 @@ Install a verified self-contained Node `24.19.0` distribution under `/opt/dsh-ru
 /opt/dsh-runtime/node/bin/npm
 ```
 
-Do not rely on a global `/usr/bin/node`: the checked-in systemd unit explicitly prepends `/opt/dsh-runtime/node/bin` to its service PATH, and the deployment preflight requires that exact Node version by default. Then install the exact DSH release with that runtime:
+Do not rely on a global `/usr/bin/node`: the checked-in systemd unit explicitly prepends `/opt/dsh-runtime/node/bin` to its service PATH, and the deployment preflight requires that exact Node version by default. The repository also records the exact npm dependency graph that produced the real rc6 integration runtime. Verify it, copy those manifests into `/opt/dsh-runtime`, then install with `npm ci` so transitive packages are reproduced from `package-lock.json` instead of re-resolved:
 
 ```sh
+python3 scripts/verify-dsh-runtime-lock.py
+sudo install -m 0644 deploy/dsh-runtime/package.json /opt/dsh-runtime/package.json
+sudo install -m 0644 deploy/dsh-runtime/package-lock.json /opt/dsh-runtime/package-lock.json
 sudo env PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin \
-  /opt/dsh-runtime/node/bin/npm install \
+  /opt/dsh-runtime/node/bin/npm ci \
   --prefix /opt/dsh-runtime \
-  --save-exact \
-  @deepseek-ai/dsh@0.1.0-rc.6
+  --omit=dev \
+  --no-audit \
+  --no-fund
 ```
 
 Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environment:
@@ -79,6 +83,7 @@ Before relying on the deployment, verify that every direct `server` runtime requ
 
 ```sh
 python3 scripts/verify-server-constraints.py
+python3 scripts/verify-dsh-runtime-lock.py
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python -m compileall -q src tests scripts
 ./scripts/verify-systemd.sh

@@ -79,8 +79,10 @@ jobs:
             pyproject.toml
             deploy/server-constraints.txt
 
-      - name: Verify direct server pins
-        run: python scripts/verify-server-constraints.py
+      - name: Verify deployment dependency locks
+        run: |
+          python scripts/verify-server-constraints.py
+          python scripts/verify-dsh-runtime-lock.py
 
       - name: Install constrained server environment
         run: python -m pip install --constraint deploy/server-constraints.txt -e '.[server]'

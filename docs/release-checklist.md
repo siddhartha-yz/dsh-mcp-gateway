@@ -17,7 +17,7 @@ This checklist defines the boundary between the current development prototype an
 - [x] Anonymous DCR input is bounded before parsing (raw `POST /register` body) and before persistence (normalized client metadata), including streamed bodies without `Content-Length`.
 - [x] Gateway liveness is independent from DSH readiness; a missing/wedged Host leaves `/healthz` live and `/readyz` bounded to the dedicated short probe timeout.
 - [x] Wheel/core CLI smoke, Python 3.11/3.12 tests, all-extras imports, the locked Python server graph, the exact DSH rc6 npm graph (587 transitive entries with sha512 integrity), systemd parser checks, and the repository test suite are verifier/CI-backed; the example DSH service pins its self-contained Node runtime to 24.19.0. The npm graph was also rebuilt from an empty Linux x86_64/glibc directory with Node 24.19.0/npm 11.17.0: DSH Web Host + Agent initialized, a real model-driven Bash tool call succeeded, and node-pty spawned a PTY.
-- [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound.
+- [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound. The real MCP SDK DNS-rebinding middleware is also regression-tested: the declared public Host+Origin is accepted, a mismatched Host returns 421, and a mismatched Origin returns 403. The one-shot release client requests MCP `2026-07-28` and then uses the server-negotiated protocol version for the rest of the session.
 
 ## Release-blocking drills
 

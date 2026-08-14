@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-DEFAULT_PROTOCOL_VERSION = "2025-11-25"
+DEFAULT_PROTOCOL_VERSION = "2026-07-28"
 EXPECTED_TOOLS = {
     "dsh_start",
     "dsh_continue",

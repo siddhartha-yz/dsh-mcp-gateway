@@ -7,7 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from dsh_mcp_gateway.cli import install_health_routes, main
+from dsh_mcp_gateway import build_mcp_server
+from dsh_mcp_gateway.cli import build_transport_security, install_health_routes, main
+from dsh_mcp_gateway.routing import GatewayService
 
 
 class CliTests(unittest.TestCase):
@@ -87,6 +89,55 @@ class CliTests(unittest.TestCase):
                     "0",
                 ]
             )
+
+    def test_public_transport_security_accepts_declared_origin_and_rejects_mismatch(self) -> None:
+        from starlette.testclient import TestClient
+
+        security = build_transport_security("https://gateway.example.com")
+        server = build_mcp_server(GatewayService(Mock()))
+        app = server.streamable_http_app(
+            streamable_http_path="/mcp",
+            json_response=True,
+            host="127.0.0.1",
+            transport_security=security,
+        )
+        initialize = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "transport-security-test", "version": "1"},
+            },
+        }
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        with TestClient(app, base_url="https://gateway.example.com") as client:
+            accepted = client.post(
+                "/mcp",
+                headers={**headers, "Origin": "https://gateway.example.com"},
+                json=initialize,
+            )
+            bad_host = client.post(
+                "/mcp",
+                headers={
+                    **headers,
+                    "Host": "evil.example.com",
+                    "Origin": "https://gateway.example.com",
+                },
+                json=initialize,
+            )
+            bad_origin = client.post(
+                "/mcp",
+                headers={**headers, "Origin": "https://evil.example.com"},
+                json=initialize,
+            )
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(bad_host.status_code, 421)
+        self.assertEqual(bad_host.text, "Invalid Host header")
+        self.assertEqual(bad_origin.status_code, 403)
+        self.assertEqual(bad_origin.text, "Invalid Origin header")
 
     def test_happy_path_builds_loopback_oauth_gateway_with_canonical_issuer(self) -> None:
         fake_backend = Mock()

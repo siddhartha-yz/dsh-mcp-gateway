@@ -13,6 +13,30 @@ from .backend import ExperimentalWebHostBackend
 from .routing import GatewayService
 
 
+def build_transport_security(public_base: str):
+    """Build the DNS-rebinding allowlist for one validated public HTTPS origin."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    parsed_public = urlparse(public_base)
+    if not parsed_public.hostname:
+        raise ValueError("public_base must contain a hostname")
+    public_host = parsed_public.netloc
+    allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
+    if parsed_public.port is None:
+        host_for_port = f"[{parsed_public.hostname}]" if ":" in parsed_public.hostname else parsed_public.hostname
+        allowed_hosts.append(f"{host_for_port}:443")
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(dict.fromkeys(allowed_hosts)),
+        allowed_origins=[
+            public_base,
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+        ],
+    )
+
+
 def install_health_routes(server, backend) -> None:
     """Install minimal unauthenticated deployment probes.
 
@@ -133,9 +157,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("DSH_MCP_GATEWAY_ADMIN_PIN is required")
 
     try:
-        from mcp.server.transport_security import TransportSecuritySettings
-
         from .oauth import EmbeddedOAuthConfig
+
+        transport_security = build_transport_security(public_base)
     except ImportError as exc:
         raise SystemExit("install dsh-mcp-gateway[server] to run the HTTP/OAuth gateway") from exc
 
@@ -158,21 +182,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     server, _provider = build_embedded_oauth_server(GatewayService(backend), oauth)
     install_health_routes(server, backend)
-    public_host = parsed_public.netloc
-    allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
-    if parsed_public.port is None:
-        host_for_port = f"[{parsed_public.hostname}]" if ":" in parsed_public.hostname else parsed_public.hostname
-        allowed_hosts.append(f"{host_for_port}:443")
-    transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=list(dict.fromkeys(allowed_hosts)),
-        allowed_origins=[
-            public_base,
-            "http://127.0.0.1:*",
-            "http://localhost:*",
-            "http://[::1]:*",
-        ],
-    )
     print(f"DSH Web Host configured at {backend.base_url}; readiness is checked via /readyz")
     print(f"MCP gateway listening on http://{args.bind_host}:{args.port}/mcp")
     print(f"OAuth issuer: {oauth.issuer_url}")

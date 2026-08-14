@@ -184,6 +184,7 @@ class ReleaseSmokeHandler(BaseHTTPRequestHandler):
             method = payload.get("method")
             if method == "initialize":
                 self.state["initialized"] = True
+                self.state["requested_protocol"] = payload.get("params", {}).get("protocolVersion")
                 self.send_json(
                     200,
                     {
@@ -316,6 +317,7 @@ class PublicReleaseSmokeTests(unittest.TestCase):
                 "refresh_replay",
             ):
                 self.assertTrue(self.server.state.get(key), key)
+            self.assertEqual(self.server.state["requested_protocol"], "2026-07-28")
 
     def test_public_smoke_rejects_non_https_non_loopback_before_reading_pin(self) -> None:
         result = subprocess.run(

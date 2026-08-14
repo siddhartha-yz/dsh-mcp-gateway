@@ -618,6 +618,30 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(start.input_schema["required"], ["prompt"])
         self.assertEqual(set(start.input_schema["properties"]), {"prompt", "session_id"})
 
+        by_name = {tool.name: tool for tool in tools}
+        for name in ("dsh_status", "dsh_history", "dsh_list", "dsh_goal_status"):
+            annotations = by_name[name].annotations
+            assert annotations is not None
+            self.assertTrue(annotations.read_only_hint)
+            self.assertFalse(annotations.destructive_hint)
+            self.assertTrue(annotations.idempotent_hint)
+            self.assertFalse(annotations.open_world_hint)
+
+        for name in (
+            "dsh_start",
+            "dsh_continue",
+            "dsh_cancel",
+            "dsh_goal_create",
+            "dsh_goal_resume",
+            "dsh_goal_pause",
+        ):
+            annotations = by_name[name].annotations
+            assert annotations is not None
+            self.assertFalse(annotations.read_only_hint)
+            self.assertTrue(annotations.destructive_hint)
+            self.assertFalse(annotations.idempotent_hint)
+            self.assertTrue(annotations.open_world_hint)
+
     async def test_start_tool_returns_structured_receipt(self) -> None:
         backend = FakeBackend(SessionPresence.ABSENT)
         server = build_mcp_server(GatewayService(backend))

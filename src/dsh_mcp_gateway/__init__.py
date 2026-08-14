@@ -21,8 +21,22 @@ def build_mcp_server(
     """Build the MCP v2 tool surface around an injected gateway service."""
     try:
         from mcp.server import MCPServer
+        from mcp.types import ToolAnnotations
     except ImportError as exc:  # pragma: no cover - installation boundary
         raise RuntimeError("MCP dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
+
+    read_only = ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+    consequential_control = ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
 
     mcp = MCPServer(
         "dsh-mcp-gateway",
@@ -36,42 +50,42 @@ def build_mcp_server(
         auth=auth,
     )
 
-    @mcp.tool(name="dsh_start")
+    @mcp.tool(name="dsh_start", annotations=consequential_control)
     def dsh_start(prompt: str, session_id: str | None = None) -> dict[str, str]:
         """Start work in a new or explicitly named DSH session and return a receipt."""
         return service.start(prompt, session_id=session_id).as_dict()
 
-    @mcp.tool(name="dsh_continue")
+    @mcp.tool(name="dsh_continue", annotations=consequential_control)
     def dsh_continue(session_id: str, prompt: str) -> dict[str, str]:
         """Send another instruction to the same durable DSH session."""
         return service.continue_session(session_id, prompt).as_dict()
 
-    @mcp.tool(name="dsh_status")
+    @mcp.tool(name="dsh_status", annotations=read_only)
     def dsh_status(session_id: str) -> dict[str, Any]:
         """Read the current state of one DSH session."""
         return service.status(session_id)
 
-    @mcp.tool(name="dsh_history")
+    @mcp.tool(name="dsh_history", annotations=read_only)
     def dsh_history(session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Read the newest durable or projected events for one DSH session."""
         return service.history(session_id, limit=limit)
 
-    @mcp.tool(name="dsh_list")
+    @mcp.tool(name="dsh_list", annotations=read_only)
     def dsh_list() -> list[dict[str, Any]]:
         """List sessions visible to the configured DSH backend."""
         return service.list_sessions()
 
-    @mcp.tool(name="dsh_cancel")
+    @mcp.tool(name="dsh_cancel", annotations=consequential_control)
     def dsh_cancel(session_id: str) -> dict[str, Any]:
         """Cancel active work in a DSH session without replacing that session."""
         return service.cancel(session_id)
 
-    @mcp.tool(name="dsh_goal_status")
+    @mcp.tool(name="dsh_goal_status", annotations=read_only)
     def dsh_goal_status(session_id: str) -> dict[str, Any]:
         """Read the durable current goal projection for one DSH session."""
         return service.goal_status(session_id)
 
-    @mcp.tool(name="dsh_goal_create")
+    @mcp.tool(name="dsh_goal_create", annotations=consequential_control)
     def dsh_goal_create(
         session_id: str,
         objective: str,
@@ -84,12 +98,12 @@ def build_mcp_server(
             max_goal_rounds=max_goal_rounds,
         )
 
-    @mcp.tool(name="dsh_goal_resume")
+    @mcp.tool(name="dsh_goal_resume", annotations=consequential_control)
     def dsh_goal_resume(session_id: str) -> dict[str, Any]:
         """Explicitly re-arm/resume the current goal using its latest durable CAS revision."""
         return service.goal_resume(session_id)
 
-    @mcp.tool(name="dsh_goal_pause")
+    @mcp.tool(name="dsh_goal_pause", annotations=consequential_control)
     def dsh_goal_pause(session_id: str) -> dict[str, Any]:
         """Pause the current goal using its latest durable CAS revision."""
         return service.goal_pause(session_id)

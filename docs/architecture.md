@@ -18,6 +18,8 @@ absent    -> create a fresh Agent
 
 The persisted branch is fail-closed. If resume is unavailable or fails, the gateway reports that failure. It does not call create with the same id.
 
+Within one gateway process, `ensure` operations for the same explicit session id are serialized around the observe-and-create/resume decision. This prevents two concurrent MCP calls from both observing `absent` and racing into duplicate creation. Locks are per id rather than global, so unrelated sessions remain concurrent; the lock table uses weak values so completed session ids do not become a permanent in-memory registry.
+
 ## Transport strategy
 
 DeepSeek Harness is a developer preview, so DSH-specific request shapes should stay behind one adapter.

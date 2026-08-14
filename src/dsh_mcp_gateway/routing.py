@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import weakref
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
@@ -23,20 +25,31 @@ class EnsureResult:
 class SessionRouter:
     def __init__(self, backend: DshSessionBackend) -> None:
         self._backend = backend
+        self._session_locks_guard = threading.Lock()
+        self._session_locks: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
 
     def ensure(self, session_id: str | None = None) -> EnsureResult:
         if session_id is None:
             return EnsureResult(self._backend.create(), EnsureAction.CREATED)
 
-        presence = self._backend.presence(session_id)
-        if presence is SessionPresence.LIVE:
-            return EnsureResult(self._backend.reuse(session_id), EnsureAction.REUSED)
-        if presence is SessionPresence.PERSISTED:
-            return EnsureResult(self._backend.resume(session_id), EnsureAction.RESUMED)
-        if presence is SessionPresence.ABSENT:
-            return EnsureResult(self._backend.create(session_id), EnsureAction.CREATED)
+        with self._lock_for(session_id):
+            presence = self._backend.presence(session_id)
+            if presence is SessionPresence.LIVE:
+                return EnsureResult(self._backend.reuse(session_id), EnsureAction.REUSED)
+            if presence is SessionPresence.PERSISTED:
+                return EnsureResult(self._backend.resume(session_id), EnsureAction.RESUMED)
+            if presence is SessionPresence.ABSENT:
+                return EnsureResult(self._backend.create(session_id), EnsureAction.CREATED)
 
-        raise AssertionError(f"unhandled session presence: {presence!r}")
+            raise AssertionError(f"unhandled session presence: {presence!r}")
+
+    def _lock_for(self, session_id: str) -> Any:
+        with self._session_locks_guard:
+            lock = self._session_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._session_locks[session_id] = lock
+            return lock
 
 
 @dataclass(frozen=True, slots=True)

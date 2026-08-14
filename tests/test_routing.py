@@ -128,6 +128,50 @@ class FakeBackend:
         return {"session_id": session_id, "action": "cleared", "cleared": True}
 
 
+class ConcurrentSessionBackend:
+    def __init__(self, *, block_first_presence_for: str | None = None) -> None:
+        self.block_first_presence_for = block_first_presence_for
+        self.presence_entered = threading.Event()
+        self.release_presence = threading.Event()
+        self._guard = threading.Lock()
+        self._presence_counts: dict[str, int] = {}
+        self.sessions: set[str] = set()
+        self.create_calls: list[str] = []
+
+    def presence(self, session_id: str) -> SessionPresence:
+        with self._guard:
+            count = self._presence_counts.get(session_id, 0) + 1
+            self._presence_counts[session_id] = count
+            existed_at_observation = session_id in self.sessions
+        if (
+            session_id == self.block_first_presence_for
+            and count == 1
+            and not existed_at_observation
+        ):
+            self.presence_entered.set()
+            if not self.release_presence.wait(timeout=2):
+                raise TimeoutError("test presence gate was not released")
+        return SessionPresence.LIVE if existed_at_observation else SessionPresence.ABSENT
+
+    def reuse(self, session_id: str) -> SessionHandle:
+        with self._guard:
+            if session_id not in self.sessions:
+                raise KeyError(session_id)
+        return SessionHandle(session_id)
+
+    def resume(self, session_id: str) -> SessionHandle:
+        raise AssertionError("resume is not used by this fake")
+
+    def create(self, session_id: str | None = None) -> SessionHandle:
+        assert session_id is not None
+        with self._guard:
+            if session_id in self.sessions:
+                raise RuntimeError(f"duplicate create: {session_id}")
+            self.sessions.add(session_id)
+            self.create_calls.append(session_id)
+        return SessionHandle(session_id)
+
+
 class SessionRouterTests(unittest.TestCase):
     def test_reuses_live_session(self) -> None:
         backend = FakeBackend(SessionPresence.LIVE)
@@ -159,6 +203,72 @@ class SessionRouterTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "resume unavailable"):
             SessionRouter(backend).ensure("s1")
         self.assertEqual(backend.calls, [("presence", "s1"), ("resume", "s1")])
+
+    def test_concurrent_same_id_ensure_serializes_create_then_reuse(self) -> None:
+        backend = ConcurrentSessionBackend(block_first_presence_for="s1")
+        router = SessionRouter(backend)
+        results: list[EnsureAction] = []
+        errors: list[Exception] = []
+
+        def run() -> None:
+            try:
+                results.append(router.ensure("s1").action)
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        first = threading.Thread(target=run)
+        first.start()
+        self.assertTrue(backend.presence_entered.wait(timeout=1))
+        second = threading.Thread(target=run)
+        second.start()
+        try:
+            second.join(timeout=0.05)
+            self.assertTrue(second.is_alive())
+        finally:
+            backend.release_presence.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(action.value for action in results), ["created", "reused"])
+        self.assertEqual(backend.create_calls, ["s1"])
+
+    def test_different_session_ids_do_not_share_router_lock(self) -> None:
+        backend = ConcurrentSessionBackend(block_first_presence_for="s1")
+        router = SessionRouter(backend)
+        second_done = threading.Event()
+        errors: list[Exception] = []
+
+        def first_run() -> None:
+            try:
+                router.ensure("s1")
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        def second_run() -> None:
+            try:
+                router.ensure("s2")
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                second_done.set()
+
+        first = threading.Thread(target=first_run)
+        first.start()
+        self.assertTrue(backend.presence_entered.wait(timeout=1))
+        second = threading.Thread(target=second_run)
+        second.start()
+        try:
+            self.assertTrue(second_done.wait(timeout=1))
+        finally:
+            backend.release_presence.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertEqual(errors, [])
+        self.assertCountEqual(backend.create_calls, ["s1", "s2"])
 
 
 class GatewayServiceTests(unittest.TestCase):

@@ -947,6 +947,84 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(structured["total"], 0)
                 self.assertFalse(structured["has_more"])
 
+            restarted_server, _restarted_provider = build_embedded_oauth_server(
+                GatewayService(FakeBackend()),
+                config,
+            )
+            restarted_app = restarted_server.streamable_http_app(
+                streamable_http_path="/mcp",
+                json_response=True,
+                host="127.0.0.1",
+            )
+            with TestClient(restarted_app, base_url="http://127.0.0.1:8000") as restarted_client:
+                restarted_headers = {
+                    "Authorization": f"Bearer {issued['access_token']}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                }
+                restarted_initialize = restarted_client.post(
+                    "/mcp",
+                    headers=restarted_headers,
+                    json=initialize,
+                )
+                self.assertEqual(restarted_initialize.status_code, 200)
+                restarted_negotiated_version = restarted_initialize.json()["result"]["protocolVersion"]
+                restarted_session_id = restarted_initialize.headers.get("mcp-session-id")
+                self.assertTrue(restarted_session_id)
+                self.assertNotEqual(restarted_session_id, mcp_session_id)
+
+                restarted_session_headers = {
+                    **restarted_headers,
+                    "mcp-session-id": restarted_session_id,
+                    "mcp-protocol-version": restarted_negotiated_version,
+                }
+                restarted_notification = restarted_client.post(
+                    "/mcp",
+                    headers=restarted_session_headers,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                )
+                self.assertEqual(restarted_notification.status_code, 202)
+                restarted_list_call = restarted_client.post(
+                    "/mcp",
+                    headers=restarted_session_headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {"name": "dsh_list", "arguments": {"limit": 1}},
+                    },
+                )
+                self.assertEqual(restarted_list_call.status_code, 200)
+                self.assertEqual(restarted_list_call.json()["result"]["structuredContent"]["items"], [])
+
+                rotated = restarted_client.post(
+                    "/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": registered["client_id"],
+                        "refresh_token": issued["refresh_token"],
+                        "scope": "dsh:control offline_access",
+                        "resource": config.resource_url,
+                    },
+                )
+                self.assertEqual(rotated.status_code, 200)
+                rotated_json = rotated.json()
+                self.assertTrue(rotated_json["access_token"])
+                self.assertNotEqual(rotated_json["refresh_token"], issued["refresh_token"])
+
+                replayed_refresh = restarted_client.post(
+                    "/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": registered["client_id"],
+                        "refresh_token": issued["refresh_token"],
+                        "scope": "dsh:control offline_access",
+                        "resource": config.resource_url,
+                    },
+                )
+                self.assertEqual(replayed_refresh.status_code, 400)
+                self.assertEqual(replayed_refresh.json()["error"], "invalid_grant")
+
 
 if __name__ == "__main__":
     unittest.main()

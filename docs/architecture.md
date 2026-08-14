@@ -18,7 +18,7 @@ absent    -> create a fresh Agent
 
 The persisted branch is fail-closed. If resume is unavailable or fails, the gateway reports that failure. It does not call create with the same id.
 
-Within one gateway process, routing for the same explicit session id is serialized. `SessionRouter.ensure()` makes the observe-and-create/resume decision atomic, while `GatewayService.start()` extends the same re-entrant per-id admission lock through prompt admission. This prevents both duplicate creation and interleaving two first prompts while a newly allocated transport session is still being established. Locks are per id rather than global, so unrelated sessions remain concurrent; the lock table uses weak values so completed session ids do not become a permanent in-memory registry. The public-SDK adapter also rolls back a failed first allocation only while the id is still allocated and not live, so a notification that proves the session became live cannot be followed by deleting its persistent catalog entry.
+Within one gateway process, writes for the same explicit session id are serialized. `SessionRouter.ensure()` makes the observe-and-create/resume decision atomic, while `GatewayService` extends the same re-entrant per-id admission lock through prompt admission and the mutating cancel/goal operations. This prevents duplicate creation, interleaved first prompts, and nondeterministic ordering between prompt admission and another control mutation. Read-only status/history/search operations are not put behind this lock. Locks are per id rather than global, so unrelated sessions remain concurrent; the lock table uses weak values so completed session ids do not become a permanent in-memory registry. The public-SDK adapter also rolls back a failed first allocation only while the id is still allocated and not live, so a notification that proves the session became live cannot be followed by deleting its persistent catalog entry.
 
 ## Transport strategy
 
@@ -39,6 +39,8 @@ This matters even when the gateway process itself never restarts. A real rc6 tes
 ## Process model
 
 An MCP request should enqueue or steer a DSH session and return a receipt/session id. It should not remain open for the autonomous goal's whole lifetime. DSH continues independently, while observation belongs to separate status/event calls or streams. A later MCP/chat session reconnects using the durable session id.
+
+The current admission locks are process-local, so the supported deployment model is one active gateway process for a given DSH Host/public OAuth state. Horizontal replicas would need a distributed admission/ownership protocol before they could preserve the same ordering guarantees. Likewise, the example deployment treats one DSH Host as the owner of a given `DSH_HOME`; it does not use multiple Host processes as concurrent writers to the same durable state.
 
 ## Session discovery is an optional derived capability
 

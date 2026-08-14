@@ -118,7 +118,8 @@ class GatewayService:
         return self._backend.search_sessions(query)
 
     def cancel(self, session_id: str) -> dict[str, Any]:
-        return self._backend.cancel(session_id)
+        with self._router.admission(session_id):
+            return self._backend.cancel(session_id)
 
     def goal_status(self, session_id: str) -> dict[str, Any]:
         return self._backend.goal_status(session_id)
@@ -130,11 +131,12 @@ class GatewayService:
         *,
         max_goal_rounds: int | None = None,
     ) -> dict[str, Any]:
-        return self._backend.goal_create(
-            session_id,
-            objective,
-            max_goal_rounds=max_goal_rounds,
-        )
+        with self._router.admission(session_id):
+            return self._backend.goal_create(
+                session_id,
+                objective,
+                max_goal_rounds=max_goal_rounds,
+            )
 
     def goal_edit(
         self,
@@ -143,20 +145,25 @@ class GatewayService:
         objective: str | None = None,
         max_goal_rounds: int | None = None,
     ) -> dict[str, Any]:
-        return self._backend.goal_edit(
-            session_id,
-            objective=objective,
-            max_goal_rounds=max_goal_rounds,
-        )
+        with self._router.admission(session_id):
+            return self._backend.goal_edit(
+                session_id,
+                objective=objective,
+                max_goal_rounds=max_goal_rounds,
+            )
 
     def goal_resume(self, session_id: str) -> dict[str, Any]:
-        return self._backend.goal_resume(session_id)
+        with self._router.admission(session_id):
+            return self._backend.goal_resume(session_id)
 
     def goal_pause(self, session_id: str) -> dict[str, Any]:
-        return self._backend.goal_pause(session_id)
+        with self._router.admission(session_id):
+            return self._backend.goal_pause(session_id)
 
     def goal_complete(self, session_id: str) -> dict[str, Any]:
-        return self._backend.goal_complete(session_id)
+        with self._router.admission(session_id):
+            return self._backend.goal_complete(session_id)
 
     def goal_clear(self, session_id: str) -> dict[str, Any]:
-        return self._backend.goal_clear(session_id)
+        with self._router.admission(session_id):
+            return self._backend.goal_clear(session_id)

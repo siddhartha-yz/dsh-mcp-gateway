@@ -152,6 +152,8 @@ class ConcurrentSessionBackend:
         self.sessions: set[str] = set()
         self.create_calls: list[str] = []
         self.prompt_calls: list[tuple[str, str]] = []
+        self.cancel_calls: list[str] = []
+        self.goal_resume_calls: list[str] = []
 
     def presence(self, session_id: str) -> SessionPresence:
         with self._guard:
@@ -198,6 +200,16 @@ class ConcurrentSessionBackend:
             if not self.release_prompt.wait(timeout=2):
                 raise TimeoutError("test prompt gate was not released")
         return f"message-{count}"
+
+    def cancel(self, session_id: str) -> dict[str, Any]:
+        with self._guard:
+            self.cancel_calls.append(session_id)
+        return {"session_id": session_id, "canceled": True}
+
+    def goal_resume(self, session_id: str) -> dict[str, Any]:
+        with self._guard:
+            self.goal_resume_calls.append(session_id)
+        return {"session_id": session_id, "action": "resumed"}
 
 
 class SessionRouterTests(unittest.TestCase):
@@ -320,19 +332,19 @@ class GatewayServiceTests(unittest.TestCase):
     def test_same_session_prompt_admission_is_serialized(self) -> None:
         backend = ConcurrentSessionBackend(block_first_prompt_for="s1")
         service = GatewayService(backend)
-        receipts: list[PromptReceipt] = []
+        receipts: dict[str, PromptReceipt] = {}
         errors: list[Exception] = []
         second_done = threading.Event()
 
         def first_run() -> None:
             try:
-                receipts.append(service.start("first", session_id="s1"))
+                receipts["first"] = service.start("first", session_id="s1")
             except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
                 errors.append(exc)
 
         def second_run() -> None:
             try:
-                receipts.append(service.continue_session("s1", "second"))
+                receipts["second"] = service.continue_session("s1", "second")
             except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
                 errors.append(exc)
             finally:
@@ -355,7 +367,86 @@ class GatewayServiceTests(unittest.TestCase):
         self.assertFalse(first.is_alive())
         self.assertFalse(second.is_alive())
         self.assertEqual(backend.prompt_calls, [("s1", "first"), ("s1", "second")])
-        self.assertEqual([receipt.action for receipt in receipts], ["created", "reused"])
+        self.assertEqual(receipts["first"].action, "created")
+        self.assertEqual(receipts["second"].action, "reused")
+
+    def test_cancel_waits_for_same_session_prompt_admission(self) -> None:
+        backend = ConcurrentSessionBackend(block_first_prompt_for="s1")
+        service = GatewayService(backend)
+        mutation_done = threading.Event()
+        errors: list[Exception] = []
+
+        def start_first() -> None:
+            try:
+                service.start("first", session_id="s1")
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
+                errors.append(exc)
+
+        first = threading.Thread(target=start_first)
+        first.start()
+        self.assertTrue(backend.prompt_entered.wait(timeout=1))
+
+        def mutate() -> None:
+            try:
+                service.cancel("s1")
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
+                errors.append(exc)
+            finally:
+                mutation_done.set()
+
+        second = threading.Thread(target=mutate)
+        second.start()
+        try:
+            self.assertFalse(mutation_done.wait(timeout=0.05))
+            self.assertEqual(backend.cancel_calls, [])
+        finally:
+            backend.release_prompt.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(backend.cancel_calls, ["s1"])
+
+    def test_goal_mutation_waits_for_same_session_prompt_admission(self) -> None:
+        backend = ConcurrentSessionBackend(block_first_prompt_for="s1")
+        service = GatewayService(backend)
+        mutation_done = threading.Event()
+        errors: list[Exception] = []
+
+        def start_first() -> None:
+            try:
+                service.start("first", session_id="s1")
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
+                errors.append(exc)
+
+        first = threading.Thread(target=start_first)
+        first.start()
+        self.assertTrue(backend.prompt_entered.wait(timeout=1))
+
+        def mutate() -> None:
+            try:
+                service.goal_resume("s1")
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
+                errors.append(exc)
+            finally:
+                mutation_done.set()
+
+        second = threading.Thread(target=mutate)
+        second.start()
+        try:
+            self.assertFalse(mutation_done.wait(timeout=0.05))
+            self.assertEqual(backend.goal_resume_calls, [])
+        finally:
+            backend.release_prompt.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(backend.goal_resume_calls, ["s1"])
 
     def test_persisted_session_resumes_before_prompt(self) -> None:
         backend = FakeBackend(SessionPresence.PERSISTED)

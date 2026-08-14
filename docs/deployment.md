@@ -106,6 +106,8 @@ sudo systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
 
 The gateway uses `Wants=` rather than `Requires=` for the DSH Host. That is intentional: an independent DSH Host restart should not restart the public gateway. Gateway startup also does not synchronously probe DSH, so a slow or temporarily unavailable Host does not put the public process into a restart loop. While DSH is unavailable, `/healthz` remains 200 but `/readyz` returns 503. Once the Host returns, an existing non-running durable session is routed through the idempotent attach/resume probe. A loopback smoke test exercised this exact transition without restarting the gateway: DSH absent produced `healthz=200`/`readyz=503`, then bringing the dependency up changed `readyz` to 200 in the same gateway process.
 
+Run one active gateway service instance for this deployment and one DSH Web Host for the configured `DSH_HOME`. Same-session write ordering is enforced with process-local locks; this release does not claim multi-replica admission semantics or support multiple DSH Host writers sharing the same durable state.
+
 Check local service state:
 
 ```sh

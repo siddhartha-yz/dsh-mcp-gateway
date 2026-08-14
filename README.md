@@ -122,6 +122,8 @@ dsh-mcp-gateway \
 
 The public MCP endpoint is `<public-base-url>/mcp`. Do not expose the raw DSH Web Host directly; the experimental adapter refuses non-loopback DSH targets by default. The CLI keeps MCP DNS-rebinding protection enabled and allowlists only the declared public origin plus loopback Host/Origin values, so reverse proxying does not require disabling transport security.
 
+Deployment probes are intentionally small and unauthenticated: `GET /healthz` reports only that the gateway process is serving HTTP, while `GET /readyz` additionally probes the configured DSH Web Host and returns 503 when that dependency is unavailable. Neither route returns the DSH descriptor, workspace path, provider, or transport error details; both are `Cache-Control: no-store`.
+
 A deterministic long-task flow is:
 
 ```text

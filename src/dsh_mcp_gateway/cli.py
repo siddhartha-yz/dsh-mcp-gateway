@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import ipaddress
 import os
 from collections.abc import Sequence
@@ -10,6 +11,41 @@ from urllib.parse import urlparse
 from . import build_embedded_oauth_server
 from .backend import ExperimentalWebHostBackend
 from .routing import GatewayService
+
+
+def install_health_routes(server, backend) -> None:
+    """Install minimal unauthenticated deployment probes.
+
+    Liveness proves only that the gateway process can serve HTTP. Readiness
+    additionally checks that the configured DSH Web Host answers a diagnostic
+    RPC, without returning its descriptor or transport error details.
+    """
+    try:
+        from starlette.responses import JSONResponse
+    except ImportError as exc:  # pragma: no cover - installation boundary
+        raise RuntimeError("MCP server dependencies are unavailable") from exc
+
+    @server.custom_route("/healthz", methods=["GET"], include_in_schema=False)
+    async def healthz(_request):
+        return JSONResponse(
+            {"ok": True, "service": "dsh-mcp-gateway"},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @server.custom_route("/readyz", methods=["GET"], include_in_schema=False)
+    async def readyz(_request):
+        try:
+            await asyncio.to_thread(backend.describe_host)
+        except Exception:  # noqa: BLE001 - dependency failures collapse to a non-sensitive readiness result.
+            return JSONResponse(
+                {"ok": False, "dependency": "dsh-web-host"},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            {"ok": True, "dependency": "dsh-web-host"},
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         admin_pin=admin_pin,
     )
     server, _provider = build_embedded_oauth_server(GatewayService(backend), oauth)
+    install_health_routes(server, backend)
     public_host = parsed_public.netloc
     allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
     if parsed_public.port is None:

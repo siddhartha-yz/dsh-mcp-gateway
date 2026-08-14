@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from dsh_mcp_gateway.cli import main
+from dsh_mcp_gateway.cli import install_health_routes, main
 
 
 class CliTests(unittest.TestCase):
@@ -84,6 +85,42 @@ class CliTests(unittest.TestCase):
         self.assertIn("gateway.example.com:443", security.allowed_hosts)
         self.assertIn("127.0.0.1:*", security.allowed_hosts)
         self.assertIn("https://gateway.example.com", security.allowed_origins)
+
+
+class HealthRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_health_and_ready_routes_are_minimal_and_no_store(self) -> None:
+        from mcp.server import MCPServer
+
+        server = MCPServer("health-test")
+        backend = Mock()
+        backend.describe_host.return_value = {"cwd": "/secret/workspace", "provider": "secret-provider"}
+        install_health_routes(server, backend)
+        routes = {route.path: route for route in server._custom_starlette_routes}
+
+        health = await routes["/healthz"].endpoint(Mock())
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(json.loads(health.body), {"ok": True, "service": "dsh-mcp-gateway"})
+        self.assertEqual(health.headers["cache-control"], "no-store")
+
+        ready = await routes["/readyz"].endpoint(Mock())
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(json.loads(ready.body), {"ok": True, "dependency": "dsh-web-host"})
+        self.assertNotIn("secret", ready.body.decode())
+        self.assertEqual(ready.headers["cache-control"], "no-store")
+
+    async def test_ready_route_collapses_dependency_errors_to_503(self) -> None:
+        from mcp.server import MCPServer
+
+        server = MCPServer("health-test")
+        backend = Mock()
+        backend.describe_host.side_effect = RuntimeError("private transport detail")
+        install_health_routes(server, backend)
+        routes = {route.path: route for route in server._custom_starlette_routes}
+
+        ready = await routes["/readyz"].endpoint(Mock())
+        self.assertEqual(ready.status_code, 503)
+        self.assertEqual(json.loads(ready.body), {"ok": False, "dependency": "dsh-web-host"})
+        self.assertNotIn("private transport detail", ready.body.decode())
 
 
 if __name__ == "__main__":

@@ -20,7 +20,12 @@ from dsh_mcp_gateway.backend import (
     SessionCatalog,
     SessionSearchUnavailable,
 )
-from dsh_mcp_gateway.routing import EnsureAction, GatewayService, SessionRouter
+from dsh_mcp_gateway.routing import (
+    EnsureAction,
+    GatewayService,
+    PromptReceipt,
+    SessionRouter,
+)
 from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 
 
@@ -129,14 +134,24 @@ class FakeBackend:
 
 
 class ConcurrentSessionBackend:
-    def __init__(self, *, block_first_presence_for: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        block_first_presence_for: str | None = None,
+        block_first_prompt_for: str | None = None,
+    ) -> None:
         self.block_first_presence_for = block_first_presence_for
+        self.block_first_prompt_for = block_first_prompt_for
         self.presence_entered = threading.Event()
         self.release_presence = threading.Event()
+        self.prompt_entered = threading.Event()
+        self.release_prompt = threading.Event()
         self._guard = threading.Lock()
         self._presence_counts: dict[str, int] = {}
+        self._prompt_counts: dict[str, int] = {}
         self.sessions: set[str] = set()
         self.create_calls: list[str] = []
+        self.prompt_calls: list[tuple[str, str]] = []
 
     def presence(self, session_id: str) -> SessionPresence:
         with self._guard:
@@ -170,6 +185,19 @@ class ConcurrentSessionBackend:
             self.sessions.add(session_id)
             self.create_calls.append(session_id)
         return SessionHandle(session_id)
+
+    def prompt(self, session_id: str, text: str) -> str:
+        with self._guard:
+            if session_id not in self.sessions:
+                raise KeyError(session_id)
+            count = self._prompt_counts.get(session_id, 0) + 1
+            self._prompt_counts[session_id] = count
+            self.prompt_calls.append((session_id, text))
+        if session_id == self.block_first_prompt_for and count == 1:
+            self.prompt_entered.set()
+            if not self.release_prompt.wait(timeout=2):
+                raise TimeoutError("test prompt gate was not released")
+        return f"message-{count}"
 
 
 class SessionRouterTests(unittest.TestCase):
@@ -288,6 +316,46 @@ class GatewayServiceTests(unittest.TestCase):
         receipt = GatewayService(backend).start("do work")
         self.assertEqual(receipt.session_id, "generated-session")
         self.assertEqual(backend.calls, [("create", None), ("prompt", "generated-session", "do work")])
+
+    def test_same_session_prompt_admission_is_serialized(self) -> None:
+        backend = ConcurrentSessionBackend(block_first_prompt_for="s1")
+        service = GatewayService(backend)
+        receipts: list[PromptReceipt] = []
+        errors: list[Exception] = []
+        second_done = threading.Event()
+
+        def first_run() -> None:
+            try:
+                receipts.append(service.start("first", session_id="s1"))
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
+                errors.append(exc)
+
+        def second_run() -> None:
+            try:
+                receipts.append(service.continue_session("s1", "second"))
+            except (RuntimeError, KeyError, TimeoutError, AssertionError) as exc:  # pragma: no cover
+                errors.append(exc)
+            finally:
+                second_done.set()
+
+        first = threading.Thread(target=first_run)
+        first.start()
+        self.assertTrue(backend.prompt_entered.wait(timeout=1))
+        second = threading.Thread(target=second_run)
+        second.start()
+        try:
+            self.assertFalse(second_done.wait(timeout=0.05))
+            self.assertEqual(backend.prompt_calls, [("s1", "first")])
+        finally:
+            backend.release_prompt.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertEqual(errors, [])
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(backend.prompt_calls, [("s1", "first"), ("s1", "second")])
+        self.assertEqual([receipt.action for receipt in receipts], ["created", "reused"])
 
     def test_persisted_session_resumes_before_prompt(self) -> None:
         backend = FakeBackend(SessionPresence.PERSISTED)
@@ -911,10 +979,13 @@ class FakePublicSdkClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, list[dict[str, Any]]]] = []
         self.fail = False
+        self.on_prompt: Any = None
         self.subscription = FakeSubscription()
 
     def session_prompt(self, session_id: str, content_blocks: list[dict[str, Any]]) -> str:
         self.calls.append(("session_prompt", session_id, content_blocks))
+        if self.on_prompt is not None:
+            self.on_prompt(session_id)
         if self.fail:
             raise RuntimeError("sdk prompt failed")
         return "sdk-message-1"
@@ -959,6 +1030,24 @@ class PublicSdkBackendTests(unittest.TestCase):
                 GatewayService(backend).start("work", session_id="s1")
             self.assertEqual(backend.presence("s1"), SessionPresence.ABSENT)
             self.assertFalse(SessionCatalog(path).contains("s1"))
+
+    def test_failed_prompt_keeps_catalog_if_notification_already_marked_session_live(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            client = FakePublicSdkClient()
+            backend = PublicSdkBackend(client, SessionCatalog(path))
+            backend.create("s1")
+            client.on_prompt = lambda session_id: backend.observe_notification(
+                "session.status",
+                {"sessionId": session_id, "status": "running"},
+            )
+            client.fail = True
+
+            with self.assertRaisesRegex(RuntimeError, "sdk prompt failed"):
+                backend.prompt("s1", "work")
+
+            self.assertEqual(backend.presence("s1"), SessionPresence.LIVE)
+            self.assertTrue(SessionCatalog(path).contains("s1"))
 
     def test_restart_detects_persisted_id_and_fails_before_sdk_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

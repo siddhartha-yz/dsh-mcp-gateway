@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
@@ -32,7 +34,7 @@ class SessionRouter:
         if session_id is None:
             return EnsureResult(self._backend.create(), EnsureAction.CREATED)
 
-        with self._lock_for(session_id):
+        with self.admission(session_id):
             presence = self._backend.presence(session_id)
             if presence is SessionPresence.LIVE:
                 return EnsureResult(self._backend.reuse(session_id), EnsureAction.REUSED)
@@ -43,11 +45,19 @@ class SessionRouter:
 
             raise AssertionError(f"unhandled session presence: {presence!r}")
 
+    @contextmanager
+    def admission(self, session_id: str | None) -> Iterator[None]:
+        if session_id is None:
+            yield
+            return
+        with self._lock_for(session_id):
+            yield
+
     def _lock_for(self, session_id: str) -> Any:
         with self._session_locks_guard:
             lock = self._session_locks.get(session_id)
             if lock is None:
-                lock = threading.Lock()
+                lock = threading.RLock()
                 self._session_locks[session_id] = lock
             return lock
 
@@ -70,13 +80,14 @@ class GatewayService:
         self._router = SessionRouter(backend)
 
     def start(self, prompt: str, *, session_id: str | None = None) -> PromptReceipt:
-        ensured = self._router.ensure(session_id)
-        message_id = self._backend.prompt(ensured.handle.session_id, prompt)
-        return PromptReceipt(
-            session_id=ensured.handle.session_id,
-            action=ensured.action.value,
-            message_id=message_id,
-        )
+        with self._router.admission(session_id):
+            ensured = self._router.ensure(session_id)
+            message_id = self._backend.prompt(ensured.handle.session_id, prompt)
+            return PromptReceipt(
+                session_id=ensured.handle.session_id,
+                action=ensured.action.value,
+                message_id=message_id,
+            )
 
     def continue_session(self, session_id: str, prompt: str) -> PromptReceipt:
         return self.start(prompt, session_id=session_id)

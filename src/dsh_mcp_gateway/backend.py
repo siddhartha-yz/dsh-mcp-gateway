@@ -742,8 +742,9 @@ class PublicSdkBackend:
         except Exception:
             if newly_allocated:
                 with self._lock:
-                    self._allocated.discard(session_id)
-                    self._catalog.remove(session_id)
+                    if session_id in self._allocated and session_id not in self._live:
+                        self._allocated.discard(session_id)
+                        self._catalog.remove(session_id)
             raise
         with self._lock:
             self._allocated.discard(session_id)

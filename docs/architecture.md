@@ -18,7 +18,7 @@ absent    -> create a fresh Agent
 
 The persisted branch is fail-closed. If resume is unavailable or fails, the gateway reports that failure. It does not call create with the same id.
 
-Within one gateway process, `ensure` operations for the same explicit session id are serialized around the observe-and-create/resume decision. This prevents two concurrent MCP calls from both observing `absent` and racing into duplicate creation. Locks are per id rather than global, so unrelated sessions remain concurrent; the lock table uses weak values so completed session ids do not become a permanent in-memory registry.
+Within one gateway process, routing for the same explicit session id is serialized. `SessionRouter.ensure()` makes the observe-and-create/resume decision atomic, while `GatewayService.start()` extends the same re-entrant per-id admission lock through prompt admission. This prevents both duplicate creation and interleaving two first prompts while a newly allocated transport session is still being established. Locks are per id rather than global, so unrelated sessions remain concurrent; the lock table uses weak values so completed session ids do not become a permanent in-memory registry. The public-SDK adapter also rolls back a failed first allocation only while the id is still allocated and not live, so a notification that proves the session became live cannot be followed by deleting its persistent catalog entry.
 
 ## Transport strategy
 

@@ -41,6 +41,17 @@ class CliTests(unittest.TestCase):
         ):
             main(["--public-base-url", "https://gateway.example.com"])
 
+    def test_rejects_non_positive_dynamic_client_capacity(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "must be positive"):
+            main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--max-registered-clients",
+                    "0",
+                ]
+            )
+
     def test_happy_path_builds_loopback_oauth_gateway_with_canonical_issuer(self) -> None:
         fake_backend = Mock()
         fake_backend.base_url = "http://127.0.0.1:3080"
@@ -73,6 +84,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(config.issuer_url, "https://gateway.example.com/")
         self.assertEqual(config.resource_url, "https://gateway.example.com/mcp")
         self.assertEqual(config.state_db, Path(tmp).resolve() / "oauth.sqlite3")
+        self.assertEqual(config.max_registered_clients, 256)
         fake_server.run.assert_called_once()
         run_kwargs = fake_server.run.call_args.kwargs
         self.assertEqual(run_kwargs["transport"], "streamable-http")

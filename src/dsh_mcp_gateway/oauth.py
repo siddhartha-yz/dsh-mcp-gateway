@@ -22,6 +22,7 @@ from mcp.server.auth.provider import (
     AuthorizeError,
     OAuthAuthorizationServerProvider,
     RefreshToken,
+    RegistrationError,
     TokenError,
     construct_redirect_uri,
 )
@@ -42,6 +43,7 @@ class EmbeddedOAuthConfig:
     code_ttl_s: int = 300
     access_token_ttl_s: int = 3600
     refresh_token_ttl_s: int = 30 * 24 * 3600
+    max_registered_clients: int = 256
 
     def __post_init__(self) -> None:
         if not self.issuer_url:
@@ -60,6 +62,12 @@ class EmbeddedOAuthConfig:
         for name in ("pending_ttl_s", "code_ttl_s", "access_token_ttl_s", "refresh_token_ttl_s"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if (
+            not isinstance(self.max_registered_clients, int)
+            or isinstance(self.max_registered_clients, bool)
+            or self.max_registered_clients <= 0
+        ):
+            raise ValueError("max_registered_clients must be a positive integer")
 
 
 class GatewayRefreshToken(RefreshToken):
@@ -219,6 +227,24 @@ class OAuthStore:
                 "INSERT OR REPLACE INTO oauth_clients(client_id, client_json) VALUES (?, ?)",
                 (client.client_id, client.model_dump_json()),
             )
+
+    def save_client_limited(self, client: OAuthClientInformationFull, *, max_clients: int) -> bool:
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT 1 FROM oauth_clients WHERE client_id = ?",
+                (client.client_id,),
+            ).fetchone()
+            if existing is None:
+                count = int(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0])
+                if count >= max_clients:
+                    db.rollback()
+                    return False
+            db.execute(
+                "INSERT OR REPLACE INTO oauth_clients(client_id, client_json) VALUES (?, ?)",
+                (client.client_id, client.model_dump_json()),
+            )
+        return True
 
     def load_client(self, client_id: str) -> OAuthClientInformationFull | None:
         with self.connection() as db:
@@ -520,7 +546,16 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
         return await asyncio.to_thread(self.store.load_client, client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
-        await asyncio.to_thread(self.store.save_client, client_info)
+        saved = await asyncio.to_thread(
+            self.store.save_client_limited,
+            client_info,
+            max_clients=self.config.max_registered_clients,
+        )
+        if not saved:
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description="dynamic client registration capacity reached",
+            )
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         resource = params.resource or self.config.resource_url

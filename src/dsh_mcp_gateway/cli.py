@@ -80,6 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly allow the plain-HTTP gateway listener to bind beyond loopback.",
     )
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument(
+        "--max-registered-clients",
+        type=int,
+        default=256,
+        help="Maximum persisted dynamic OAuth clients before new registrations are rejected.",
+    )
     return parser
 
 
@@ -87,6 +93,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.port <= 0 or args.port > 65535:
         raise SystemExit("--port must be in [1, 65535]")
+    if args.max_registered_clients <= 0:
+        raise SystemExit("--max-registered-clients must be positive")
     if not args.allow_non_loopback_bind:
         try:
             bind_is_loopback = args.bind_host == "localhost" or ipaddress.ip_address(args.bind_host).is_loopback
@@ -125,6 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         resource_url=f"{public_base}/mcp",
         state_db=state_dir / "oauth.sqlite3",
         admin_pin=admin_pin,
+        max_registered_clients=args.max_registered_clients,
     )
     server, _provider = build_embedded_oauth_server(GatewayService(backend), oauth)
     install_health_routes(server, backend)

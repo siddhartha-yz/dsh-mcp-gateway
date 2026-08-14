@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import importlib.util
@@ -16,7 +17,11 @@ from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 
 if MCP_AVAILABLE:
-    from mcp.server.auth.provider import AuthorizationParams, TokenError
+    from mcp.server.auth.provider import (
+        AuthorizationParams,
+        RegistrationError,
+        TokenError,
+    )
     from mcp.shared.auth import OAuthClientInformationFull
     from starlette.testclient import TestClient
 
@@ -92,6 +97,53 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 state_db=Path(tmp) / "oauth.sqlite3",
                 admin_pin="too-short",
             )
+
+    def test_dynamic_client_capacity_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "positive integer"):
+            EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_registered_clients=0,
+            )
+
+    async def test_dynamic_client_capacity_is_atomic_under_concurrent_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_registered_clients=1,
+            )
+            provider = EmbeddedOAuthProvider(config)
+            clients = [
+                OAuthClientInformationFull(
+                    client_id=f"client-{index}",
+                    redirect_uris=["http://127.0.0.1:9999/callback"],
+                    response_types=["code"],
+                    grant_types=["authorization_code"],
+                    token_endpoint_auth_method="none",
+                    scope="dsh:control",
+                )
+                for index in (1, 2)
+            ]
+
+            results = await asyncio.gather(
+                *(provider.register_client(client) for client in clients),
+                return_exceptions=True,
+            )
+            self.assertEqual(sum(result is None for result in results), 1)
+            failures = [result for result in results if isinstance(result, RegistrationError)]
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0].error, "invalid_client_metadata")
+
+            registered = [client for client in clients if await provider.get_client(client.client_id) is not None]
+            self.assertEqual(len(registered), 1)
+            await provider.register_client(registered[0])
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0], 1)
 
     def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
         limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)

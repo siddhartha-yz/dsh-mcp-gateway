@@ -170,7 +170,7 @@ curl -fsS https://dsh.example.com/healthz
 curl -fsS https://dsh.example.com/readyz
 ```
 
-The authorization-server metadata should advertise `offline_access`; the protected-resource metadata should require only `dsh:control`. Dynamic client registration, PKCE authorization, refresh-token issuance/rotation, and a two-MCP-session DSH continuation flow are covered by repository tests and development smoke tests.
+The authorization-server metadata should advertise `offline_access`; the protected-resource metadata should require only `dsh:control`. Dynamic client registration, PKCE authorization, refresh-token issuance/rotation, and a two-MCP-session DSH continuation flow are covered by repository tests and development smoke tests. DCR storage is bounded to 256 persisted clients by default; set `--max-registered-clients N` on the gateway service if the deployment intentionally needs a different cap. Reaching the cap rejects only new registrations; existing registered clients continue to authenticate.
 
 ## Restart semantics
 

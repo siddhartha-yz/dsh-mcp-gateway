@@ -157,6 +157,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-harness", deployment)
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-mcp-gateway", deployment)
         self.assertIn("python3 scripts/preflight-deployment.py", deployment)
+        self.assertIn("python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com", deployment)
         self.assertLess(
             deployment.index("python3 scripts/preflight-deployment.py"),
             deployment.index("systemctl enable --now dsh-web-host.service"),

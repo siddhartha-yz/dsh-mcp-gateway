@@ -175,6 +175,35 @@ curl -fsS https://dsh.example.com/readyz
 
 The authorization-server metadata should advertise `offline_access`; the protected-resource metadata should require only `dsh:control`. Dynamic client registration, PKCE authorization, refresh-token issuance/rotation, and a two-MCP-session DSH continuation flow are covered by repository tests and development smoke tests. DCR storage is bounded to 256 persisted clients by default; set `--max-registered-clients N` on the gateway service if the deployment intentionally needs a different cap. Reaching the cap rejects only new registrations; existing registered clients continue to authenticate. Pending authorization requests are separately bounded to 512 globally and 8 per client, with expired rows pruned on each authorize write before the atomic capacity check. OAuth write transactions also opportunistically prune expired pending requests, authorization codes, access tokens, and refresh tokens, preventing normal long-lived refresh activity from accumulating dead rows indefinitely.
 
+## Backup and restore
+
+For a consistent full-state backup, quiesce both writers first. Stop the public gateway so no new control/OAuth writes can arrive, then stop the DSH Host so autonomous rounds and workspace/session-log writes have settled:
+
+```sh
+sudo systemctl stop dsh-mcp-gateway.service
+sudo systemctl stop dsh-web-host.service
+```
+
+Back up these trust domains together:
+
+```text
+/var/lib/dsh-harness/       DSH_HOME: durable sessions, goals, projections, optional derived state
+/srv/dsh-workspace/         files actually modified by the agent
+/var/lib/dsh-mcp-gateway/   OAuth clients, codes/tokens, gateway state
+/etc/dsh-mcp-gateway/       deployment configuration and secrets; protect separately as sensitive material
+```
+
+The DSH runtime under `/opt/dsh-runtime` and the gateway source/venv under `/srv/dsh-mcp-gateway` are reproducible software artifacts rather than canonical task state; record the deployed gateway Git commit, DSH release, Node/Python versions, and rebuild them from the pinned deployment inputs. The optional search database under `$DSH_HOME/derived` is derived state and may be omitted if the restore procedure is prepared to rebuild it from durable session logs.
+
+Restore while both services are stopped, preserve the documented ownership/modes (`dsh-agent` for DSH/workspace state, `dsh-gateway` for gateway state, root-only `0600` environment files), then start the Host before the gateway:
+
+```sh
+sudo systemctl start dsh-web-host.service
+sudo systemctl start dsh-mcp-gateway.service
+```
+
+OAuth state and DSH task state have deliberately separate failure domains. Losing `/var/lib/dsh-mcp-gateway` invalidates remembered dynamic clients/tokens and requires client registration/authorization again, but it does not delete DSH sessions. Losing `DSH_HOME` is the destructive session-history loss. Restored OAuth tokens remain bound to the configured issuer/resource, so changing the public base URL intentionally makes old tokens unusable. Finally, a restored or restarted DSH process does **not** regain process-local goal continuation authority: a durable goal may still say `phase=active` while remaining disarmed until an explicit `dsh_goal_resume`.
+
 ## Restart semantics
 
 A process restart is not equivalent to authorizing autonomous continuation:

@@ -804,6 +804,11 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(approval_page.headers["x-frame-options"], "DENY")
                 self.assertIn("frame-ancestors 'none'", approval_page.headers["content-security-policy"])
                 self.assertIn("form-action 'self'", approval_page.headers["content-security-policy"])
+                approval_text = approval_page.text
+                self.assertIn("chatgpt-public-client-test", approval_text)
+                self.assertIn(registered["client_id"], approval_text)
+                self.assertIn(redirect_uri, approval_text)
+                self.assertIn("<strong>Client auth:</strong> none", approval_text)
 
                 wrong_pin = client.post(
                     "/approve",

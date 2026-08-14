@@ -921,6 +921,7 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
 
         client = await provider.get_client(pending.client_id)
         client_name = client.client_name if client is not None and client.client_name else pending.client_id
+        client_auth_method = client.token_endpoint_auth_method if client is not None else "unknown"
         error = ""
 
         if request.method == "POST":
@@ -948,7 +949,10 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
 <html><head><meta charset="utf-8"><title>Authorize dsh-mcp-gateway</title></head>
 <body>
 <h1>Authorize MCP client</h1>
-<p><strong>Client:</strong> {html.escape(client_name)}</p>
+<p><strong>Client name:</strong> {html.escape(client_name)}</p>
+<p><strong>Client ID:</strong> {html.escape(pending.client_id)}</p>
+<p><strong>Redirect URI:</strong> {html.escape(pending.redirect_uri)}</p>
+<p><strong>Client auth:</strong> {html.escape(client_auth_method)}</p>
 <p><strong>Scopes:</strong> {html.escape(scope_text)}</p>
 <p><strong>Resource:</strong> {html.escape(pending.resource)}</p>
 <p style="color:#b00020">{html.escape(error)}</p>

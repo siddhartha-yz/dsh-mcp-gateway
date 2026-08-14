@@ -111,6 +111,16 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 max_registered_clients=0,
             )
 
+    def test_dynamic_client_metadata_budget_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "positive integer"):
+            EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_client_metadata_bytes=0,
+            )
+
     def test_pending_per_client_capacity_must_not_exceed_global_capacity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "must not exceed"):
             EmbeddedOAuthConfig(
@@ -156,6 +166,45 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             registered = [client for client in clients if await provider.get_client(client.client_id) is not None]
             self.assertEqual(len(registered), 1)
             await provider.register_client(registered[0])
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0], 1)
+
+    async def test_dynamic_client_metadata_size_is_bounded_before_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ordinary = OAuthClientInformationFull(
+                client_id="ordinary-client",
+                client_name="ordinary",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            ordinary_bytes = len(ordinary.model_dump_json().encode("utf-8"))
+            config = EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_client_metadata_bytes=ordinary_bytes + 64,
+            )
+            provider = EmbeddedOAuthProvider(config)
+            await provider.register_client(ordinary)
+
+            oversized = OAuthClientInformationFull(
+                client_id="oversized-client",
+                client_name="x" * 1024,
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            with self.assertRaises(RegistrationError) as captured:
+                await provider.register_client(oversized)
+            self.assertEqual(captured.exception.error, "invalid_client_metadata")
+            self.assertIn("persistence limit", captured.exception.error_description or "")
+            self.assertIsNone(await provider.get_client("oversized-client"))
             with sqlite3.connect(config.state_db) as db:
                 self.assertEqual(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0], 1)
 
@@ -698,6 +747,42 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("/revoke", paths)
             self.assertIn("/approve", paths)
             self.assertIn("/mcp", paths)
+
+    def test_oversized_dynamic_client_metadata_is_rejected_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_client_metadata_bytes=512,
+            )
+            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
+
+            with TestClient(app) as client:
+                registration = client.post(
+                    "/register",
+                    json={
+                        "client_name": "x" * 4096,
+                        "redirect_uris": ["https://example.com/callback"],
+                        "response_types": ["code"],
+                        "grant_types": ["authorization_code"],
+                        "token_endpoint_auth_method": "none",
+                        "scope": "dsh:control",
+                    },
+                )
+                self.assertEqual(registration.status_code, 400)
+                self.assertEqual(registration.json()["error"], "invalid_client_metadata")
+                self.assertIn("persistence limit", registration.json()["error_description"])
+
+            if config.state_db.exists():
+                with sqlite3.connect(config.state_db) as db:
+                    table_exists = db.execute(
+                        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'oauth_clients'"
+                    ).fetchone()[0]
+                    if table_exists:
+                        self.assertEqual(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0], 0)
 
     def test_pin_lockout_is_scoped_to_one_pending_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

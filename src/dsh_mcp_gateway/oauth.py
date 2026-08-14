@@ -45,6 +45,7 @@ class EmbeddedOAuthConfig:
     access_token_ttl_s: int = 3600
     refresh_token_ttl_s: int = 30 * 24 * 3600
     max_registered_clients: int = 256
+    max_client_metadata_bytes: int = 32 * 1024
     max_pending_authorizations: int = 512
     max_pending_per_client: int = 8
 
@@ -67,6 +68,7 @@ class EmbeddedOAuthConfig:
                 raise ValueError(f"{name} must be positive")
         for name in (
             "max_registered_clients",
+            "max_client_metadata_bytes",
             "max_pending_authorizations",
             "max_pending_per_client",
         ):
@@ -640,6 +642,15 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
         return await asyncio.to_thread(self.store.load_client, client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        serialized = client_info.model_dump_json()
+        if len(serialized.encode("utf-8")) > self.config.max_client_metadata_bytes:
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description=(
+                    "dynamic client metadata exceeds the configured "
+                    f"{self.config.max_client_metadata_bytes}-byte persistence limit"
+                ),
+            )
         saved = await asyncio.to_thread(
             self.store.save_client_limited,
             client_info,

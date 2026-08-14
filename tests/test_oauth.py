@@ -330,17 +330,17 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                     expected_codes,
                 )
 
-    def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
-        limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)
-        self.assertTrue(limiter.allowed("a"))
-        limiter.fail("a")
-        limiter.fail("a")
-        self.assertFalse(limiter.allowed("a"))
-        self.assertTrue(limiter.allowed("b"))
-        limiter.fail("b")
-        self.assertFalse(limiter.allowed("c"))
-        limiter.clear("a")
-        self.assertFalse(limiter.allowed("a"))
+    def test_pin_limiter_is_request_scoped_without_cross_request_lockout(self) -> None:
+        limiter = PinAttemptLimiter(limit=2, window_s=300)
+        self.assertTrue(limiter.allowed("request-a"))
+        limiter.fail("request-a")
+        limiter.fail("request-a")
+        self.assertFalse(limiter.allowed("request-a"))
+        self.assertTrue(limiter.allowed("request-b"))
+        limiter.fail("request-b")
+        self.assertTrue(limiter.allowed("request-c"))
+        limiter.clear("request-a")
+        self.assertTrue(limiter.allowed("request-a"))
 
     async def issue_tokens(
         self,
@@ -666,6 +666,72 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("/revoke", paths)
             self.assertIn("/approve", paths)
             self.assertIn("/mcp", paths)
+
+    def test_pin_lockout_is_scoped_to_one_pending_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
+            redirect_uri = "https://example.com/chatgpt-callback"
+            challenge = "challenge"
+
+            with TestClient(app) as client:
+                registration = client.post(
+                    "/register",
+                    json={
+                        "client_name": "pin-scope-test",
+                        "redirect_uris": [redirect_uri],
+                        "response_types": ["code"],
+                        "grant_types": ["authorization_code"],
+                        "token_endpoint_auth_method": "none",
+                        "scope": "dsh:control",
+                    },
+                )
+                self.assertEqual(registration.status_code, 201)
+                client_id = registration.json()["client_id"]
+
+                request_ids: list[str] = []
+                for state in ("blocked-request", "independent-request"):
+                    authorization = client.get(
+                        "/authorize",
+                        params={
+                            "response_type": "code",
+                            "client_id": client_id,
+                            "redirect_uri": redirect_uri,
+                            "scope": "dsh:control",
+                            "state": state,
+                            "code_challenge": challenge,
+                            "code_challenge_method": "S256",
+                            "resource": config.resource_url,
+                        },
+                        follow_redirects=False,
+                    )
+                    self.assertEqual(authorization.status_code, 302)
+                    request_ids.append(
+                        parse_qs(urlparse(authorization.headers["location"]).query)["request"][0]
+                    )
+
+                for _ in range(5):
+                    wrong = client.post(
+                        "/approve",
+                        data={"request": request_ids[0], "pin": "definitely-wrong", "action": "approve"},
+                        follow_redirects=False,
+                    )
+                    self.assertEqual(wrong.status_code, 403)
+                blocked = client.post(
+                    "/approve",
+                    data={"request": request_ids[0], "pin": config.admin_pin, "action": "approve"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(blocked.status_code, 429)
+
+                independent = client.post(
+                    "/approve",
+                    data={"request": request_ids[1], "pin": config.admin_pin, "action": "approve"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(independent.status_code, 302)
+                self.assertIn("code", parse_qs(urlparse(independent.headers["location"]).query))
 
     def test_public_client_pkce_flow_advertises_offline_access_and_issues_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

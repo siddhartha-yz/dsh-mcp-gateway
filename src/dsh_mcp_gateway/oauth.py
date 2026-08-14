@@ -798,43 +798,46 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
 
 
 class PinAttemptLimiter:
-    def __init__(
-        self,
-        *,
-        limit: int = 5,
-        global_limit: int = 20,
-        window_s: float = 300.0,
-    ) -> None:
-        if limit <= 0 or global_limit <= 0 or window_s <= 0:
-            raise ValueError("PIN attempt limits and window must be positive")
+    """Bound failed PIN attempts to one opaque authorization request.
+
+    Source-IP limits are intentionally avoided here: the supported deployment
+    binds the gateway to loopback behind a reverse proxy, so every public client
+    can otherwise collapse onto the proxy's source address and turn a brute-force
+    defense into a cross-request denial of service.
+    """
+
+    def __init__(self, *, limit: int = 5, window_s: float = 300.0) -> None:
+        if limit <= 0 or window_s <= 0:
+            raise ValueError("PIN attempt limit and window must be positive")
         self.limit = limit
-        self.global_limit = global_limit
         self.window_s = window_s
         self._lock = threading.Lock()
         self._failures: dict[str, deque[float]] = defaultdict(deque)
-        self._global_failures: deque[float] = deque()
 
     def _prune(self, failures: deque[float], now: float) -> None:
         while failures and now - failures[0] > self.window_s:
             failures.popleft()
 
-    def allowed(self, source: str) -> bool:
+    def allowed(self, request_id: str) -> bool:
         now = time.monotonic()
         with self._lock:
-            failures = self._failures[source]
+            failures = self._failures[request_id]
             self._prune(failures, now)
-            self._prune(self._global_failures, now)
-            return len(failures) < self.limit and len(self._global_failures) < self.global_limit
+            if not failures:
+                self._failures.pop(request_id, None)
+                return True
+            return len(failures) < self.limit
 
-    def fail(self, source: str) -> None:
+    def fail(self, request_id: str) -> None:
         now = time.monotonic()
         with self._lock:
-            self._failures[source].append(now)
-            self._global_failures.append(now)
+            failures = self._failures[request_id]
+            self._prune(failures, now)
+            failures.append(now)
 
-    def clear(self, source: str) -> None:
+    def clear(self, request_id: str) -> None:
         with self._lock:
-            self._failures.pop(source, None)
+            self._failures.pop(request_id, None)
 
 
 def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
@@ -876,26 +879,26 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
 
         client = await provider.get_client(pending.client_id)
         client_name = client.client_name if client is not None and client.client_name else pending.client_id
-        source = request.client.host if request.client is not None else "unknown"
         error = ""
 
         if request.method == "POST":
             action = str(form.get("action", "approve"))
             if action == "deny":
+                limiter.clear(request_id)
                 target = await provider.deny(request_id)
                 if target is None:
                     return approval_html("<h1>Authorization request expired</h1>", status_code=400)
                 return approval_redirect(target)
-            if not limiter.allowed(source):
-                return approval_html("<h1>Too many failed PIN attempts</h1>", status_code=429)
+            if not limiter.allowed(request_id):
+                return approval_html("<h1>Too many failed PIN attempts for this request</h1>", status_code=429)
             candidate = str(form.get("pin", ""))
             if provider.pin_matches(candidate):
-                limiter.clear(source)
+                limiter.clear(request_id)
                 target = await provider.approve(request_id)
                 if target is None:
                     return approval_html("<h1>Authorization request expired</h1>", status_code=400)
                 return approval_redirect(target)
-            limiter.fail(source)
+            limiter.fail(request_id)
             error = "Invalid PIN"
 
         scope_text = " ".join(pending.scopes)

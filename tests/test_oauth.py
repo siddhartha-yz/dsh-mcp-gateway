@@ -25,6 +25,7 @@ if MCP_AVAILABLE:
         TokenError,
     )
     from mcp.shared.auth import OAuthClientInformationFull
+    from mcp.types import LATEST_PROTOCOL_VERSION
     from starlette.testclient import TestClient
 
     from dsh_mcp_gateway.oauth import (
@@ -764,7 +765,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(independent.status_code, 302)
                 self.assertIn("code", parse_qs(urlparse(independent.headers["location"]).query))
 
-    def test_public_client_pkce_flow_advertises_offline_access_and_issues_refresh_token(self) -> None:
+    def test_public_client_pkce_flow_reaches_protected_mcp_and_issues_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
@@ -773,7 +774,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
             redirect_uri = "https://example.com/chatgpt-callback"
 
-            with TestClient(app) as client:
+            with TestClient(app, base_url="http://127.0.0.1:8000") as client:
                 metadata = client.get("/.well-known/oauth-authorization-server")
                 self.assertEqual(metadata.status_code, 200)
                 metadata_json = metadata.json()
@@ -877,6 +878,74 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(issued["access_token"])
                 self.assertTrue(issued["refresh_token"])
                 self.assertEqual(set(issued["scope"].split()), {"dsh:control", "offline_access"})
+
+                initialize = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": "oauth-http-regression", "version": "1.0"},
+                    },
+                }
+                unauthenticated = client.post(
+                    "/mcp",
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    json=initialize,
+                )
+                self.assertEqual(unauthenticated.status_code, 401)
+
+                authenticated_headers = {
+                    "Authorization": f"Bearer {issued['access_token']}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                }
+                initialized = client.post("/mcp", headers=authenticated_headers, json=initialize)
+                self.assertEqual(initialized.status_code, 200)
+                initialized_json = initialized.json()
+                negotiated_version = initialized_json["result"]["protocolVersion"]
+                self.assertTrue(negotiated_version)
+                mcp_session_id = initialized.headers.get("mcp-session-id")
+                self.assertTrue(mcp_session_id)
+
+                session_headers = {
+                    **authenticated_headers,
+                    "mcp-session-id": mcp_session_id,
+                    "mcp-protocol-version": negotiated_version,
+                }
+                initialized_notification = client.post(
+                    "/mcp",
+                    headers=session_headers,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                )
+                self.assertEqual(initialized_notification.status_code, 202)
+
+                tools = client.post(
+                    "/mcp",
+                    headers=session_headers,
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                )
+                self.assertEqual(tools.status_code, 200)
+                tool_names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+                self.assertIn("dsh_messages", tool_names)
+                self.assertIn("dsh_list", tool_names)
+
+                list_call = client.post(
+                    "/mcp",
+                    headers=session_headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {"name": "dsh_list", "arguments": {"limit": 1}},
+                    },
+                )
+                self.assertEqual(list_call.status_code, 200)
+                structured = list_call.json()["result"]["structuredContent"]
+                self.assertEqual(structured["items"], [])
+                self.assertEqual(structured["total"], 0)
+                self.assertFalse(structured["has_more"])
 
 
 if __name__ == "__main__":

@@ -1,10 +1,14 @@
 # Architecture
 
-`dsh-mcp-gateway` is a control-plane adapter, not an agent harness and not an execution sandbox.
+The canonical product contract is [`../AGENTS.md`](../AGENTS.md): **give ChatGPT Web a mature DSH Harness**.
 
-It should own MCP-facing session and goal controls, OAuth/scopes when needed, stable session identifiers, status/event projection, restart policy around a DSH runtime, and one replaceable adapter that absorbs DSH protocol churn.
+`dsh-mcp-gateway` is an access/compatibility adapter between ChatGPT Web and DSH. ChatGPT is the primary reasoning/model agent; DSH is the harness/runtime authority. The adapter should generically project DSH-managed capabilities to ChatGPT over MCP instead of becoming a second harness itself.
 
-It should not duplicate DSH agent loop, goals, workflows, subagents, persistence, shell, filesystem, jobs, skills, or MCP client functionality. It also should not duplicate differentiated execution backends from projects such as local-shell-mcp.
+It may own ChatGPT-facing OAuth/MCP transport, public access glue, capability projection, and compatibility code required to bridge ChatGPT Web to DSH. Harness concerns such as tools, skills, jobs, sessions, policy, MCP clients, lifecycle, and community extensions should preferentially remain DSH-owned.
+
+local-shell-mcp is an implementation/reference source for proven public-tunnel, OAuth/remote-MCP, remote-worker, browser, and other differentiated execution capabilities. It is not the primary harness in this architecture.
+
+The sections below document substantial prototype work that predates this clarified product boundary. They remain useful engineering evidence, but any gateway-owned session/goal/continuation design described below is **not automatically a current product requirement**. When a section conflicts with `AGENTS.md`, `AGENTS.md` is authoritative until this document is refactored.
 
 ## Session routing invariant
 

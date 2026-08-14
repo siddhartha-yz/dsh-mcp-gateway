@@ -1,33 +1,33 @@
 # dsh-mcp-gateway
 
-Durable runtime/session control plane for ChatGPT over OAuth + MCP.
+**Give ChatGPT Web a mature DSH Harness.**
 
-The product boundary is intentionally narrow: **ChatGPT remains the only reasoning agent.** This project does not require a DeepSeek API key, does not run an autonomous second model, and does not replace ChatGPT with DeepSeek Harness goal rounds.
+ChatGPT Web remains the only primary reasoning/model agent. This project connects a normal ChatGPT conversation to DSH through MCP, so DSH-managed tools, skills, jobs, sessions, policies, MCP clients, and compatible community extensions can become ChatGPT capabilities without rebuilding a bespoke wrapper for each extension.
+
+The repository-level architecture contract is [`AGENTS.md`](AGENTS.md). When older prototype code or documentation conflicts with that contract, the contract wins unless the repository owner explicitly changes the product direction.
 
 ## Target architecture
 
 ```text
-ChatGPT web / MCP client
+ChatGPT Web Chat
         |
      OAuth + MCP
         |
         v
- dsh-mcp-gateway
-        |
- durable logical session
- checkpoint / run lease
- resume / takeover
- continuation coordination
+ ChatGPT <-> DSH adapter
         |
         v
- local execution MCP
- (for example local-shell-mcp)
+     DSH Harness
         |
-        v
- shell / files / browser / remotes
+        +-- DSH tools / skills / extensions
+        +-- sessions / jobs / policy / MCP clients
+        `-- optional execution providers
+                 |
+                 +-- local machine
+                 `-- selected local-shell-mcp capabilities
 ```
 
-The runtime layer exists to outlive one ChatGPT agent run: it persists semantic task state, prevents stale runs from continuing to mutate the same task after takeover, and provides enough context for a later ChatGPT run to resume without relying on the previous conversation's transient context.
+The adapter should be as thin and generic as practical. DSH is the harness/runtime authority; local-shell-mcp is primarily a source of proven public-tunnel/OAuth/remote-worker patterns and selected differentiated execution capabilities, not the primary harness.
 
 ## Relationship to local-shell-mcp v4
 

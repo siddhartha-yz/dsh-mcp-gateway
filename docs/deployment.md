@@ -39,8 +39,8 @@ A practical layout is:
 The commands below are examples for a dedicated Linux host. Adjust user/group ownership and package-management policy to the target machine.
 
 ```sh
-sudo useradd --system --home /var/lib/dsh-harness --create-home dsh-agent
-sudo useradd --system --home /var/lib/dsh-mcp-gateway --create-home dsh-gateway
+sudo useradd --system --user-group --home /var/lib/dsh-harness --create-home dsh-agent
+sudo useradd --system --user-group --home /var/lib/dsh-mcp-gateway --create-home dsh-gateway
 
 sudo install -d -o dsh-agent -g dsh-agent -m 0700 /var/lib/dsh-harness
 sudo install -d -o dsh-agent -g dsh-agent -m 0750 /srv/dsh-workspace
@@ -98,14 +98,19 @@ Do not put these values in the repository, unit files, shell history, or reverse
 
 ## systemd
 
-Install the units:
+Install the unit files, then run the unprivileged deployment preflight before starting either service:
 
 ```sh
 sudo cp deploy/systemd/dsh-web-host.service /etc/systemd/system/
 sudo cp deploy/systemd/dsh-mcp-gateway.service /etc/systemd/system/
+
+python3 scripts/preflight-deployment.py
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
 ```
+
+`preflight-deployment.py` does not call `sudo` or `systemctl`. It checks the documented service users/groups, target directories and exact owner/mode expectations, the pinned DSH package version, gateway Python/console-script presence, required environment keys and secret-file modes without printing secret values, and whether the installed unit files still match the checked-in templates. It exits nonzero until the layout is ready. `--json` provides the same secret-free result for automation, and path/user options allow staging layouts to be checked without using the production filesystem roots.
 
 The gateway uses `Wants=` rather than `Requires=` for the DSH Host. That is intentional: an independent DSH Host restart should not restart the public gateway. Gateway startup also does not synchronously probe DSH, so a slow or temporarily unavailable Host does not put the public process into a restart loop. While DSH is unavailable, `/healthz` remains 200 but `/readyz` returns 503. Readiness uses a dedicated 1-second `host.describe` timeout rather than the normal 10-second control-RPC timeout, so a connected but wedged Host cannot hold each probe open for a full business-operation timeout. Once the Host returns, an existing non-running durable session is routed through the idempotent attach/resume probe. Loopback smoke tests exercised both lifecycle directions without restarting the gateway: DSH absent produced `healthz=200`/`readyz=503`, bringing the dependency up changed `readyz` to 200 in the same gateway process, and a deliberately 2-second Host response produced `readyz=503` in about 1 second while the backend's ordinary RPC timeout remained 10 seconds.
 

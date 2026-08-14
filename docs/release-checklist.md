@@ -23,7 +23,7 @@ This checklist defines the boundary between the current development prototype an
 
 These are deliberately left unchecked until performed against the intended long-running host rather than a temporary integration environment.
 
-- [ ] Install the pinned DSH runtime and gateway using the checked-in systemd templates on the target host; verify both services start as their dedicated Unix users with the documented state directories and permissions.
+- [ ] Install the pinned DSH runtime and gateway using the checked-in systemd templates on the target host; make `python3 scripts/preflight-deployment.py` pass first, then verify both services start as their dedicated Unix users with the documented state directories and permissions.
 - [ ] Put the real public HTTPS reverse proxy/domain in front of the loopback gateway and repeat DCR/PKCE/MCP initialization with that exact issuer/resource/Host/Origin configuration.
 - [ ] Perform an operating-system reboot drill: verify DSH Host and gateway start automatically, OAuth state remains usable, an existing durable session is cold-readable, and an explicit continuation succeeds.
 - [ ] Perform an offline backup/restore drill for `DSH_HOME`, workspace, OAuth state, and configuration; verify restored session history and OAuth behavior match the documented failure boundaries.

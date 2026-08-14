@@ -62,12 +62,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[server]'
 ```
 
-Before relying on the deployment, run:
+Before relying on the deployment, run the runtime-compatible test suite:
 
 ```sh
-.venv/bin/ruff check src tests
 .venv/bin/python -m unittest discover -s tests -q
+.venv/bin/python -m compileall -q src tests
 ```
+
+Linting belongs to the contributor/CI environment (`python -m pip install -e '.[dev]' && ruff check src tests`) rather than the minimal production runtime.
 
 ## Secrets and environment
 

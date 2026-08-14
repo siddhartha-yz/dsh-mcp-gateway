@@ -27,7 +27,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install test dependencies
-        run: python -m pip install -e '.[server]' ruff
+        run: python -m pip install -e '.[dev]'
 
       - name: Ruff
         run: ruff check src tests
@@ -37,6 +37,30 @@ jobs:
 
       - name: Compile Python sources
         run: python -m compileall -q src tests
+
+  package:
+    name: Wheel and core CLI smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Build wheel without runtime extras
+        run: python -m pip wheel . --no-deps --wheel-dir dist
+
+      - name: Install built wheel
+        run: python -m pip install --force-reinstall dist/*.whl
+
+      - name: Verify zero-dependency import and CLI parser
+        run: |
+          python -c "import dsh_mcp_gateway; print(dsh_mcp_gateway.__version__)"
+          dsh-mcp-gateway --help
+          python -m pip check
 
   dsh-sdk:
     name: DSH SDK integration imports

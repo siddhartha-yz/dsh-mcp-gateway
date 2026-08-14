@@ -107,12 +107,15 @@ The routing/control core has no third-party runtime dependencies:
 python3 -m unittest discover -s tests -v
 ```
 
-To exercise the real MCP v2 schemas as well:
+For contributor development, install the shared lint/test extra so local checks match CI:
 
 ```sh
-python -m pip install -e '.[server]'
+python -m pip install -e '.[dev]'
+ruff check src tests
 python -m unittest discover -s tests -v
 ```
+
+Production deployments do not need the development tools; install `.[server]` for the OAuth/MCP HTTP gateway.
 
 The server extra currently targets the stable MCP Python SDK v2 line (`mcp>=2,<3`). In the currently tested MCP Python SDK `2.0.0`, DCR accepts public clients with `token_endpoint_auth_method=none`, but the SDK-generated authorization-server metadata still advertises only `client_secret_post` and `client_secret_basic`. The gateway does not replace that SDK metadata route; the public-client flow is regression-tested directly, and this metadata discrepancy is treated as an upstream compatibility caveat rather than a reason to fork the authorization server. See [`docs/architecture.md`](docs/architecture.md) for the boundary decisions and [`docs/deployment.md`](docs/deployment.md) for the tested process/security topology.
 

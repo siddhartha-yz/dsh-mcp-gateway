@@ -115,7 +115,7 @@ ruff check src tests
 python -m unittest discover -s tests -v
 ```
 
-Production deployments do not need the development tools; install `.[server]` for the OAuth/MCP HTTP gateway.
+Production deployments do not need the development tools. The package keeps `mcp>=2,<3` as its compatibility range, while [`deploy/server-constraints.txt`](deploy/server-constraints.txt) records the exact server dependency graph currently exercised by the deployment CI. Use that constraints file when rebuilding a known-good OAuth/MCP gateway environment.
 
 The server extra currently targets the stable MCP Python SDK v2 line (`mcp>=2,<3`). In the currently tested MCP Python SDK `2.0.0`, DCR accepts public clients with `token_endpoint_auth_method=none`, but the SDK-generated authorization-server metadata still advertises only `client_secret_post` and `client_secret_basic`. The gateway does not replace that SDK metadata route; the public-client flow is regression-tested directly, and this metadata discrepancy is treated as an upstream compatibility caveat rather than a reason to fork the authorization server. See [`docs/architecture.md`](docs/architecture.md) for the boundary decisions and [`docs/deployment.md`](docs/deployment.md) for the tested process/security topology.
 
@@ -124,7 +124,7 @@ The server extra currently targets the stable MCP Python SDK v2 line (`mcp>=2,<3
 The current deployable path expects an external DSH Web Host on loopback and puts the OAuth/MCP gateway in front of it. The gateway itself also binds loopback by default; terminate public HTTPS with a reverse proxy or tunnel.
 
 ```sh
-python -m pip install -e '.[server]'
+python -m pip install --constraint deploy/server-constraints.txt -e '.[server]'
 
 export DSH_MCP_GATEWAY_ADMIN_PIN='choose-a-long-owner-pin'
 

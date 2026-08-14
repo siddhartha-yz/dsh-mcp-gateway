@@ -59,8 +59,10 @@ Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environm
 ```sh
 cd /srv/dsh-mcp-gateway
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[server]'
+.venv/bin/python -m pip install --constraint deploy/server-constraints.txt -e '.[server]'
 ```
+
+`pyproject.toml` intentionally keeps the broader `mcp>=2,<3` compatibility range so the normal CI lane detects regressions against newer MCP v2 releases. `deploy/server-constraints.txt` is the separate known-good deployment snapshot and is exercised by its own clean Python 3.12 CI job. Regenerate that snapshot deliberately when upgrading the server dependency graph; do not treat an incidental reinstall as an upgrade.
 
 Before relying on the deployment, run the runtime-compatible test suite:
 

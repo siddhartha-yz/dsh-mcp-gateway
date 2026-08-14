@@ -32,6 +32,7 @@ if MCP_AVAILABLE:
         EmbeddedOAuthConfig,
         EmbeddedOAuthProvider,
         PinAttemptLimiter,
+        RegistrationBodyLimitMiddleware,
     )
 
 
@@ -120,6 +121,46 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 admin_pin="test-admin-pin",
                 max_client_metadata_bytes=0,
             )
+
+    def test_dynamic_registration_request_budget_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "positive integer"):
+            EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_registration_request_bytes=0,
+            )
+
+    async def test_registration_body_limit_counts_streamed_bytes_without_content_length(self) -> None:
+        app_called = False
+
+        async def downstream(_scope, _receive, _send):
+            nonlocal app_called
+            app_called = True
+
+        middleware = RegistrationBodyLimitMiddleware(downstream, max_bytes=5)
+        messages = [
+            {"type": "http.request", "body": b"abc", "more_body": True},
+            {"type": "http.request", "body": b"def", "more_body": False},
+        ]
+        sent: list[dict[str, object]] = []
+
+        async def receive():
+            return messages.pop(0)
+
+        async def send(message):
+            sent.append(message)
+
+        await middleware(
+            {"type": "http", "method": "POST", "path": "/register", "headers": []},
+            receive,
+            send,
+        )
+        self.assertFalse(app_called)
+        starts = [message for message in sent if message.get("type") == "http.response.start"]
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(starts[0]["status"], 413)
 
     def test_pending_per_client_capacity_must_not_exceed_global_capacity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "must not exceed"):
@@ -747,6 +788,37 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("/revoke", paths)
             self.assertIn("/approve", paths)
             self.assertIn("/mcp", paths)
+
+    def test_oversized_dynamic_registration_request_is_rejected_before_sdk_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_registration_request_bytes=512,
+            )
+            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
+
+            with TestClient(app) as client:
+                registration = client.post(
+                    "/register",
+                    json={
+                        "client_name": "x" * 4096,
+                        "redirect_uris": ["https://example.com/callback"],
+                        "response_types": ["code"],
+                        "grant_types": ["authorization_code"],
+                        "token_endpoint_auth_method": "none",
+                        "scope": "dsh:control",
+                    },
+                )
+                self.assertEqual(registration.status_code, 413)
+                self.assertEqual(registration.json()["error"], "invalid_client_metadata")
+                self.assertIn("HTTP body limit", registration.json()["error_description"])
+                self.assertEqual(registration.headers["cache-control"], "no-store")
+
+            self.assertFalse(config.state_db.exists())
 
     def test_oversized_dynamic_client_metadata_is_rejected_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

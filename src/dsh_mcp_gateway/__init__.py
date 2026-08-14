@@ -202,12 +202,17 @@ def build_embedded_oauth_server(service: GatewayService, config: Any) -> tuple[A
         EmbeddedOAuthProvider,
         advertise_public_client_auth_methods,
         install_approval_route,
+        install_registration_body_limit,
     )
 
     class EmbeddedOAuthMCPServer(MCPServer):
         def streamable_http_app(self, *args: Any, **kwargs: Any) -> Any:
             app = super().streamable_http_app(*args, **kwargs)
             advertise_public_client_auth_methods(app, self.settings.auth)
+            install_registration_body_limit(
+                app,
+                max_bytes=config.max_registration_request_bytes,
+            )
             return app
 
     provider = EmbeddedOAuthProvider(config)

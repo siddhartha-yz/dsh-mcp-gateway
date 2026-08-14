@@ -28,8 +28,9 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,7 @@ class EmbeddedOAuthConfig:
     refresh_token_ttl_s: int = 30 * 24 * 3600
     max_registered_clients: int = 256
     max_client_metadata_bytes: int = 32 * 1024
+    max_registration_request_bytes: int = 64 * 1024
     max_pending_authorizations: int = 512
     max_pending_per_client: int = 8
 
@@ -69,6 +71,7 @@ class EmbeddedOAuthConfig:
         for name in (
             "max_registered_clients",
             "max_client_metadata_bytes",
+            "max_registration_request_bytes",
             "max_pending_authorizations",
             "max_pending_per_client",
         ):
@@ -77,6 +80,77 @@ class EmbeddedOAuthConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if self.max_pending_per_client > self.max_pending_authorizations:
             raise ValueError("max_pending_per_client must not exceed max_pending_authorizations")
+
+
+class RegistrationBodyLimitMiddleware:
+    """Bound the anonymous DCR request body before the SDK parses it."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/register":
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next(
+            (value for key, value in scope.get("headers", ()) if key.lower() == b"content-length"),
+            None,
+        )
+        if content_length is not None:
+            try:
+                declared_bytes = int(content_length)
+            except ValueError:
+                declared_bytes = None
+            if declared_bytes is not None and declared_bytes > self.max_bytes:
+                await self._reject(scope, receive, send)
+                return
+
+        body = bytearray()
+        disconnected = False
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                disconnected = True
+                break
+            if message["type"] != "http.request":
+                continue
+            body.extend(message.get("body", b""))
+            if len(body) > self.max_bytes:
+                await self._reject(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        replayed = False
+
+        async def replay_receive():
+            nonlocal replayed
+            if replayed or disconnected:
+                return {"type": "http.disconnect"}
+            replayed = True
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            {
+                "error": "invalid_client_metadata",
+                "error_description": (
+                    "dynamic client registration request exceeds the configured "
+                    f"{self.max_bytes}-byte HTTP body limit"
+                ),
+            },
+            status_code=413,
+            headers={"Cache-Control": "no-store"},
+        )
+        await response(scope, receive, send)
+
+
+def install_registration_body_limit(app: Any, *, max_bytes: int) -> None:
+    app.add_middleware(RegistrationBodyLimitMiddleware, max_bytes=max_bytes)
 
 
 class GatewayRefreshToken(RefreshToken):

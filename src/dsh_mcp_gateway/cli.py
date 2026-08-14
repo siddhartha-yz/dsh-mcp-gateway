@@ -92,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=32 * 1024,
         help="Maximum UTF-8 bytes persisted for one normalized dynamic OAuth client record.",
     )
+    parser.add_argument(
+        "--max-registration-request-bytes",
+        type=int,
+        default=64 * 1024,
+        help="Maximum raw HTTP body bytes accepted by the anonymous dynamic-client registration endpoint.",
+    )
     return parser
 
 
@@ -103,6 +109,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--max-registered-clients must be positive")
     if args.max_client_metadata_bytes <= 0:
         raise SystemExit("--max-client-metadata-bytes must be positive")
+    if args.max_registration_request_bytes <= 0:
+        raise SystemExit("--max-registration-request-bytes must be positive")
     if not args.allow_non_loopback_bind:
         try:
             bind_is_loopback = args.bind_host == "localhost" or ipaddress.ip_address(args.bind_host).is_loopback
@@ -146,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         admin_pin=admin_pin,
         max_registered_clients=args.max_registered_clients,
         max_client_metadata_bytes=args.max_client_metadata_bytes,
+        max_registration_request_bytes=args.max_registration_request_bytes,
     )
     server, _provider = build_embedded_oauth_server(GatewayService(backend), oauth)
     install_health_routes(server, backend)

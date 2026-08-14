@@ -77,6 +77,17 @@ class CliTests(unittest.TestCase):
                 ]
             )
 
+    def test_rejects_non_positive_dynamic_registration_request_budget(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "--max-registration-request-bytes must be positive"):
+            main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--max-registration-request-bytes",
+                    "0",
+                ]
+            )
+
     def test_happy_path_builds_loopback_oauth_gateway_with_canonical_issuer(self) -> None:
         fake_backend = Mock()
         fake_backend.base_url = "http://127.0.0.1:3080"
@@ -111,6 +122,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(config.state_db, Path(tmp).resolve() / "oauth.sqlite3")
         self.assertEqual(config.max_registered_clients, 256)
         self.assertEqual(config.max_client_metadata_bytes, 32 * 1024)
+        self.assertEqual(config.max_registration_request_bytes, 64 * 1024)
         fake_server.run.assert_called_once()
         run_kwargs = fake_server.run.call_args.kwargs
         self.assertEqual(run_kwargs["transport"], "streamable-http")

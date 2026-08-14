@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import uuid
+from collections import deque
 from http.client import HTTPException
 from pathlib import Path
 from typing import Any, Protocol
@@ -807,10 +808,11 @@ class PublicSdkBridge:
         catalog: SessionCatalog,
         *,
         poll_interval_s: float = 0.05,
+        event_buffer_size: int = 2000,
     ) -> None:
         if poll_interval_s <= 0:
             raise ValueError("poll_interval_s must be positive")
-        self.backend = PublicSdkBackend(client, catalog)
+        self.backend = PublicSdkBackend(client, catalog, event_buffer_size=event_buffer_size)
         self._subscription = client.subscribe_notifications()
         self._poll_interval_s = poll_interval_s
         self._closed = threading.Event()
@@ -866,14 +868,24 @@ class PublicSdkBackend:
     GatewayService or the MCP tool schemas.
     """
 
-    def __init__(self, client: PublicSdkClient, catalog: SessionCatalog) -> None:
+    def __init__(
+        self,
+        client: PublicSdkClient,
+        catalog: SessionCatalog,
+        *,
+        event_buffer_size: int = 2000,
+    ) -> None:
+        if not isinstance(event_buffer_size, int) or isinstance(event_buffer_size, bool) or event_buffer_size <= 0:
+            raise ValueError("event_buffer_size must be a positive integer")
         self._client = client
         self._catalog = catalog
+        self._event_buffer_size = event_buffer_size
         self._lock = threading.RLock()
         self._allocated: set[str] = set()
         self._live: set[str] = set()
         self._statuses: dict[str, str] = {}
-        self._events: dict[str, list[dict[str, Any]]] = {}
+        self._events: dict[str, deque[dict[str, Any]]] = {}
+        self._event_totals: dict[str, int] = {}
 
     def presence(self, session_id: str) -> SessionPresence:
         with self._lock:
@@ -938,18 +950,27 @@ class PublicSdkBackend:
             if method == "session.status" and isinstance(payload.get("status"), str):
                 self._statuses[session_id] = payload["status"]
             elif method == "session.event" and isinstance(payload.get("event"), dict):
-                self._events.setdefault(session_id, []).append(dict(payload["event"]))
+                events = self._events.get(session_id)
+                if events is None:
+                    events = deque(maxlen=self._event_buffer_size)
+                    self._events[session_id] = events
+                events.append(dict(payload["event"]))
+                self._event_totals[session_id] = self._event_totals.get(session_id, 0) + 1
 
     def status(self, session_id: str) -> dict[str, Any]:
         presence = self.presence(session_id)
         with self._lock:
             if presence is SessionPresence.LIVE:
                 state = "allocated" if session_id in self._allocated else "live"
+                retained = len(self._events.get(session_id, ()))
+                total = self._event_totals.get(session_id, 0)
                 return {
                     "session_id": session_id,
                     "state": state,
                     "status": self._statuses.get(session_id, "unknown"),
-                    "event_count": len(self._events.get(session_id, ())),
+                    "event_count": total,
+                    "retained_event_count": retained,
+                    "history_truncated": total > retained,
                 }
         if presence is SessionPresence.PERSISTED:
             return {"session_id": session_id, "state": "persisted", "status": "cold"}
@@ -961,7 +982,8 @@ class PublicSdkBackend:
         if self.presence(session_id) is SessionPresence.ABSENT:
             raise KeyError(session_id)
         with self._lock:
-            return [dict(event) for event in self._events.get(session_id, ())[-limit:]]
+            events = list(self._events.get(session_id, ()))
+            return [dict(event) for event in events[-limit:]]
 
     def history_page(
         self,

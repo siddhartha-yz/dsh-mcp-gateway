@@ -1419,8 +1419,37 @@ class PublicSdkBackendTests(unittest.TestCase):
                 "session.event",
                 {"sessionId": "s1", "event": {"type": "turn/start", "seq": 1}},
             )
-            self.assertEqual(backend.status("s1")["status"], "running")
+            status = backend.status("s1")
+            self.assertEqual(status["status"], "running")
+            self.assertEqual(status["event_count"], 1)
+            self.assertEqual(status["retained_event_count"], 1)
+            self.assertFalse(status["history_truncated"])
             self.assertEqual(backend.history("s1"), [{"type": "turn/start", "seq": 1}])
+
+    def test_live_event_projection_uses_bounded_ring_buffer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = PublicSdkBackend(
+                FakePublicSdkClient(),
+                SessionCatalog(Path(tmp) / "sessions.json"),
+                event_buffer_size=2,
+            )
+            for seq in range(1, 6):
+                backend.observe_notification(
+                    "session.event",
+                    {"sessionId": "s1", "event": {"type": "assistant/chunk", "seq": seq}},
+                )
+
+            self.assertEqual([event["seq"] for event in backend.history("s1", limit=1000)], [4, 5])
+            status = backend.status("s1")
+            self.assertEqual(status["event_count"], 5)
+            self.assertEqual(status["retained_event_count"], 2)
+            self.assertTrue(status["history_truncated"])
+            with self.assertRaisesRegex(ValueError, "event_buffer_size"):
+                PublicSdkBackend(
+                    FakePublicSdkClient(),
+                    SessionCatalog(Path(tmp) / "other-sessions.json"),
+                    event_buffer_size=0,
+                )
 
     def test_public_sdk_compact_transcript_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

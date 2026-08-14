@@ -240,12 +240,14 @@ def build_public_sdk_oauth_gateway(
     oauth_config: Any,
     *,
     poll_interval_s: float = 0.05,
+    event_buffer_size: int = 2000,
 ) -> PublicSdkGateway:
     """Compose an OAuth-protected MCP facade around an initialized DSH SDK client."""
     bridge = PublicSdkBridge(
         client,
         SessionCatalog(catalog_path),
         poll_interval_s=poll_interval_s,
+        event_buffer_size=event_buffer_size,
     )
     service = GatewayService(bridge.backend)
     server, oauth_provider = build_embedded_oauth_server(service, oauth_config)
@@ -262,6 +264,7 @@ def build_public_sdk_gateway(
     catalog_path: str | PathLike[str],
     *,
     poll_interval_s: float = 0.05,
+    event_buffer_size: int = 2000,
 ) -> PublicSdkGateway:
     """Compose MCP tools and event projection around an initialized DSH SDK client.
 
@@ -272,6 +275,7 @@ def build_public_sdk_gateway(
         client,
         SessionCatalog(catalog_path),
         poll_interval_s=poll_interval_s,
+        event_buffer_size=event_buffer_size,
     )
     service = GatewayService(bridge.backend)
     return PublicSdkGateway(

@@ -45,7 +45,7 @@ def build_mcp_server(
         instructions=(
             "Use dsh_start for a new task and keep its session_id. "
             "Use dsh_status or dsh_history to observe it, dsh_history_page for older durable pages, "
-            "then dsh_continue to steer it later."
+            "dsh_search to recover an older session from remembered message text, then dsh_continue to steer it later."
         ),
         auth_server_provider=auth_server_provider,
         auth=auth,
@@ -88,6 +88,11 @@ def build_mcp_server(
     def dsh_list() -> list[dict[str, Any]]:
         """List sessions visible to the configured DSH backend."""
         return service.list_sessions()
+
+    @mcp.tool(name="dsh_search", annotations=read_only)
+    def dsh_search(query: str) -> dict[str, Any]:
+        """Search durable user/assistant/steering messages and return up to 20 matching sessions."""
+        return service.search_sessions(query)
 
     @mcp.tool(name="dsh_cancel", annotations=consequential_control)
     def dsh_cancel(session_id: str) -> dict[str, Any]:

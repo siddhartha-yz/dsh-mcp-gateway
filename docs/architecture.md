@@ -38,6 +38,12 @@ This matters even when the gateway process itself never restarts. A real rc6 tes
 
 An MCP request should enqueue or steer a DSH session and return a receipt/session id. It should not remain open for the autonomous goal's whole lifetime. DSH continues independently, while observation belongs to separate status/event calls or streams. A later MCP/chat session reconnects using the durable session id.
 
+## Session discovery is an optional derived capability
+
+Durable identity does not require full-text indexing. DSH Web rc6 deliberately keeps its `ctx.sessionQuery` service mounted while shipping content search disabled with `openAt: never`; exact reads, lineage, and persistence remain available. The gateway therefore keeps session routing/list/history independent from search and maps the default disabled state to `SessionSearchUnavailable` rather than treating it as a Host failure.
+
+Deployments that want remembered-text recovery may opt into the existing `@deepseek-ai/dsh-session-query-sqlite` row with `openAt: first-search` and a dedicated path under `DSH_HOME`. That SQLite FTS5 database is derived state: it must not be the canonical session-persistence database and must have one process owner. A real rc6 test searched the same persisted session after a complete Host restart and again after deleting the derived database; the latter search rebuilt the index from durable logs and returned the same hit. This makes search useful for rediscovery without making the index part of session correctness.
+
 ## Goal activation is separate from session persistence
 
 DSH persists goal phase/revision/history but deliberately does not persist process-local continuation authority. After a session is resumed, a durable goal can remain `phase=active` while automatic goal rounds are disarmed. The gateway must not reinterpret session cold-resume as authorization to continue autonomous work.

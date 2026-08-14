@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD = ROOT / "deploy" / "systemd"
+DSH_DEPLOY = ROOT / "deploy" / "dsh"
 
 
 def read_unit(name: str) -> configparser.RawConfigParser:
@@ -44,6 +45,18 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["UMask"], "0077")
         self.assertIn("/var/lib/dsh-harness", service["ReadWritePaths"])
         self.assertIn("/srv/dsh-workspace", service["ReadWritePaths"])
+
+    def test_optional_session_search_overlay_is_durable_and_lazy(self) -> None:
+        overlay = (DSH_DEPLOY / "session-search.cordis.yml").read_text(encoding="utf-8")
+        drop_in = (SYSTEMD / "dsh-web-host-search.conf.example").read_text(encoding="utf-8")
+
+        self.assertIn("id: session-query-sqlite", overlay)
+        self.assertIn("dshHomePath('derived/session-query.sqlite3')", overlay)
+        self.assertIn("openAt: first-search", overlay)
+        self.assertNotIn("openAt: startup", overlay)
+        self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/session-search.cordis.yml", drop_in)
+        self.assertIn("--host 127.0.0.1", drop_in)
+        self.assertNotIn("--host 0.0.0.0", drop_in)
 
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:
         gateway_env = (SYSTEMD / "gateway.env.example").read_text(encoding="utf-8")

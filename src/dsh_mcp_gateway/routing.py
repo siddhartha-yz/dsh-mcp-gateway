@@ -90,6 +90,9 @@ class GatewayService:
     def list_sessions(self) -> list[dict[str, Any]]:
         return self._backend.list_sessions()
 
+    def search_sessions(self, query: str) -> dict[str, Any]:
+        return self._backend.search_sessions(query)
+
     def cancel(self, session_id: str) -> dict[str, Any]:
         return self._backend.cancel(session_id)
 

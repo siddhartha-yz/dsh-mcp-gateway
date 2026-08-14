@@ -42,6 +42,8 @@ class DshControlBackend(DshSessionBackend, Protocol):
 
     def list_sessions(self) -> list[dict[str, Any]]: ...
 
+    def search_sessions(self, query: str) -> dict[str, Any]: ...
+
     def cancel(self, session_id: str) -> dict[str, Any]: ...
 
     def goal_status(self, session_id: str) -> dict[str, Any]: ...
@@ -89,6 +91,10 @@ class ColdResumeUnavailable(RuntimeError):
 
 class HistoryPaginationUnavailable(RuntimeError):
     """The selected backend cannot provide authoritative durable history pages."""
+
+
+class SessionSearchUnavailable(RuntimeError):
+    """The selected backend cannot search authoritative durable session messages."""
 
 
 class GoalControlUnavailable(RuntimeError):
@@ -468,6 +474,37 @@ class ExperimentalWebHostBackend:
             )
         return result
 
+    def search_sessions(self, query: str) -> dict[str, Any]:
+        query = query.strip()
+        if not query:
+            raise ValueError("query must be non-empty")
+        if len(query) > 500:
+            raise ValueError("query must contain at most 500 characters")
+        if "\0" in query:
+            raise ValueError("query must not contain NUL")
+        try:
+            value = self._call("session.search", {"query": query})
+        except ExperimentalWebHostError as exc:
+            detail = str(exc)
+            if "session search is disabled:" in detail or "session search is unavailable:" in detail:
+                raise SessionSearchUnavailable(
+                    "DSH full-text session search is not enabled for this deployment"
+                ) from exc
+            raise
+        items = value.get("items")
+        has_more = value.get("hasMore")
+        if not isinstance(items, list) or not isinstance(has_more, bool):
+            raise ExperimentalWebHostError("session.search returned invalid results")
+        results: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            session_id = item.get("sessionId")
+            snippet = item.get("snippet")
+            if isinstance(session_id, str) and session_id and isinstance(snippet, str):
+                results.append({"session_id": session_id, "snippet": snippet})
+        return {"query": query, "items": results, "has_more": has_more}
+
     def cancel(self, session_id: str) -> dict[str, Any]:
         try:
             value = self._call("session.cancel", {"sessionId": session_id})
@@ -770,6 +807,18 @@ class PublicSdkBackend:
 
     def list_sessions(self) -> list[dict[str, Any]]:
         return [self.status(session_id) for session_id in self._catalog.ids()]
+
+    def search_sessions(self, query: str) -> dict[str, Any]:
+        query = query.strip()
+        if not query:
+            raise ValueError("query must be non-empty")
+        if len(query) > 500:
+            raise ValueError("query must contain at most 500 characters")
+        if "\0" in query:
+            raise ValueError("query must not contain NUL")
+        raise SessionSearchUnavailable(
+            "the public DSH SDK bridge cannot search authoritative durable session messages"
+        )
 
     def cancel(self, session_id: str) -> dict[str, Any]:
         presence = self.presence(session_id)

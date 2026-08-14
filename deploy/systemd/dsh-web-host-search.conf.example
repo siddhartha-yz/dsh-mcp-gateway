@@ -1,0 +1,8 @@
+# Optional systemd drop-in to enable DSH full-text session search.
+# Install as /etc/systemd/system/dsh-web-host.service.d/search.conf and run
+# `systemctl daemon-reload && systemctl restart dsh-web-host`.
+#
+# The --patch launcher flag must appear before the Web app's --host/--port args.
+[Service]
+ExecStart=
+ExecStart=/opt/dsh-runtime/node_modules/.bin/dsh web --patch /srv/dsh-mcp-gateway/deploy/dsh/session-search.cordis.yml --host 127.0.0.1 --port 3080

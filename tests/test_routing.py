@@ -18,6 +18,7 @@ from dsh_mcp_gateway.backend import (
     PublicSdkBackend,
     PublicSdkBridge,
     SessionCatalog,
+    SessionSearchUnavailable,
 )
 from dsh_mcp_gateway.routing import EnsureAction, GatewayService, SessionRouter
 from dsh_mcp_gateway.types import SessionHandle, SessionPresence
@@ -77,6 +78,10 @@ class FakeBackend:
     def list_sessions(self) -> list[dict[str, Any]]:
         self.calls.append(("list_sessions",))
         return [{"session_id": "s1"}]
+
+    def search_sessions(self, query: str) -> dict[str, Any]:
+        self.calls.append(("search_sessions", query))
+        return {"query": query, "items": [{"session_id": "s1", "snippet": "matching text"}], "has_more": False}
 
     def cancel(self, session_id: str) -> dict[str, Any]:
         self.calls.append(("cancel", session_id))
@@ -210,6 +215,13 @@ class GatewayServiceTests(unittest.TestCase):
         self.assertIsNone(page["next_before_seq"])
         self.assertEqual(backend.calls, [("history_page", "s1", 42, 25)])
 
+    def test_search_sessions_delegates_without_session_routing(self) -> None:
+        backend = FakeBackend(SessionPresence.ABSENT)
+        result = GatewayService(backend).search_sessions("remembered phrase")
+        self.assertEqual(result["items"][0]["session_id"], "s1")
+        self.assertFalse(result["has_more"])
+        self.assertEqual(backend.calls, [("search_sessions", "remembered phrase")])
+
 
 class FakeWebHostHandler(BaseHTTPRequestHandler):
     server: Any
@@ -247,6 +259,30 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
                 for session_id, state in sessions.items()
             ]
             result = {"ok": True, "value": {"items": items}}
+        elif method == "session.search":
+            if getattr(self.server, "search_disabled", False):
+                result = {
+                    "ok": False,
+                    "error": {
+                        "code": "internal",
+                        "message": (
+                            "session search failed: SessionQueryError: session search is disabled: "
+                            'this deployment configures the session-query index with openAt "never"'
+                        ),
+                        "details": {},
+                    },
+                }
+            else:
+                query = payload["query"].casefold()
+                matches = [
+                    {"sessionId": session_id, "snippet": state.get("search_text", "")}
+                    for session_id, state in sessions.items()
+                    if query in state.get("search_text", "").casefold()
+                ]
+                result = {
+                    "ok": True,
+                    "value": {"items": matches[:20], "hasMore": len(matches) > 20},
+                }
         elif method == "session.models":
             session_id = payload["sessionId"]
             if session_id not in sessions:
@@ -449,6 +485,7 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeWebHostHandler)
         self.server.calls = []
+        self.server.search_disabled = False
         self.server.sessions = {
             "cold-1": {
                 "running": False,
@@ -560,6 +597,42 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
             self.backend.history_page("cold-1", max_messages=0)
         with self.assertRaisesRegex(ValueError, "max_messages"):
             self.backend.history_page("cold-1", max_messages=1001)
+
+    def test_session_search_returns_matches_and_validates_query(self) -> None:
+        self.server.sessions["search-1"] = {
+            "running": False,
+            "cwd": "/tmp/project",
+            "events": [],
+            "search_text": "Investigate durable OAuth refresh behavior",
+        }
+        self.server.sessions["search-2"] = {
+            "running": False,
+            "cwd": "/tmp/project",
+            "events": [],
+            "search_text": "Unrelated browser task",
+        }
+        self.server.calls.clear()
+
+        result = self.backend.search_sessions("  durable oauth  ")
+        self.assertEqual(result["query"], "durable oauth")
+        self.assertEqual(
+            result["items"],
+            [{"session_id": "search-1", "snippet": "Investigate durable OAuth refresh behavior"}],
+        )
+        self.assertFalse(result["has_more"])
+        self.assertEqual(self.server.calls[-1], ("session.search", {"query": "durable oauth"}))
+
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            self.backend.search_sessions("   ")
+        with self.assertRaisesRegex(ValueError, "500"):
+            self.backend.search_sessions("x" * 501)
+        with self.assertRaisesRegex(ValueError, "NUL"):
+            self.backend.search_sessions("bad\0query")
+
+    def test_search_disabled_is_reported_as_capability_unavailable(self) -> None:
+        self.server.search_disabled = True
+        with self.assertRaisesRegex(SessionSearchUnavailable, "not enabled"):
+            self.backend.search_sessions("remembered phrase")
 
     def test_goal_create_is_structured_and_arms_existing_session(self) -> None:
         created = self.backend.goal_create(
@@ -825,6 +898,13 @@ class PublicSdkBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(HistoryPaginationUnavailable, "authoritative durable pages"):
                 backend.history_page("s1")
 
+    def test_public_sdk_durable_session_search_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(Path(tmp) / "sessions.json"))
+            GatewayService(backend).start("work", session_id="s1")
+            with self.assertRaisesRegex(SessionSearchUnavailable, "authoritative durable session messages"):
+                backend.search_sessions("work")
+
     def test_notification_bridge_projects_sdk_events_without_owning_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()
@@ -865,6 +945,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_history",
                 "dsh_history_page",
                 "dsh_list",
+                "dsh_search",
                 "dsh_cancel",
                 "dsh_goal_status",
                 "dsh_goal_create",
@@ -880,7 +961,14 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(start.input_schema["properties"]), {"prompt", "session_id"})
 
         by_name = {tool.name: tool for tool in tools}
-        for name in ("dsh_status", "dsh_history", "dsh_history_page", "dsh_list", "dsh_goal_status"):
+        for name in (
+            "dsh_status",
+            "dsh_history",
+            "dsh_history_page",
+            "dsh_list",
+            "dsh_search",
+            "dsh_goal_status",
+        ):
             annotations = by_name[name].annotations
             assert annotations is not None
             self.assertTrue(annotations.read_only_hint)
@@ -938,6 +1026,21 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(backend.calls, [("history_page", "s1", 42, 25)])
+
+    async def test_search_tool_returns_structured_session_match(self) -> None:
+        backend = FakeBackend(SessionPresence.PERSISTED)
+        server = build_mcp_server(GatewayService(backend))
+        result = await server.call_tool("dsh_search", {"query": "remembered phrase"})
+        self.assertFalse(result.is_error)
+        self.assertEqual(
+            result.structured_content,
+            {
+                "query": "remembered phrase",
+                "items": [{"session_id": "s1", "snippet": "matching text"}],
+                "has_more": False,
+            },
+        )
+        self.assertEqual(backend.calls, [("search_sessions", "remembered phrase")])
 
     async def test_goal_create_tool_returns_structured_ref(self) -> None:
         backend = FakeBackend(SessionPresence.LIVE)

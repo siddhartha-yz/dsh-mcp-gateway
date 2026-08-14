@@ -1,0 +1,8 @@
+# Optional DSH Web overlay for durable full-text session search.
+# The derived FTS index is disposable; canonical session logs remain under
+# DSH's normal session persistence. `first-search` defers node:sqlite and index
+# opening/reconciliation until the first content search.
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('derived/session-query.sqlite3')
+    openAt: first-search

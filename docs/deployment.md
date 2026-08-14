@@ -110,6 +110,33 @@ curl -fsS http://127.0.0.1:18766/readyz
 
 Expected healthy responses are minimal JSON objects; readiness deliberately does not expose DSH provider, workspace, or transport details.
 
+## Optional durable session search
+
+DSH rc6 deliberately ships Web full-text session search disabled (`openAt: never`). The gateway keeps `dsh_search` in a stable tool catalog, but the call fails with a clear capability error unless the DSH deployment opts into the session-query SQLite index.
+
+This repository includes `deploy/dsh/session-search.cordis.yml`, an optional official Cordis overlay that changes only the existing `session-query-sqlite` row:
+
+```yaml
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('derived/session-query.sqlite3')
+    openAt: first-search
+```
+
+`first-search` keeps normal Web startup free of the SQLite import/open cost and builds or reconciles the index only when content search is first used. The database is a disposable derived FTS5 index, not canonical session persistence. In a real rc6 test, search found a remembered phrase before and after a complete Host restart; deleting the entire derived index and restarting still rebuilt it from durable session logs and returned the same session.
+
+To enable it in the example systemd deployment, install the provided drop-in:
+
+```sh
+sudo install -d -m 0755 /etc/systemd/system/dsh-web-host.service.d
+sudo cp deploy/systemd/dsh-web-host-search.conf.example \
+  /etc/systemd/system/dsh-web-host.service.d/search.conf
+sudo systemctl daemon-reload
+sudo systemctl restart dsh-web-host.service
+```
+
+The index contains searchable projections of user/assistant session content, so protect `$DSH_HOME/derived` with the same filesystem trust boundary as the session logs. Do not point the derived-index path at the session-persistence database and do not share one index path between multiple DSH processes.
+
 ## Reverse proxy or tunnel
 
 The external HTTPS origin must map to `http://127.0.0.1:18766`. For example, a Cloudflare Tunnel ingress can contain:

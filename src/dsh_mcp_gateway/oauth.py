@@ -59,6 +59,7 @@ class EmbeddedOAuthConfig:
 
 class GatewayRefreshToken(RefreshToken):
     resource: str | None = None
+    issuer: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,22 +138,73 @@ class OAuthStore:
                 );
                 CREATE TABLE IF NOT EXISTS access_tokens (
                     token TEXT PRIMARY KEY,
+                    grant_id TEXT NOT NULL,
                     client_id TEXT NOT NULL,
                     scopes_json TEXT NOT NULL,
                     expires_at INTEGER NOT NULL,
+                    issuer TEXT NOT NULL,
                     resource TEXT NOT NULL,
                     subject TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS refresh_tokens (
                     token TEXT PRIMARY KEY,
+                    grant_id TEXT NOT NULL,
                     client_id TEXT NOT NULL,
                     scopes_json TEXT NOT NULL,
                     expires_at INTEGER NOT NULL,
+                    issuer TEXT NOT NULL,
                     resource TEXT NOT NULL,
                     subject TEXT NOT NULL
                 );
                 """
             )
+            required_token_columns = {
+                "token",
+                "grant_id",
+                "client_id",
+                "scopes_json",
+                "expires_at",
+                "issuer",
+                "resource",
+                "subject",
+            }
+            access_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(access_tokens)").fetchall()
+            }
+            refresh_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(refresh_tokens)").fetchall()
+            }
+            if access_columns != required_token_columns or refresh_columns != required_token_columns:
+                # Legacy rows cannot be mapped back to a reliable authorization
+                # grant family. Invalidate only token/code state and preserve DCR
+                # clients plus pending approvals; the owner can re-authorize.
+                connection.executescript(
+                    """
+                    DROP TABLE access_tokens;
+                    DROP TABLE refresh_tokens;
+                    DELETE FROM authorization_codes;
+                    CREATE TABLE access_tokens (
+                        token TEXT PRIMARY KEY,
+                        grant_id TEXT NOT NULL,
+                        client_id TEXT NOT NULL,
+                        scopes_json TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issuer TEXT NOT NULL,
+                        resource TEXT NOT NULL,
+                        subject TEXT NOT NULL
+                    );
+                    CREATE TABLE refresh_tokens (
+                        token TEXT PRIMARY KEY,
+                        grant_id TEXT NOT NULL,
+                        client_id TEXT NOT NULL,
+                        scopes_json TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issuer TEXT NOT NULL,
+                        resource TEXT NOT NULL,
+                        subject TEXT NOT NULL
+                    );
+                    """
+                )
             connection.commit()
             self._initialized = True
 
@@ -302,12 +354,14 @@ class OAuthStore:
         code: str,
         client_id: str,
         *,
+        issuer: str,
         access_ttl_s: int,
         refresh_ttl_s: int,
     ) -> tuple[str, str, list[str], int, int, str, str] | None:
         now = int(time.time())
         access = secrets.token_urlsafe(32)
         refresh = secrets.token_urlsafe(32)
+        grant_id = secrets.token_urlsafe(24)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
@@ -322,12 +376,38 @@ class OAuthStore:
             access_exp = now + access_ttl_s
             refresh_exp = now + refresh_ttl_s
             db.execute(
-                "INSERT INTO access_tokens VALUES (?, ?, ?, ?, ?, ?)",
-                (access, client_id, json.dumps(scopes), access_exp, row["resource"], row["subject"]),
+                """
+                INSERT INTO access_tokens(
+                    token, grant_id, client_id, scopes_json, expires_at, issuer, resource, subject
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    access,
+                    grant_id,
+                    client_id,
+                    json.dumps(scopes),
+                    access_exp,
+                    issuer,
+                    row["resource"],
+                    row["subject"],
+                ),
             )
             db.execute(
-                "INSERT INTO refresh_tokens VALUES (?, ?, ?, ?, ?, ?)",
-                (refresh, client_id, json.dumps(scopes), refresh_exp, row["resource"], row["subject"]),
+                """
+                INSERT INTO refresh_tokens(
+                    token, grant_id, client_id, scopes_json, expires_at, issuer, resource, subject
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    refresh,
+                    grant_id,
+                    client_id,
+                    json.dumps(scopes),
+                    refresh_exp,
+                    issuer,
+                    row["resource"],
+                    row["subject"],
+                ),
             )
             db.commit()
         return access, refresh, scopes, access_exp, refresh_exp, row["resource"], row["subject"]
@@ -375,20 +455,55 @@ class OAuthStore:
             access_exp = now + access_ttl_s
             refresh_exp = now + refresh_ttl_s
             db.execute(
-                "INSERT INTO access_tokens VALUES (?, ?, ?, ?, ?, ?)",
-                (new_access, client_id, json.dumps(scopes), access_exp, row["resource"], row["subject"]),
+                """
+                INSERT INTO access_tokens(
+                    token, grant_id, client_id, scopes_json, expires_at, issuer, resource, subject
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_access,
+                    row["grant_id"],
+                    client_id,
+                    json.dumps(scopes),
+                    access_exp,
+                    row["issuer"],
+                    row["resource"],
+                    row["subject"],
+                ),
             )
             db.execute(
-                "INSERT INTO refresh_tokens VALUES (?, ?, ?, ?, ?, ?)",
-                (new_refresh, client_id, json.dumps(scopes), refresh_exp, row["resource"], row["subject"]),
+                """
+                INSERT INTO refresh_tokens(
+                    token, grant_id, client_id, scopes_json, expires_at, issuer, resource, subject
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_refresh,
+                    row["grant_id"],
+                    client_id,
+                    json.dumps(scopes),
+                    refresh_exp,
+                    row["issuer"],
+                    row["resource"],
+                    row["subject"],
+                ),
             )
             db.commit()
         return new_access, new_refresh, access_exp, refresh_exp, row["resource"], row["subject"]
 
     def revoke(self, token: str) -> None:
         with self.connection() as db:
-            db.execute("DELETE FROM access_tokens WHERE token = ?", (token,))
-            db.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT grant_id FROM access_tokens WHERE token = ?", (token,)).fetchone()
+            if row is None:
+                row = db.execute("SELECT grant_id FROM refresh_tokens WHERE token = ?", (token,)).fetchone()
+            if row is None:
+                db.rollback()
+                return
+            grant_id = row["grant_id"]
+            db.execute("DELETE FROM access_tokens WHERE grant_id = ?", (grant_id,))
+            db.execute("DELETE FROM refresh_tokens WHERE grant_id = ?", (grant_id,))
+            db.commit()
 
 
 class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, GatewayRefreshToken, AccessToken]):
@@ -438,6 +553,7 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
             self.store.consume_code_and_issue_tokens,
             authorization_code.code,
             client.client_id,
+            issuer=self.config.issuer_url,
             access_ttl_s=self.config.access_token_ttl_s,
             refresh_ttl_s=self.config.refresh_token_ttl_s,
         )
@@ -456,7 +572,11 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> GatewayRefreshToken | None:
         row = await asyncio.to_thread(self.store.load_refresh, refresh_token, client.client_id)
-        if row is None or row["resource"] != self.config.resource_url:
+        if (
+            row is None
+            or row["resource"] != self.config.resource_url
+            or row["issuer"] != self.config.issuer_url
+        ):
             return None
         return GatewayRefreshToken(
             token=row["token"],
@@ -465,6 +585,7 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
             expires_at=int(row["expires_at"]),
             subject=row["subject"],
             resource=row["resource"],
+            issuer=row["issuer"],
         )
 
     async def exchange_refresh_token(
@@ -473,6 +594,11 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
         refresh_token: GatewayRefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
+        if (
+            refresh_token.resource != self.config.resource_url
+            or refresh_token.issuer != self.config.issuer_url
+        ):
+            raise TokenError(error="invalid_grant", error_description="refresh token belongs to another issuer or resource")
         try:
             issued = await asyncio.to_thread(
                 self.store.rotate_refresh,
@@ -497,7 +623,11 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         row = await asyncio.to_thread(self.store.load_access, token)
-        if row is None or row["resource"] != self.config.resource_url:
+        if (
+            row is None
+            or row["resource"] != self.config.resource_url
+            or row["issuer"] != self.config.issuer_url
+        ):
             return None
         return AccessToken(
             token=row["token"],
@@ -506,7 +636,7 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
             expires_at=int(row["expires_at"]),
             resource=row["resource"],
             subject=row["subject"],
-            claims={"iss": self.config.issuer_url},
+            claims={"iss": row["issuer"]},
         )
 
     async def revoke_token(self, token: AccessToken | GatewayRefreshToken) -> None:

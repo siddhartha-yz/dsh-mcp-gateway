@@ -60,6 +60,8 @@ The DSH Web Host is treated as an unauthenticated internal runtime endpoint and 
 
 The gateway listener and the public MCP origin are separate concepts. The process can remain bound to `127.0.0.1` while a reverse proxy presents `https://gateway.example.com`. MCP's DNS-rebinding protection must remain enabled in that topology, with the declared public Host/Origin explicitly allowlisted alongside loopback values. Passing only the loopback bind host to the MCP SDK is insufficient: its secure localhost default accepts only localhost Host headers and will reject an authenticated reverse-proxied `/mcp` request. The CLI therefore derives transport-security allowlists from `--public-base-url` rather than disabling the protection.
 
+OAuth bearer state is also fail-closed across deployment changes. Persisted access/refresh rows are bound to both issuer and resource, and each authorization grant has a private family id retained through refresh rotation. Revoking either an access or refresh token deletes the whole family. A database created by the earlier token schema cannot safely infer those families, so migration preserves registered OAuth clients but invalidates legacy authorization-code/token state and requires reauthorization.
+
 ## Future composition
 
 ```text

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,7 @@ from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 
 if MCP_AVAILABLE:
-    from mcp.server.auth.provider import AuthorizationParams
+    from mcp.server.auth.provider import AuthorizationParams, TokenError
     from mcp.shared.auth import OAuthClientInformationFull
 
     from dsh_mcp_gateway.oauth import (
@@ -78,6 +79,161 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(limiter.allowed("c"))
         limiter.clear("a")
         self.assertFalse(limiter.allowed("a"))
+
+    async def issue_tokens(
+        self,
+        root: Path,
+        *,
+        client_id: str = "client-1",
+    ):
+        config = self.config(root)
+        provider = EmbeddedOAuthProvider(config)
+        client = OAuthClientInformationFull(
+            client_id=client_id,
+            redirect_uris=["http://127.0.0.1:9999/callback"],
+            response_types=["code"],
+            grant_types=["authorization_code", "refresh_token"],
+            token_endpoint_auth_method="none",
+            scope="dsh:control",
+        )
+        await provider.register_client(client)
+        target = await provider.authorize(
+            client,
+            AuthorizationParams(
+                state=None,
+                scopes=["dsh:control"],
+                code_challenge="challenge",
+                redirect_uri="http://127.0.0.1:9999/callback",
+                redirect_uri_provided_explicitly=True,
+                resource=config.resource_url,
+            ),
+        )
+        request_id = parse_qs(urlparse(target).query)["request"][0]
+        redirect = await provider.approve(request_id)
+        assert redirect is not None
+        code = parse_qs(urlparse(redirect).query)["code"][0]
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+        tokens = await provider.exchange_authorization_code(client, auth_code)
+        assert tokens.refresh_token is not None
+        return config, provider, client, tokens
+
+    async def test_revoking_access_token_revokes_entire_grant_family(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _config, provider, client, tokens = await self.issue_tokens(Path(tmp))
+            access = await provider.load_access_token(tokens.access_token)
+            refresh = await provider.load_refresh_token(client, tokens.refresh_token)
+            assert access is not None
+            assert refresh is not None
+
+            await provider.revoke_token(access)
+
+            self.assertIsNone(await provider.load_access_token(tokens.access_token))
+            self.assertIsNone(await provider.load_refresh_token(client, tokens.refresh_token))
+
+    async def test_refresh_rotation_preserves_family_for_later_revocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _config, provider, client, tokens = await self.issue_tokens(Path(tmp))
+            original_access = tokens.access_token
+            refresh = await provider.load_refresh_token(client, tokens.refresh_token)
+            assert refresh is not None
+            rotated = await provider.exchange_refresh_token(client, refresh, ["dsh:control"])
+            assert rotated.refresh_token is not None
+            rotated_refresh = await provider.load_refresh_token(client, rotated.refresh_token)
+            assert rotated_refresh is not None
+
+            await provider.revoke_token(rotated_refresh)
+
+            self.assertIsNone(await provider.load_access_token(original_access))
+            self.assertIsNone(await provider.load_access_token(rotated.access_token))
+            self.assertIsNone(await provider.load_refresh_token(client, rotated.refresh_token))
+
+    async def test_tokens_are_bound_to_issuing_oauth_issuer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config, provider, client, tokens = await self.issue_tokens(root)
+            self.assertIsNotNone(await provider.load_access_token(tokens.access_token))
+            refresh = await provider.load_refresh_token(client, tokens.refresh_token)
+            assert refresh is not None
+
+            changed = EmbeddedOAuthProvider(
+                EmbeddedOAuthConfig(
+                    issuer_url="http://localhost:8000",
+                    resource_url=config.resource_url,
+                    state_db=config.state_db,
+                    admin_pin=config.admin_pin,
+                )
+            )
+            self.assertIsNone(await changed.load_access_token(tokens.access_token))
+            self.assertIsNone(await changed.load_refresh_token(client, tokens.refresh_token))
+            with self.assertRaises(TokenError):
+                await changed.exchange_refresh_token(client, refresh, ["dsh:control"])
+
+    async def test_legacy_token_schema_is_invalidated_but_registered_clients_survive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.config(root)
+            client = OAuthClientInformationFull(
+                client_id="legacy-client",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            with sqlite3.connect(config.state_db) as db:
+                db.executescript(
+                    """
+                    CREATE TABLE oauth_clients (
+                        client_id TEXT PRIMARY KEY,
+                        client_json TEXT NOT NULL
+                    );
+                    CREATE TABLE access_tokens (
+                        token TEXT PRIMARY KEY,
+                        client_id TEXT NOT NULL,
+                        scopes_json TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        resource TEXT NOT NULL,
+                        subject TEXT NOT NULL
+                    );
+                    CREATE TABLE refresh_tokens (
+                        token TEXT PRIMARY KEY,
+                        client_id TEXT NOT NULL,
+                        scopes_json TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        resource TEXT NOT NULL,
+                        subject TEXT NOT NULL
+                    );
+                    """
+                )
+                db.execute(
+                    "INSERT INTO oauth_clients VALUES (?, ?)",
+                    (client.client_id, client.model_dump_json()),
+                )
+                db.execute(
+                    "INSERT INTO access_tokens VALUES (?, ?, ?, ?, ?, ?)",
+                    ("legacy-access", client.client_id, '["dsh:control"]', 4102444800, config.resource_url, "owner"),
+                )
+                db.execute(
+                    "INSERT INTO refresh_tokens VALUES (?, ?, ?, ?, ?, ?)",
+                    ("legacy-refresh", client.client_id, '["dsh:control"]', 4102444800, config.resource_url, "owner"),
+                )
+
+            provider = EmbeddedOAuthProvider(config)
+            loaded_client = await provider.get_client(client.client_id)
+            self.assertIsNotNone(loaded_client)
+            self.assertIsNone(await provider.load_access_token("legacy-access"))
+            self.assertIsNone(await provider.load_refresh_token(client, "legacy-refresh"))
+
+            with sqlite3.connect(config.state_db) as db:
+                access_columns = {row[1] for row in db.execute("PRAGMA table_info(access_tokens)")}
+                refresh_columns = {row[1] for row in db.execute("PRAGMA table_info(refresh_tokens)")}
+                self.assertIn("grant_id", access_columns)
+                self.assertIn("issuer", access_columns)
+                self.assertIn("grant_id", refresh_columns)
+                self.assertIn("issuer", refresh_columns)
+                self.assertEqual(db.execute("SELECT count(*) FROM access_tokens").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0], 0)
 
     async def test_clients_and_rotated_tokens_survive_provider_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

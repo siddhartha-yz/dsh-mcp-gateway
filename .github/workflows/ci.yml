@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install test dependencies
+        run: python -m pip install -e '.[server]' ruff
+
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
+
+  dsh-sdk:
+    name: DSH SDK integration imports
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install gateway with all extras
+        run: python -m pip install -e '.[all]'
+
+      - name: Verify MCP and DeepSeek Harness imports
+        run: python -c "import deepseek_harness, mcp, dsh_mcp_gateway; print('all-imports-ok')"
+
+      - name: Run tests in all-extras environment
+        run: python -m unittest discover -s tests -q

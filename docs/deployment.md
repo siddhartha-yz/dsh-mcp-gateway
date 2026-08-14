@@ -1,0 +1,163 @@
+# Deployment
+
+This repository is designed around three independently managed boundaries:
+
+```text
+public HTTPS reverse proxy / tunnel
+              |
+              v
+      dsh-mcp-gateway
+       127.0.0.1:18766
+              |
+              v
+        DSH Web Host
+        127.0.0.1:3080
+              |
+              v
+       agent workspace
+```
+
+The raw DSH Web Host is not an authenticated public API and must stay on loopback or another explicitly trusted private network. The gateway is also loopback-bound in the example deployment; public HTTPS terminates at a reverse proxy or tunnel.
+
+## Tested runtime boundary
+
+The current experimental Web Host adapter is tested against `@deepseek-ai/dsh@0.1.0-rc.6`. Pin that version for a deployment that should match the repository's integration evidence. DSH is a developer-preview dependency, so upgrade it deliberately and run the gateway test suite before changing the pin.
+
+A practical layout is:
+
+```text
+/opt/dsh-runtime/                  pinned DSH CLI/runtime
+/srv/dsh-mcp-gateway/              this repository + Python venv
+/srv/dsh-workspace/                agent working directory
+/var/lib/dsh-harness/              DSH_HOME / durable DSH session state
+/var/lib/dsh-mcp-gateway/          OAuth SQLite state
+/etc/dsh-mcp-gateway/*.env         secrets/configuration, mode 0600
+```
+
+## Install
+
+The commands below are examples for a dedicated Linux host. Adjust user/group ownership and package-management policy to the target machine.
+
+```sh
+sudo useradd --system --home /var/lib/dsh-harness --create-home dsh-agent
+sudo useradd --system --home /var/lib/dsh-mcp-gateway --create-home dsh-gateway
+
+sudo install -d -o dsh-agent -g dsh-agent -m 0700 /var/lib/dsh-harness
+sudo install -d -o dsh-agent -g dsh-agent -m 0750 /srv/dsh-workspace
+sudo install -d -o dsh-gateway -g dsh-gateway -m 0700 /var/lib/dsh-mcp-gateway
+sudo install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway
+```
+
+Install the DSH runtime at the path used by the service template and pin the tested release:
+
+```sh
+sudo npm install --prefix /opt/dsh-runtime @deepseek-ai/dsh@0.1.0-rc.6
+```
+
+Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environment:
+
+```sh
+cd /srv/dsh-mcp-gateway
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[server]'
+```
+
+Before relying on the deployment, run:
+
+```sh
+.venv/bin/ruff check src tests
+.venv/bin/python -m unittest discover -s tests -q
+```
+
+## Secrets and environment
+
+Copy the example files from `deploy/systemd/`:
+
+```sh
+sudo cp deploy/systemd/dsh.env.example /etc/dsh-mcp-gateway/dsh.env
+sudo cp deploy/systemd/gateway.env.example /etc/dsh-mcp-gateway/gateway.env
+sudo chmod 0600 /etc/dsh-mcp-gateway/dsh.env /etc/dsh-mcp-gateway/gateway.env
+```
+
+Set at least:
+
+- `DEEPSEEK_API_KEY` in `dsh.env`;
+- `DSH_MCP_GATEWAY_ADMIN_PIN` in `gateway.env`;
+- `DSH_MCP_PUBLIC_BASE_URL` to the exact public HTTPS origin;
+- `DSH_WORKSPACE` to the agent workspace path.
+
+Do not put these values in the repository, unit files, shell history, or reverse-proxy configuration.
+
+## systemd
+
+Install the units:
+
+```sh
+sudo cp deploy/systemd/dsh-web-host.service /etc/systemd/system/
+sudo cp deploy/systemd/dsh-mcp-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
+```
+
+The gateway uses `Wants=` rather than `Requires=` for the DSH Host. That is intentional: an independent DSH Host restart should not restart the public gateway. While DSH is unavailable, `/healthz` remains 200 but `/readyz` returns 503. Once the Host returns, an existing non-running durable session is routed through the idempotent attach/resume probe.
+
+Check local service state:
+
+```sh
+curl -fsS http://127.0.0.1:18766/healthz
+curl -fsS http://127.0.0.1:18766/readyz
+```
+
+Expected healthy responses are minimal JSON objects; readiness deliberately does not expose DSH provider, workspace, or transport details.
+
+## Reverse proxy or tunnel
+
+The external HTTPS origin must map to `http://127.0.0.1:18766`. For example, a Cloudflare Tunnel ingress can contain:
+
+```yaml
+ingress:
+  - hostname: dsh.example.com
+    service: http://127.0.0.1:18766
+  - service: http_status:404
+```
+
+Configure `DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com` to exactly match that origin. The gateway remains loopback-bound while MCP DNS-rebinding protection explicitly allowlists the declared public Host/Origin plus loopback values.
+
+Never expose `127.0.0.1:3080` through the reverse proxy.
+
+## OAuth and MCP checks
+
+After public HTTPS is active:
+
+```sh
+curl -fsS https://dsh.example.com/.well-known/oauth-authorization-server
+curl -fsS https://dsh.example.com/.well-known/oauth-protected-resource/mcp
+curl -fsS https://dsh.example.com/healthz
+curl -fsS https://dsh.example.com/readyz
+```
+
+The authorization-server metadata should advertise `offline_access`; the protected-resource metadata should require only `dsh:control`. Dynamic client registration, PKCE authorization, refresh-token issuance/rotation, and a two-MCP-session DSH continuation flow are covered by repository tests and development smoke tests.
+
+## Restart semantics
+
+A process restart is not equivalent to authorizing autonomous continuation:
+
+```text
+DSH Host restart
+    -> durable session can be attached/cold-resumed
+    -> durable goal phase/revision/history remain
+    -> goal activation is process-local and remains disarmed
+    -> explicit dsh_goal_resume re-arms autonomous rounds
+```
+
+This is an intentional safety boundary. Do not add a service-level hook that automatically resumes every active durable goal after boot unless a separate durable authorization policy is designed and reviewed.
+
+## Upgrades
+
+Before upgrading MCP or DSH dependencies:
+
+1. update the dependency pin in a branch;
+2. run all repository tests;
+3. rerun cold-resume and public OAuth/MCP smoke tests when DSH wire behavior changes;
+4. review tool schemas/annotations because ChatGPT/custom MCP app deployments may retain an approved snapshot until refreshed;
+5. deploy only after CI is green.

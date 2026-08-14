@@ -1,0 +1,33 @@
+[Unit]
+Description=OAuth-protected MCP gateway for DeepSeek Harness
+Documentation=https://github.com/siddhartha-yz/dsh-mcp-gateway
+After=network-online.target dsh-web-host.service
+Wants=network-online.target dsh-web-host.service
+
+[Service]
+Type=simple
+User=dsh-gateway
+Group=dsh-gateway
+EnvironmentFile=/etc/dsh-mcp-gateway/gateway.env
+WorkingDirectory=/srv/dsh-mcp-gateway
+ExecStart=/srv/dsh-mcp-gateway/.venv/bin/dsh-mcp-gateway --dsh-web-url http://127.0.0.1:3080 --dsh-cwd ${DSH_WORKSPACE} --public-base-url ${DSH_MCP_PUBLIC_BASE_URL} --state-dir /var/lib/dsh-mcp-gateway --bind-host 127.0.0.1 --port 18766
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=30s
+UMask=0077
+StateDirectory=dsh-mcp-gateway
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

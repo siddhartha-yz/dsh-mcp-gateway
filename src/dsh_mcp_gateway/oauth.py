@@ -227,6 +227,13 @@ class OAuthStore:
             connection.commit()
             self._initialized = True
 
+    @staticmethod
+    def _prune_expired(db: sqlite3.Connection, *, now: float) -> None:
+        db.execute("DELETE FROM pending_authorizations WHERE expires_at < ?", (now,))
+        db.execute("DELETE FROM authorization_codes WHERE expires_at < ?", (now,))
+        db.execute("DELETE FROM access_tokens WHERE expires_at < ?", (int(now),))
+        db.execute("DELETE FROM refresh_tokens WHERE expires_at < ?", (int(now),))
+
     def save_client(self, client: OAuthClientInformationFull) -> None:
         with self.connection() as db:
             db.execute(
@@ -237,6 +244,7 @@ class OAuthStore:
     def save_client_limited(self, client: OAuthClientInformationFull, *, max_clients: int) -> bool:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._prune_expired(db, now=time.time())
             existing = db.execute(
                 "SELECT 1 FROM oauth_clients WHERE client_id = ?",
                 (client.client_id,),
@@ -244,7 +252,6 @@ class OAuthStore:
             if existing is None:
                 count = int(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0])
                 if count >= max_clients:
-                    db.rollback()
                     return False
             db.execute(
                 "INSERT OR REPLACE INTO oauth_clients(client_id, client_json) VALUES (?, ?)",
@@ -294,7 +301,7 @@ class OAuthStore:
         now = time.time()
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            db.execute("DELETE FROM pending_authorizations WHERE expires_at < ?", (now,))
+            self._prune_expired(db, now=now)
             total = int(db.execute("SELECT count(*) FROM pending_authorizations").fetchone()[0])
             per_client = int(
                 db.execute(
@@ -303,7 +310,6 @@ class OAuthStore:
                 ).fetchone()[0]
             )
             if total >= max_total or per_client >= max_per_client:
-                db.rollback()
                 return False
             db.execute(
                 """
@@ -366,6 +372,7 @@ class OAuthStore:
             if row is None:
                 db.rollback()
                 return None
+            self._prune_expired(db, now=now)
             db.execute("DELETE FROM pending_authorizations WHERE request_id = ?", (request_id,))
             db.execute(
                 """
@@ -450,6 +457,7 @@ class OAuthStore:
             if row is None:
                 db.rollback()
                 return None
+            self._prune_expired(db, now=now)
             db.execute("DELETE FROM authorization_codes WHERE code = ?", (code,))
             scopes = list(json.loads(row["scopes_json"]))
             access_exp = now + access_ttl_s
@@ -530,6 +538,7 @@ class OAuthStore:
             if not set(scopes).issubset(allowed):
                 db.rollback()
                 raise ValueError("requested refresh scopes exceed original grant")
+            self._prune_expired(db, now=now)
             db.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
             access_exp = now + access_ttl_s
             refresh_exp = now + refresh_ttl_s
@@ -580,6 +589,7 @@ class OAuthStore:
                 db.rollback()
                 return
             grant_id = row["grant_id"]
+            self._prune_expired(db, now=time.time())
             db.execute("DELETE FROM access_tokens WHERE grant_id = ?", (grant_id,))
             db.execute("DELETE FROM refresh_tokens WHERE grant_id = ?", (grant_id,))
             db.commit()

@@ -216,6 +216,71 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                     1,
                 )
 
+    async def test_oauth_writes_prune_expired_short_lived_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            provider = EmbeddedOAuthProvider(config)
+            first = OAuthClientInformationFull(
+                client_id="client-1",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(first)
+            with sqlite3.connect(config.state_db) as db:
+                db.execute(
+                    """
+                    INSERT INTO pending_authorizations(
+                        request_id, client_id, scopes_json, code_challenge,
+                        redirect_uri, redirect_uri_explicit, resource, state, expires_at
+                    ) VALUES ('expired-pending', 'client-1', '[\"dsh:control\"]', 'challenge',
+                              'http://127.0.0.1:9999/callback', 1, ?, NULL, 0)
+                    """,
+                    (config.resource_url,),
+                )
+                db.execute(
+                    """
+                    INSERT INTO authorization_codes(
+                        code, client_id, scopes_json, expires_at, code_challenge,
+                        redirect_uri, redirect_uri_explicit, resource, subject
+                    ) VALUES ('expired-code', 'client-1', '[\"dsh:control\"]', 0, 'challenge',
+                              'http://127.0.0.1:9999/callback', 1, ?, 'owner')
+                    """,
+                    (config.resource_url,),
+                )
+                for table, token in (("access_tokens", "expired-access"), ("refresh_tokens", "expired-refresh")):
+                    db.execute(
+                        f"""
+                        INSERT INTO {table}(
+                            token, grant_id, client_id, scopes_json, expires_at,
+                            issuer, resource, subject
+                        ) VALUES (?, 'expired-grant', 'client-1', '[\"dsh:control\"]', 0, ?, ?, 'owner')
+                        """,
+                        (token, config.issuer_url, config.resource_url),
+                    )
+                db.commit()
+
+            second = OAuthClientInformationFull(
+                client_id="client-2",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(second)
+
+            with sqlite3.connect(config.state_db) as db:
+                for table in (
+                    "pending_authorizations",
+                    "authorization_codes",
+                    "access_tokens",
+                    "refresh_tokens",
+                ):
+                    self.assertEqual(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0)
+
     def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
         limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)
         self.assertTrue(limiter.allowed("a"))

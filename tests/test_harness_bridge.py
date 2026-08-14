@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import unittest
 from unittest.mock import patch
@@ -101,6 +102,34 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
             result.structured_content,
             {"value": {"name": "community_echo", "arguments": {"text": "hello"}}},
         )
+
+    async def test_projected_dsh_image_content_reaches_mcp_without_a_bespoke_wrapper(self) -> None:
+        class FakeBridge:
+            def tools(self):
+                return [{"name": "community_image", "description": "image", "parameters": {"type": "object"}}]
+
+            def call(self, name, arguments=None):
+                return {
+                    "isError": False,
+                    "value": {"name": name},
+                    "content": [
+                        {"type": "text", "text": "community image"},
+                        {
+                            "type": "image",
+                            "data": base64.b64encode(b"fake-png").decode("ascii"),
+                            "mediaType": "image/png",
+                        },
+                    ],
+                }
+
+        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        result = await server.call_tool("community_image", {})
+
+        self.assertFalse(result.is_error)
+        self.assertEqual([block.type for block in result.content], ["text", "image"])
+        self.assertEqual(result.content[0].text, "community image")
+        self.assertEqual(result.content[1].mime_type, "image/png")
+        self.assertEqual(base64.b64decode(result.content[1].data), b"fake-png")
 
     async def test_projected_catalog_is_dynamic_without_gateway_restart(self) -> None:
         class FakeBridge:

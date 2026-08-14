@@ -16,6 +16,23 @@ function json(res, status, body) {
   res.end(data)
 }
 
+async function materializeToolContent(ctx, result) {
+  if (!Array.isArray(result?.content)) return result
+  const attachments = ctx.get('attachments')
+  if (!attachments || !result.content.some(block => block?.type === 'image' && block.attachment)) return result
+
+  const content = await Promise.all(result.content.map(async (block) => {
+    if (block?.type !== 'image' || !block.attachment) return block
+    const stored = await attachments.readImage(block.attachment)
+    return {
+      type: 'image',
+      data: Buffer.from(stored.data).toString('base64'),
+      mediaType: stored.ref.mediaType,
+    }
+  }))
+  return { ...result, content }
+}
+
 async function readJson(req) {
   let size = 0
   const chunks = []
@@ -196,7 +213,7 @@ export function apply(ctx) {
           signal: AbortSignal.timeout(120_000),
           ...(agent ? { agent } : {}),
         })
-        json(res, 200, result)
+        json(res, 200, await materializeToolContent(ctx, result))
       } catch (error) {
         json(res, 400, {
           error: 'bridge_error',

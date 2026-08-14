@@ -41,17 +41,32 @@ def _projected_tool(schema: dict[str, Any]):
 def _tool_result(result: dict[str, Any]):
     """Translate a DSH ToolRuntime execution result into an MCP call result."""
     try:
-        from mcp.types import CallToolResult, TextContent
+        from mcp.types import CallToolResult, ImageContent, TextContent
     except ImportError as exc:  # pragma: no cover - optional server dependency boundary
         raise RuntimeError("MCP dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
 
     is_error = bool(result.get("isError"))
-    text_parts: list[str] = []
+    content = []
     raw_content = result.get("content")
     if isinstance(raw_content, list):
         for block in raw_content:
-            if isinstance(block, dict) and isinstance(block.get("text"), str):
-                text_parts.append(block["text"])
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                content.append(TextContent(type="text", text=block["text"]))
+                continue
+            if (
+                block.get("type") == "image"
+                and isinstance(block.get("data"), str)
+                and isinstance(block.get("mediaType"), str)
+            ):
+                content.append(
+                    ImageContent(
+                        type="image",
+                        data=block["data"],
+                        mime_type=block["mediaType"],
+                    )
+                )
 
     structured: dict[str, Any] = {}
     if "value" in result:
@@ -63,14 +78,16 @@ def _tool_result(result: dict[str, Any]):
     if is_error and isinstance(result.get("error"), dict):
         structured["error"] = result["error"]
         message = result["error"].get("message")
-        if isinstance(message, str) and not text_parts:
-            text_parts.append(message)
-    if not text_parts:
+        if isinstance(message, str) and not content:
+            content.append(TextContent(type="text", text=message))
+    if not content:
         fallback = structured if structured else result
-        text_parts.append(json.dumps(fallback, ensure_ascii=False, separators=(",", ":")))
+        content.append(
+            TextContent(type="text", text=json.dumps(fallback, ensure_ascii=False, separators=(",", ":")))
+        )
 
     return CallToolResult(
-        content=[TextContent(type="text", text="\n".join(text_parts))],
+        content=content,
         structured_content=structured or None,
         is_error=is_error,
     )

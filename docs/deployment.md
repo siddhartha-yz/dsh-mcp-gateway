@@ -36,7 +36,17 @@ A practical layout is:
 
 ## Install
 
-The commands below are examples for a dedicated Linux host. Adjust user/group ownership and package-management policy to the target machine.
+The commands below are examples for a dedicated Linux host. Adjust user/group ownership and package-management policy to the target machine. On Debian/Ubuntu, `python3 -m venv` requires the distribution `python3-venv` package; a minimal server image may have Python installed without that component. The target-host bootstrap checks this by actually creating a throwaway venv and installs `python3-venv` with `apt-get` when necessary.
+
+For a first deployment from a clean git checkout, the repository provides a privileged bootstrap that performs the steps in this section, installs one exact committed source snapshot, verifies the official Node archive against Node's published SHA-256 manifest, runs the repository preflight, and then starts the two systemd services:
+
+```sh
+sudo ./scripts/bootstrap-target-host.sh
+```
+
+It prompts for the DeepSeek API key, exact public HTTPS origin, and gateway owner PIN/passphrase without echoing secret values. Existing environment variables `DEEPSEEK_API_KEY`, `DSH_MCP_PUBLIC_BASE_URL`, and `DSH_MCP_GATEWAY_ADMIN_PIN` may be used instead. The script deliberately does not configure DNS or the reverse proxy itself. Use `--no-start` to stop after install/preflight, and `--replace-source` only for a deliberate replacement of an existing `/srv/dsh-mcp-gateway` tree.
+
+The equivalent manual layout follows:
 
 ```sh
 sudo useradd --system --user-group --home /var/lib/dsh-harness --create-home dsh-agent

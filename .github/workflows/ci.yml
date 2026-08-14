@@ -62,6 +62,9 @@ jobs:
           dsh-mcp-gateway --help
           python -m pip check
 
+      - name: Verify deployment script syntax
+        run: bash -n scripts/bootstrap-target-host.sh
+
       - name: Verify systemd unit syntax
         run: ./scripts/verify-systemd.sh
 

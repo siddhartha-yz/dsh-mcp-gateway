@@ -19,6 +19,7 @@ MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 if MCP_AVAILABLE:
     from mcp.server.auth.provider import (
         AuthorizationParams,
+        AuthorizeError,
         RegistrationError,
         TokenError,
     )
@@ -108,6 +109,17 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 max_registered_clients=0,
             )
 
+    def test_pending_per_client_capacity_must_not_exceed_global_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "must not exceed"):
+            EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_pending_authorizations=1,
+                max_pending_per_client=2,
+            )
+
     async def test_dynamic_client_capacity_is_atomic_under_concurrent_registration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = EmbeddedOAuthConfig(
@@ -144,6 +156,65 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             await provider.register_client(registered[0])
             with sqlite3.connect(config.state_db) as db:
                 self.assertEqual(db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0], 1)
+
+    async def test_pending_authorization_capacity_is_atomic_and_prunes_expired_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+                max_pending_authorizations=1,
+                max_pending_per_client=1,
+            )
+            provider = EmbeddedOAuthProvider(config)
+            client = OAuthClientInformationFull(
+                client_id="client-1",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(client)
+
+            async def authorize(state: str):
+                return await provider.authorize(
+                    client,
+                    AuthorizationParams(
+                        state=state,
+                        scopes=["dsh:control"],
+                        code_challenge="challenge",
+                        redirect_uri="http://127.0.0.1:9999/callback",
+                        redirect_uri_provided_explicitly=True,
+                        resource=config.resource_url,
+                    ),
+                )
+
+            results = await asyncio.gather(
+                authorize("first"),
+                authorize("second"),
+                return_exceptions=True,
+            )
+            self.assertEqual(sum(isinstance(result, str) for result in results), 1)
+            failures = [result for result in results if isinstance(result, AuthorizeError)]
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0].error, "temporarily_unavailable")
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(
+                    db.execute("SELECT count(*) FROM pending_authorizations").fetchone()[0],
+                    1,
+                )
+                db.execute("UPDATE pending_authorizations SET expires_at = 0")
+                db.commit()
+
+            target = await authorize("after-expiry")
+            self.assertIn("/approve?request=", target)
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(
+                    db.execute("SELECT count(*) FROM pending_authorizations").fetchone()[0],
+                    1,
+                )
 
     def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
         limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)

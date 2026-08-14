@@ -44,6 +44,8 @@ class EmbeddedOAuthConfig:
     access_token_ttl_s: int = 3600
     refresh_token_ttl_s: int = 30 * 24 * 3600
     max_registered_clients: int = 256
+    max_pending_authorizations: int = 512
+    max_pending_per_client: int = 8
 
     def __post_init__(self) -> None:
         if not self.issuer_url:
@@ -62,12 +64,16 @@ class EmbeddedOAuthConfig:
         for name in ("pending_ttl_s", "code_ttl_s", "access_token_ttl_s", "refresh_token_ttl_s"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
-        if (
-            not isinstance(self.max_registered_clients, int)
-            or isinstance(self.max_registered_clients, bool)
-            or self.max_registered_clients <= 0
+        for name in (
+            "max_registered_clients",
+            "max_pending_authorizations",
+            "max_pending_per_client",
         ):
-            raise ValueError("max_registered_clients must be a positive integer")
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.max_pending_per_client > self.max_pending_authorizations:
+            raise ValueError("max_pending_per_client must not exceed max_pending_authorizations")
 
 
 class GatewayRefreshToken(RefreshToken):
@@ -277,6 +283,48 @@ class OAuthStore:
                     pending.expires_at,
                 ),
             )
+
+    def save_pending_limited(
+        self,
+        pending: PendingAuthorization,
+        *,
+        max_total: int,
+        max_per_client: int,
+    ) -> bool:
+        now = time.time()
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM pending_authorizations WHERE expires_at < ?", (now,))
+            total = int(db.execute("SELECT count(*) FROM pending_authorizations").fetchone()[0])
+            per_client = int(
+                db.execute(
+                    "SELECT count(*) FROM pending_authorizations WHERE client_id = ?",
+                    (pending.client_id,),
+                ).fetchone()[0]
+            )
+            if total >= max_total or per_client >= max_per_client:
+                db.rollback()
+                return False
+            db.execute(
+                """
+                INSERT INTO pending_authorizations(
+                    request_id, client_id, scopes_json, code_challenge,
+                    redirect_uri, redirect_uri_explicit, resource, state, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pending.request_id,
+                    pending.client_id,
+                    json.dumps(pending.scopes),
+                    pending.code_challenge,
+                    pending.redirect_uri,
+                    int(pending.redirect_uri_provided_explicitly),
+                    pending.resource,
+                    pending.state,
+                    pending.expires_at,
+                ),
+            )
+        return True
 
     def load_pending(self, request_id: str) -> PendingAuthorization | None:
         now = time.time()
@@ -565,8 +613,8 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
         if not set(scopes).issubset(self.config.scopes):
             raise AuthorizeError(error="invalid_scope", error_description="requested scope is not allowed")
         request_id = secrets.token_urlsafe(24)
-        await asyncio.to_thread(
-            self.store.save_pending,
+        saved = await asyncio.to_thread(
+            self.store.save_pending_limited,
             PendingAuthorization(
                 request_id=request_id,
                 client_id=client.client_id,
@@ -578,7 +626,14 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
                 state=params.state,
                 expires_at=time.time() + self.config.pending_ttl_s,
             ),
+            max_total=self.config.max_pending_authorizations,
+            max_per_client=self.config.max_pending_per_client,
         )
+        if not saved:
+            raise AuthorizeError(
+                error="temporarily_unavailable",
+                error_description="authorization request capacity reached; retry later",
+            )
         return f"{self.config.issuer_url.rstrip('/')}/approve?request={quote(request_id)}"
 
     async def load_authorization_code(

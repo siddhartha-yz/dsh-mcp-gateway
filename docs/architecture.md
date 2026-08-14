@@ -8,7 +8,9 @@ It may own ChatGPT-facing OAuth/MCP transport, public access glue, capability pr
 
 local-shell-mcp is an implementation/reference source for proven public-tunnel, OAuth/remote-MCP, remote-worker, browser, and other differentiated execution capabilities. It is not the primary harness in this architecture.
 
-The primary bridge is deliberately small and stays inside DSH's native capability model. A DSH-resident Cordis plugin creates one idle DSH Agent only as a scope/capability identity, mounts the deployment's default agent preset through `agentPresets.mount(agentCtx)`, and never submits a prompt to that Agent or supplies provider/model configuration. ChatGPT remains the reasoning agent.
+The primary bridge is deliberately small and stays inside DSH's native capability model. A DSH-resident Cordis plugin creates one idle DSH Agent only as a scope/capability identity, mounts the deployment's default agent preset through `agentPresets.mount(agentCtx)`, and never submits a prompt to that Agent. ChatGPT remains the reasoning agent.
+
+Some DSH-native tools, notably `read_image`, deliberately gate execution on the calling Agent's exact routed model metadata. The bridge represents the external ChatGPT consumer with a metadata-only local route whose model declares `text` and `image` input. The route has no credential and its inference method is a hard failure. This gives DSH's existing modality gate truthful capability metadata without introducing another reasoning path or reimplementing the filesystem/image tool in the gateway.
 
 The bridge then reads `ctx.tools.schemas(agent)` and executes calls with `ctx.tools.execute({ ..., agent })`; SkillRegistry discovery/loading receives the same agent scope. The public OAuth/MCP gateway talks only to that loopback bridge and dynamically projects those DSH schemas as first-class MCP tools. DSH therefore remains authoritative for preset composition, scoped registrations, restrictions, guards, jobs/filesystem/session ownership, skills, and community extensions.
 

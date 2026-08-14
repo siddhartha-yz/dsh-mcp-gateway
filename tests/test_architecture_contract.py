@@ -34,7 +34,11 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("ctx.skills.list", plugin)
         self.assertIn("ctx.skills.get", plugin)
         self.assertIn("...(agent ? { scope: agent } : {})", plugin)
-        self.assertIn("supplies no provider/model config", plugin)
+        self.assertIn("ExternalChatGPTCapabilityAdapter", plugin)
+        self.assertIn("inputModalities: ['text', 'image']", plugin)
+        self.assertIn("the capability identity cannot perform model inference", plugin)
+        self.assertIn("provider: EXTERNAL_PROVIDER", plugin)
+        self.assertIn("model: EXTERNAL_MODEL", plugin)
         self.assertNotIn("DEEPSEEK_API_KEY", plugin)
 
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")

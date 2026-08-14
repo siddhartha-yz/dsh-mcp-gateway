@@ -1,10 +1,44 @@
 import { randomUUID } from 'node:crypto'
 
 export const name = 'dsh-chatgpt-bridge'
-export const inject = ['webServer', 'tools', 'skills']
+export const inject = ['webServer', 'tools', 'skills', 'llm']
 
 const PREFIX = '/api/chatgpt-bridge'
 const MAX_BODY_BYTES = 1_000_000
+const EXTERNAL_PROVIDER = 'chatgpt-web-external'
+const EXTERNAL_MODEL = 'chatgpt-web'
+
+class ExternalChatGPTCapabilityAdapter {
+  providerInfo(provider) {
+    return { id: provider, name: 'ChatGPT Web (external capability identity)' }
+  }
+
+  listModels(provider) {
+    return Promise.resolve([{
+      provider,
+      id: EXTERNAL_MODEL,
+      name: 'ChatGPT Web',
+      inputModalities: ['text', 'image'],
+    }])
+  }
+
+  resolveModel(provider, model) {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: 'ChatGPT Web',
+      inputModalities: ['text', 'image'],
+    })
+  }
+
+  providerRetryPolicy() {
+    return undefined
+  }
+
+  async *stream() {
+    throw new Error('ChatGPT Web is external to DSH; the capability identity cannot perform model inference')
+  }
+}
 
 function json(res, status, body) {
   const data = JSON.stringify(body)
@@ -49,6 +83,13 @@ async function readJson(req) {
 export function apply(ctx) {
   let capabilityHandlePromise
 
+  // Some native DSH tools gate their output modality through the calling
+  // agent's exact model route. The bridge therefore registers a metadata-only
+  // route describing ChatGPT Web's accepted modalities. Its stream method is a
+  // hard failure: DSH can use the route only for capability checks, never for
+  // inference. ChatGPT remains the sole reasoning/model agent.
+  ctx.llm.registerAdapter([EXTERNAL_PROVIDER], new ExternalChatGPTCapabilityAdapter())
+
   async function capabilityAgent() {
     const agents = ctx.get('agents')
     const presets = ctx.get('agentPresets')
@@ -57,14 +98,18 @@ export function apply(ctx) {
 
     capabilityHandlePromise = agents.create({
       sessionId: `chatgpt-bridge-${randomUUID()}`,
+      agentOptions: {
+        provider: EXTERNAL_PROVIDER,
+        model: EXTERNAL_MODEL,
+      },
       meta: {
         cwd: process.cwd(),
         agentPreset: presets.defaultId,
       },
       // This Agent is only DSH's native scope/capability identity. The bridge
-      // never submits a prompt to it, and supplies no provider/model config.
-      // ChatGPT remains the sole reasoning/model agent while ToolRuntime still
-      // sees the exact preset-scoped world DSH intended for a session.
+      // never submits a prompt to it. Its metadata-only route cannot perform
+      // inference, while ToolRuntime sees the exact preset-scoped world DSH
+      // intended for a session.
       setup: async agentCtx => {
         await presets.mount(agentCtx)
       },

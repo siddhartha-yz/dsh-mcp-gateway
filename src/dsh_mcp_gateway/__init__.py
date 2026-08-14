@@ -44,7 +44,8 @@ def build_mcp_server(
         description="Control long-lived DeepSeek Harness agent sessions.",
         instructions=(
             "Use dsh_start for a new task and keep its session_id. "
-            "Use dsh_status or dsh_history to observe it, then dsh_continue to steer it later."
+            "Use dsh_status or dsh_history to observe it, dsh_history_page for older durable pages, "
+            "then dsh_continue to steer it later."
         ),
         auth_server_provider=auth_server_provider,
         auth=auth,
@@ -69,6 +70,19 @@ def build_mcp_server(
     def dsh_history(session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Read the newest durable or projected events for one DSH session."""
         return service.history(session_id, limit=limit)
+
+    @mcp.tool(name="dsh_history_page", annotations=read_only)
+    def dsh_history_page(
+        session_id: str,
+        before_seq: int | None = None,
+        max_messages: int = 50,
+    ) -> dict[str, Any]:
+        """Read one durable history page backwards; use next_before_seq to load older pages."""
+        return service.history_page(
+            session_id,
+            before_seq=before_seq,
+            max_messages=max_messages,
+        )
 
     @mcp.tool(name="dsh_list", annotations=read_only)
     def dsh_list() -> list[dict[str, Any]]:

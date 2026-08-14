@@ -74,6 +74,19 @@ class GatewayService:
     def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
         return self._backend.history(session_id, limit=limit)
 
+    def history_page(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        max_messages: int = 50,
+    ) -> dict[str, Any]:
+        return self._backend.history_page(
+            session_id,
+            before_seq=before_seq,
+            max_messages=max_messages,
+        )
+
     def list_sessions(self) -> list[dict[str, Any]]:
         return self._backend.list_sessions()
 

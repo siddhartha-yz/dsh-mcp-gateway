@@ -32,6 +32,14 @@ class DshControlBackend(DshSessionBackend, Protocol):
 
     def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]: ...
 
+    def history_page(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        max_messages: int = 50,
+    ) -> dict[str, Any]: ...
+
     def list_sessions(self) -> list[dict[str, Any]]: ...
 
     def cancel(self, session_id: str) -> dict[str, Any]: ...
@@ -65,6 +73,10 @@ class PublicSdkClient(Protocol):
 
 class ColdResumeUnavailable(RuntimeError):
     """The current public DSH SDK cannot reopen an on-disk session."""
+
+
+class HistoryPaginationUnavailable(RuntimeError):
+    """The selected backend cannot provide authoritative durable history pages."""
 
 
 class GoalControlUnavailable(RuntimeError):
@@ -244,6 +256,41 @@ class ExperimentalWebHostBackend:
                 events.append(dict(entry["event"]))
         return events[-limit:]
 
+    def history_page(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        max_messages: int = 50,
+    ) -> dict[str, Any]:
+        if before_seq is not None and (
+            not isinstance(before_seq, int) or isinstance(before_seq, bool) or before_seq < 0
+        ):
+            raise ValueError("before_seq must be a non-negative integer or None")
+        if not isinstance(max_messages, int) or isinstance(max_messages, bool) or not 1 <= max_messages <= 1000:
+            raise ValueError("max_messages must be an integer in [1, 1000]")
+        value = self._history_page(session_id, limit=max_messages, before_seq=before_seq)
+        entries = value.get("events")
+        has_more = value.get("hasMore")
+        if not isinstance(entries, list) or not isinstance(has_more, bool):
+            raise ExperimentalWebHostError("session.history returned invalid pagination data")
+        events: list[dict[str, Any]] = []
+        seqs: list[int] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("event"), dict):
+                continue
+            event = dict(entry["event"])
+            events.append(event)
+            seq = event.get("seq")
+            if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0:
+                seqs.append(seq)
+        return {
+            "session_id": session_id,
+            "events": events,
+            "has_more": has_more,
+            "next_before_seq": min(seqs) if has_more and seqs else None,
+        }
+
     def goal_status(self, session_id: str) -> dict[str, Any]:
         if self.presence(session_id) is SessionPresence.ABSENT:
             raise KeyError(session_id)
@@ -346,11 +393,17 @@ class ExperimentalWebHostBackend:
             "canceled": value.get("accepted") is True,
         }
 
-    def _history_page(self, session_id: str, *, limit: int = 100) -> dict[str, Any]:
-        return self._call(
-            "session.history",
-            {"sessionId": session_id, "maxMessages": limit},
-        )
+    def _history_page(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+        before_seq: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"sessionId": session_id, "maxMessages": limit}
+        if before_seq is not None:
+            payload["beforeSeq"] = before_seq
+        return self._call("session.history", payload)
 
     def _goal_projection(self, session_id: str) -> dict[str, Any] | None:
         value = self._history_page(session_id, limit=1)
@@ -610,6 +663,25 @@ class PublicSdkBackend:
             raise KeyError(session_id)
         with self._lock:
             return [dict(event) for event in self._events.get(session_id, ())[-limit:]]
+
+    def history_page(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        max_messages: int = 50,
+    ) -> dict[str, Any]:
+        if before_seq is not None and (
+            not isinstance(before_seq, int) or isinstance(before_seq, bool) or before_seq < 0
+        ):
+            raise ValueError("before_seq must be a non-negative integer or None")
+        if not isinstance(max_messages, int) or isinstance(max_messages, bool) or not 1 <= max_messages <= 1000:
+            raise ValueError("max_messages must be an integer in [1, 1000]")
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise HistoryPaginationUnavailable(
+            "the public DSH SDK bridge only observes live notifications and cannot provide authoritative durable pages"
+        )
 
     def list_sessions(self) -> list[dict[str, Any]]:
         return [self.status(session_id) for session_id in self._catalog.ids()]

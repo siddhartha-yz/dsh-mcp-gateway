@@ -14,6 +14,7 @@ from dsh_mcp_gateway.backend import (
     ColdResumeUnavailable,
     ExperimentalWebHostBackend,
     GoalControlUnavailable,
+    HistoryPaginationUnavailable,
     PublicSdkBackend,
     PublicSdkBridge,
     SessionCatalog,
@@ -57,6 +58,21 @@ class FakeBackend:
     def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
         self.calls.append(("history", session_id, limit))
         return [{"type": "turn/end"}]
+
+    def history_page(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        max_messages: int = 50,
+    ) -> dict[str, Any]:
+        self.calls.append(("history_page", session_id, before_seq, max_messages))
+        return {
+            "session_id": session_id,
+            "events": [{"type": "turn/end", "seq": 10}],
+            "has_more": False,
+            "next_before_seq": None,
+        }
 
     def list_sessions(self) -> list[dict[str, Any]]:
         self.calls.append(("list_sessions",))
@@ -168,6 +184,14 @@ class GatewayServiceTests(unittest.TestCase):
             [("status", "s1"), ("history", "s1", 5), ("list_sessions",), ("cancel", "s1")],
         )
 
+    def test_history_page_delegates_cursor_without_session_routing(self) -> None:
+        backend = FakeBackend(SessionPresence.ABSENT)
+        page = GatewayService(backend).history_page("s1", before_seq=42, max_messages=25)
+        self.assertEqual(page["events"][0]["seq"], 10)
+        self.assertFalse(page["has_more"])
+        self.assertIsNone(page["next_before_seq"])
+        self.assertEqual(backend.calls, [("history_page", "s1", 42, 25)])
+
 
 class FakeWebHostHandler(BaseHTTPRequestHandler):
     server: Any
@@ -246,18 +270,25 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
         elif method == "session.history":
             session_id = payload["sessionId"]
             state = sessions[session_id]
-            entries = [{"event": event} for event in state["events"]]
-            result = {
-                "ok": True,
-                "value": {
-                    "events": entries,
-                    "hasMore": False,
-                    "projections": {
-                        "asOfSeq": len(state["events"]),
-                        "values": {"goal": state.get("goal")},
-                    },
-                },
+            before_seq = payload.get("beforeSeq")
+            max_messages = payload.get("maxMessages", 50)
+            candidates = [
+                event
+                for event in state["events"]
+                if before_seq is None or event.get("seq", -1) < before_seq
+            ]
+            has_more = len(candidates) > max_messages
+            entries = [{"event": event} for event in candidates[-max_messages:]]
+            value: dict[str, Any] = {
+                "events": entries,
+                "hasMore": has_more,
             }
+            if before_seq is None:
+                value["projections"] = {
+                    "asOfSeq": len(state["events"]),
+                    "values": {"goal": state.get("goal")},
+                }
+            result = {"ok": True, "value": value}
         elif method == "goal.create":
             session_id = payload["sessionId"]
             state = sessions[session_id]
@@ -392,6 +423,53 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.server.sessions["fresh-1"]["running"] = False
         self.assertEqual(self.backend.status("fresh-1")["state"], "persisted")
         self.assertEqual(self.backend.status("fresh-1")["status"], "not-running")
+
+    def test_history_page_walks_backwards_with_before_seq_cursor(self) -> None:
+        self.server.sessions["page-1"] = {
+            "running": False,
+            "cwd": "/tmp/project",
+            "events": [
+                {"type": "user/message", "seq": 1},
+                {"type": "assistant/message", "seq": 2},
+                {"type": "turn/end", "seq": 3},
+                {"type": "user/message", "seq": 4},
+                {"type": "turn/end", "seq": 5},
+            ],
+        }
+        self.server.calls.clear()
+
+        tail = self.backend.history_page("page-1", max_messages=2)
+        self.assertEqual([event["seq"] for event in tail["events"]], [4, 5])
+        self.assertTrue(tail["has_more"])
+        self.assertEqual(tail["next_before_seq"], 4)
+        self.assertEqual(
+            self.server.calls[-1],
+            ("session.history", {"sessionId": "page-1", "maxMessages": 2}),
+        )
+
+        older = self.backend.history_page("page-1", before_seq=4, max_messages=2)
+        self.assertEqual([event["seq"] for event in older["events"]], [2, 3])
+        self.assertTrue(older["has_more"])
+        self.assertEqual(older["next_before_seq"], 2)
+        self.assertEqual(
+            self.server.calls[-1],
+            ("session.history", {"sessionId": "page-1", "maxMessages": 2, "beforeSeq": 4}),
+        )
+
+        oldest = self.backend.history_page("page-1", before_seq=2, max_messages=2)
+        self.assertEqual([event["seq"] for event in oldest["events"]], [1])
+        self.assertFalse(oldest["has_more"])
+        self.assertIsNone(oldest["next_before_seq"])
+
+    def test_history_page_validates_cursor_and_page_size(self) -> None:
+        with self.assertRaisesRegex(ValueError, "before_seq"):
+            self.backend.history_page("cold-1", before_seq=-1)
+        with self.assertRaisesRegex(ValueError, "before_seq"):
+            self.backend.history_page("cold-1", before_seq=True)
+        with self.assertRaisesRegex(ValueError, "max_messages"):
+            self.backend.history_page("cold-1", max_messages=0)
+        with self.assertRaisesRegex(ValueError, "max_messages"):
+            self.backend.history_page("cold-1", max_messages=1001)
 
     def test_goal_create_is_structured_and_arms_existing_session(self) -> None:
         created = self.backend.goal_create(
@@ -568,6 +646,13 @@ class PublicSdkBackendTests(unittest.TestCase):
             with self.assertRaises(GoalControlUnavailable):
                 backend.goal_pause("s1")
 
+    def test_public_sdk_durable_history_pagination_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(Path(tmp) / "sessions.json"))
+            GatewayService(backend).start("work", session_id="s1")
+            with self.assertRaisesRegex(HistoryPaginationUnavailable, "authoritative durable pages"):
+                backend.history_page("s1")
+
     def test_notification_bridge_projects_sdk_events_without_owning_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()
@@ -606,6 +691,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_continue",
                 "dsh_status",
                 "dsh_history",
+                "dsh_history_page",
                 "dsh_list",
                 "dsh_cancel",
                 "dsh_goal_status",
@@ -619,7 +705,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(start.input_schema["properties"]), {"prompt", "session_id"})
 
         by_name = {tool.name: tool for tool in tools}
-        for name in ("dsh_status", "dsh_history", "dsh_list", "dsh_goal_status"):
+        for name in ("dsh_status", "dsh_history", "dsh_history_page", "dsh_list", "dsh_goal_status"):
             annotations = by_name[name].annotations
             assert annotations is not None
             self.assertTrue(annotations.read_only_hint)
@@ -655,6 +741,25 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             backend.calls,
             [("presence", "s1"), ("create", "s1"), ("prompt", "s1", "do work")],
         )
+
+    async def test_history_page_tool_returns_structured_cursor(self) -> None:
+        backend = FakeBackend(SessionPresence.PERSISTED)
+        server = build_mcp_server(GatewayService(backend))
+        result = await server.call_tool(
+            "dsh_history_page",
+            {"session_id": "s1", "before_seq": 42, "max_messages": 25},
+        )
+        self.assertFalse(result.is_error)
+        self.assertEqual(
+            result.structured_content,
+            {
+                "session_id": "s1",
+                "events": [{"type": "turn/end", "seq": 10}],
+                "has_more": False,
+                "next_before_seq": None,
+            },
+        )
+        self.assertEqual(backend.calls, [("history_page", "s1", 42, 25)])
 
     async def test_goal_create_tool_returns_structured_ref(self) -> None:
         backend = FakeBackend(SessionPresence.LIVE)

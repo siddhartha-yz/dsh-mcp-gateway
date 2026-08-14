@@ -111,6 +111,19 @@ class GatewayService:
             max_messages=max_messages,
         )
 
+    def messages(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return self._backend.messages(
+            session_id,
+            before_seq=before_seq,
+            limit=limit,
+        )
+
     def list_sessions(self) -> list[dict[str, Any]]:
         return self._backend.list_sessions()
 

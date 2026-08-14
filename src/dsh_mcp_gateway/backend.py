@@ -40,6 +40,14 @@ class DshControlBackend(DshSessionBackend, Protocol):
         max_messages: int = 50,
     ) -> dict[str, Any]: ...
 
+    def messages(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]: ...
+
     def list_sessions(self) -> list[dict[str, Any]]: ...
 
     def search_sessions(self, query: str) -> dict[str, Any]: ...
@@ -91,6 +99,10 @@ class ColdResumeUnavailable(RuntimeError):
 
 class HistoryPaginationUnavailable(RuntimeError):
     """The selected backend cannot provide authoritative durable history pages."""
+
+
+class MessageHistoryUnavailable(RuntimeError):
+    """The selected backend cannot provide an authoritative compact transcript."""
 
 
 class SessionSearchUnavailable(RuntimeError):
@@ -309,6 +321,68 @@ class ExperimentalWebHostBackend:
             "events": events,
             "has_more": has_more,
             "next_before_seq": min(seqs) if has_more and seqs else None,
+        }
+
+    def messages(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if before_seq is not None and (
+            not isinstance(before_seq, int) or isinstance(before_seq, bool) or before_seq < 0
+        ):
+            raise ValueError("before_seq must be a non-negative integer or None")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer in [1, 100]")
+        messages: list[dict[str, Any]] = []
+        cursor = before_seq
+        page_has_more = True
+        consumed_cursor: int | None = None
+
+        while len(messages) < limit and page_has_more:
+            remaining = limit - len(messages)
+            value = self._history_page(session_id, limit=remaining, before_seq=cursor)
+            entries = value.get("events")
+            page_has_more = value.get("hasMore")
+            if not isinstance(entries, list) or not isinstance(page_has_more, bool):
+                raise ExperimentalWebHostError("session.history returned invalid transcript pagination data")
+
+            seqs: list[int] = []
+            page_messages: list[dict[str, Any]] = []
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("event"), dict):
+                    continue
+                event = entry["event"]
+                seq = event.get("seq")
+                if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0:
+                    seqs.append(seq)
+                projected = self._project_transcript_message(event)
+                if projected is not None:
+                    page_messages.append(projected)
+            messages = page_messages + messages
+
+            if page_has_more:
+                if not seqs:
+                    raise ExperimentalWebHostError("session.history pagination made no cursor progress")
+                next_cursor = min(seqs)
+                if cursor is not None and next_cursor >= cursor:
+                    raise ExperimentalWebHostError("session.history pagination cursor did not decrease")
+                cursor = next_cursor
+                consumed_cursor = next_cursor
+            else:
+                consumed_cursor = None
+
+        next_before_seq: int | None = None
+        if len(messages) >= limit and page_has_more and consumed_cursor is not None:
+            next_before_seq = self._next_transcript_cursor(session_id, before_seq=consumed_cursor)
+
+        return {
+            "session_id": session_id,
+            "messages": messages,
+            "has_more": next_before_seq is not None,
+            "next_before_seq": next_before_seq,
         }
 
     def goal_status(self, session_id: str) -> dict[str, Any]:
@@ -554,6 +628,92 @@ class ExperimentalWebHostBackend:
         if not isinstance(goal_id, str) or not goal_id or not isinstance(revision, int) or isinstance(revision, bool):
             raise ExperimentalWebHostError("goal projection has invalid CAS ref")
         return {"id": goal_id, "revision": revision}
+
+    def _next_transcript_cursor(self, session_id: str, *, before_seq: int) -> int | None:
+        probe_cursor = before_seq
+        while True:
+            value = self._history_page(session_id, limit=16, before_seq=probe_cursor)
+            entries = value.get("events")
+            has_more = value.get("hasMore")
+            if not isinstance(entries, list) or not isinstance(has_more, bool):
+                raise ExperimentalWebHostError("session.history returned invalid transcript lookahead data")
+
+            seqs: list[int] = []
+            eligible_seqs: list[int] = []
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("event"), dict):
+                    continue
+                event = entry["event"]
+                seq = event.get("seq")
+                if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0:
+                    seqs.append(seq)
+                    if self._project_transcript_message(event) is not None:
+                        eligible_seqs.append(seq)
+            if eligible_seqs:
+                # `beforeSeq` is exclusive. Jump just above the newest eligible
+                # event in the probe window, skipping only filtered messages.
+                return max(eligible_seqs) + 1
+            if not has_more:
+                return None
+            if not seqs:
+                raise ExperimentalWebHostError("session.history transcript lookahead made no cursor progress")
+            next_cursor = min(seqs)
+            if next_cursor >= probe_cursor:
+                raise ExperimentalWebHostError("session.history transcript lookahead cursor did not decrease")
+            probe_cursor = next_cursor
+
+    @staticmethod
+    def _project_transcript_message(event: dict[str, Any]) -> dict[str, Any] | None:
+        if event.get("surfaceOp") != "append":
+            return None
+        event_type = event.get("type")
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return None
+
+        if event_type == "user/message":
+            message = data
+            expected_source_kind = "user"
+            role = "user"
+        elif event_type == "assistant/message":
+            message = data.get("message")
+            expected_source_kind = "model"
+            role = "assistant"
+            if not isinstance(message, dict):
+                return None
+        else:
+            return None
+
+        source = message.get("source")
+        if not isinstance(source, dict) or source.get("kind") != expected_source_kind:
+            return None
+        content = message.get("content")
+        if not isinstance(content, list):
+            return None
+
+        text_parts: list[str] = []
+        omitted_types: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                omitted_types.append("unknown")
+                continue
+            block_type = block.get("type")
+            if block_type == "text" and isinstance(block.get("text"), str):
+                text_parts.append(block["text"])
+            elif isinstance(block_type, str):
+                omitted_types.append(block_type)
+            else:
+                omitted_types.append("unknown")
+
+        return {
+            "seq": event.get("seq"),
+            "time": event.get("time"),
+            "role": role,
+            "message_id": message.get("id"),
+            "source_kind": expected_source_kind,
+            "text": "\n".join(text_parts),
+            "omitted_block_types": list(dict.fromkeys(omitted_types)),
+        }
 
     def _ensure_attached(self, session_id: str) -> None:
         presence = self.presence(session_id)
@@ -821,6 +981,25 @@ class PublicSdkBackend:
             raise KeyError(session_id)
         raise HistoryPaginationUnavailable(
             "the public DSH SDK bridge only observes live notifications and cannot provide authoritative durable pages"
+        )
+
+    def messages(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if before_seq is not None and (
+            not isinstance(before_seq, int) or isinstance(before_seq, bool) or before_seq < 0
+        ):
+            raise ValueError("before_seq must be a non-negative integer or None")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer in [1, 100]")
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise MessageHistoryUnavailable(
+            "the public DSH SDK bridge cannot provide an authoritative durable transcript"
         )
 
     def list_sessions(self) -> list[dict[str, Any]]:

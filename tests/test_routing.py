@@ -16,6 +16,7 @@ from dsh_mcp_gateway.backend import (
     ExperimentalWebHostBackend,
     GoalControlUnavailable,
     HistoryPaginationUnavailable,
+    MessageHistoryUnavailable,
     PublicSdkBackend,
     PublicSdkBridge,
     SessionCatalog,
@@ -77,6 +78,31 @@ class FakeBackend:
         return {
             "session_id": session_id,
             "events": [{"type": "turn/end", "seq": 10}],
+            "has_more": False,
+            "next_before_seq": None,
+        }
+
+    def messages(
+        self,
+        session_id: str,
+        *,
+        before_seq: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        self.calls.append(("messages", session_id, before_seq, limit))
+        return {
+            "session_id": session_id,
+            "messages": [
+                {
+                    "seq": 8,
+                    "time": 9,
+                    "role": "assistant",
+                    "message_id": "m1",
+                    "source_kind": "model",
+                    "text": "latest answer",
+                    "omitted_block_types": [],
+                }
+            ],
             "has_more": False,
             "next_before_seq": None,
         }
@@ -484,6 +510,13 @@ class GatewayServiceTests(unittest.TestCase):
         self.assertFalse(page["has_more"])
         self.assertIsNone(page["next_before_seq"])
         self.assertEqual(backend.calls, [("history_page", "s1", 42, 25)])
+
+    def test_messages_delegate_cursor_without_session_routing(self) -> None:
+        backend = FakeBackend(SessionPresence.ABSENT)
+        result = GatewayService(backend).messages("s1", before_seq=42, limit=20)
+        self.assertEqual(result["messages"][0]["text"], "latest answer")
+        self.assertFalse(result["has_more"])
+        self.assertEqual(backend.calls, [("messages", "s1", 42, 20)])
 
     def test_search_sessions_delegates_without_session_routing(self) -> None:
         backend = FakeBackend(SessionPresence.ABSENT)
@@ -904,6 +937,242 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_messages"):
             self.backend.history_page("cold-1", max_messages=1001)
 
+    def test_messages_cursor_skips_plugin_only_host_pages(self) -> None:
+        assistant = {
+            "type": "assistant/message",
+            "seq": 10,
+            "time": 10,
+            "surfaceOp": "append",
+            "data": {
+                "message": {
+                    "id": "a1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "latest"}],
+                    "source": {"kind": "model", "provider": "mock", "model": "mock"},
+                }
+            },
+        }
+        plugin = {
+            "type": "user/message",
+            "seq": 5,
+            "time": 5,
+            "surfaceOp": "append",
+            "data": {
+                "id": "p1",
+                "role": "user",
+                "content": [{"type": "text", "text": "internal"}],
+                "source": {"kind": "plugin", "plugin": "example"},
+            },
+        }
+        user = {
+            "type": "user/message",
+            "seq": 4,
+            "time": 4,
+            "surfaceOp": "append",
+            "data": {
+                "id": "u1",
+                "role": "user",
+                "content": [{"type": "text", "text": "older human"}],
+                "source": {"kind": "user"},
+            },
+        }
+        raw_prefix = {"type": "turn/start", "seq": 0, "time": 0, "data": {"turn": 1}}
+
+        with patch.object(
+            self.backend,
+            "_history_page",
+            side_effect=[
+                {"events": [{"event": assistant}], "hasMore": True},
+                {"events": [{"event": plugin}], "hasMore": True},
+                {"events": [{"event": user}], "hasMore": True},
+                {"events": [{"event": user}], "hasMore": True},
+                {"events": [{"event": raw_prefix}], "hasMore": False},
+            ],
+        ) as history:
+            latest = self.backend.messages("cold-1", limit=1)
+            older = self.backend.messages("cold-1", before_seq=latest["next_before_seq"], limit=1)
+
+        self.assertEqual([message["message_id"] for message in latest["messages"]], ["a1"])
+        self.assertTrue(latest["has_more"])
+        self.assertEqual(latest["next_before_seq"], 5)
+        self.assertEqual([message["message_id"] for message in older["messages"]], ["u1"])
+        self.assertFalse(older["has_more"])
+        self.assertIsNone(older["next_before_seq"])
+        self.assertEqual(
+            [call.kwargs for call in history.call_args_list],
+            [
+                {"limit": 1, "before_seq": None},
+                {"limit": 16, "before_seq": 10},
+                {"limit": 16, "before_seq": 5},
+                {"limit": 1, "before_seq": 5},
+                {"limit": 16, "before_seq": 4},
+            ],
+        )
+
+    def test_messages_preserve_chronological_order_across_host_pages(self) -> None:
+        assistant = {
+            "type": "assistant/message",
+            "seq": 10,
+            "time": 10,
+            "surfaceOp": "append",
+            "data": {
+                "message": {
+                    "id": "a1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "newer answer"}],
+                    "source": {"kind": "model", "provider": "mock", "model": "mock"},
+                }
+            },
+        }
+        plugin = {
+            "type": "user/message",
+            "seq": 5,
+            "time": 5,
+            "surfaceOp": "append",
+            "data": {
+                "id": "p1",
+                "role": "user",
+                "content": [{"type": "text", "text": "internal"}],
+                "source": {"kind": "plugin", "plugin": "example"},
+            },
+        }
+        user = {
+            "type": "user/message",
+            "seq": 4,
+            "time": 4,
+            "surfaceOp": "append",
+            "data": {
+                "id": "u1",
+                "role": "user",
+                "content": [{"type": "text", "text": "older question"}],
+                "source": {"kind": "user"},
+            },
+        }
+        raw_prefix = {"type": "turn/start", "seq": 0, "time": 0, "data": {"turn": 1}}
+
+        with patch.object(
+            self.backend,
+            "_history_page",
+            side_effect=[
+                {"events": [{"event": plugin}, {"event": assistant}], "hasMore": True},
+                {"events": [{"event": user}], "hasMore": True},
+                {"events": [{"event": raw_prefix}], "hasMore": False},
+            ],
+        ):
+            transcript = self.backend.messages("cold-1", limit=2)
+
+        self.assertEqual(
+            [(message["role"], message["message_id"]) for message in transcript["messages"]],
+            [("user", "u1"), ("assistant", "a1")],
+        )
+        self.assertFalse(transcript["has_more"])
+        self.assertIsNone(transcript["next_before_seq"])
+
+    def test_messages_project_compact_human_model_transcript(self) -> None:
+        self.server.sessions["transcript-1"] = {
+            "running": False,
+            "cwd": "/tmp/project",
+            "events": [
+                {
+                    "type": "user/message",
+                    "seq": 1,
+                    "time": 10,
+                    "surfaceOp": "append",
+                    "data": {
+                        "id": "u1",
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "image", "attachment": {"id": "img1"}},
+                        ],
+                        "source": {"kind": "user"},
+                    },
+                },
+                {
+                    "type": "user/message",
+                    "seq": 2,
+                    "time": 11,
+                    "surfaceOp": "append",
+                    "data": {
+                        "id": "plugin1",
+                        "role": "user",
+                        "content": [{"type": "text", "text": "internal plugin notice"}],
+                        "source": {"kind": "plugin", "plugin": "example"},
+                    },
+                },
+                {
+                    "type": "assistant/message",
+                    "seq": 3,
+                    "time": 12,
+                    "surfaceOp": "append",
+                    "data": {
+                        "turn": 1,
+                        "step": 1,
+                        "message": {
+                            "id": "a1",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "reasoning", "text": "private reasoning"},
+                                {"type": "text", "text": "visible answer"},
+                                {"type": "tool-call", "id": "c1", "name": "read", "arguments": "{}"},
+                            ],
+                            "source": {"kind": "model", "provider": "mock", "model": "mock"},
+                        },
+                    },
+                },
+                {
+                    "type": "assistant/message",
+                    "seq": 4,
+                    "time": 13,
+                    "surfaceOp": {"op": "replace", "start": 1, "end": 3},
+                    "data": {
+                        "turn": 1,
+                        "step": 2,
+                        "message": {
+                            "id": "replacement",
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "model-only replacement"}],
+                            "source": {"kind": "model", "provider": "mock", "model": "mock"},
+                        },
+                    },
+                },
+                {"type": "turn/end", "seq": 5, "time": 14, "data": {"turn": 1}},
+            ],
+            "goal": None,
+        }
+
+        transcript = self.backend.messages("transcript-1", limit=10)
+        self.assertEqual(
+            transcript["messages"],
+            [
+                {
+                    "seq": 1,
+                    "time": 10,
+                    "role": "user",
+                    "message_id": "u1",
+                    "source_kind": "user",
+                    "text": "hello",
+                    "omitted_block_types": ["image"],
+                },
+                {
+                    "seq": 3,
+                    "time": 12,
+                    "role": "assistant",
+                    "message_id": "a1",
+                    "source_kind": "model",
+                    "text": "visible answer",
+                    "omitted_block_types": ["reasoning", "tool-call"],
+                },
+            ],
+        )
+        self.assertFalse(transcript["has_more"])
+        self.assertIsNone(transcript["next_before_seq"])
+
+        older = self.backend.messages("transcript-1", before_seq=3, limit=10)
+        self.assertEqual([message["message_id"] for message in older["messages"]], ["u1"])
+        with self.assertRaisesRegex(ValueError, "limit"):
+            self.backend.messages("transcript-1", limit=101)
+
     def test_session_search_returns_matches_and_validates_query(self) -> None:
         self.server.sessions["search-1"] = {
             "running": False,
@@ -1148,6 +1417,16 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(backend.status("s1")["status"], "running")
             self.assertEqual(backend.history("s1"), [{"type": "turn/start", "seq": 1}])
 
+    def test_public_sdk_compact_transcript_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakePublicSdkClient()
+            backend = PublicSdkBackend(client, SessionCatalog(Path(tmp) / "sessions.json"))
+            GatewayService(backend).start("work", session_id="s1")
+            with self.assertRaisesRegex(MessageHistoryUnavailable, "authoritative durable transcript"):
+                backend.messages("s1")
+            with self.assertRaisesRegex(ValueError, "limit"):
+                backend.messages("s1", limit=0)
+
     def test_failed_first_prompt_rolls_back_catalog_allocation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"
@@ -1271,6 +1550,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_status",
                 "dsh_history",
                 "dsh_history_page",
+                "dsh_messages",
                 "dsh_list",
                 "dsh_search",
                 "dsh_cancel",
@@ -1292,6 +1572,7 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             "dsh_status",
             "dsh_history",
             "dsh_history_page",
+            "dsh_messages",
             "dsh_list",
             "dsh_search",
             "dsh_goal_status",
@@ -1353,6 +1634,18 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(backend.calls, [("history_page", "s1", 42, 25)])
+
+    async def test_messages_tool_returns_compact_transcript(self) -> None:
+        backend = FakeBackend(SessionPresence.PERSISTED)
+        server = build_mcp_server(GatewayService(backend))
+        result = await server.call_tool(
+            "dsh_messages",
+            {"session_id": "s1", "before_seq": 42, "limit": 20},
+        )
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content["messages"][0]["text"], "latest answer")
+        self.assertEqual(result.structured_content["next_before_seq"], None)
+        self.assertEqual(backend.calls, [("messages", "s1", 42, 20)])
 
     async def test_search_tool_returns_structured_session_match(self) -> None:
         backend = FakeBackend(SessionPresence.PERSISTED)

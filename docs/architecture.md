@@ -40,6 +40,8 @@ This matters even when the gateway process itself never restarts. A real rc6 tes
 
 An MCP request should enqueue or steer a DSH session and return a receipt/session id. It should not remain open for the autonomous goal's whole lifetime. DSH continues independently, while observation belongs to separate status/event calls or streams. A later MCP/chat session reconnects using the durable session id.
 
+Reconnect observation has two deliberately different surfaces. Raw `history`/`history_page` preserves DSH events for diagnostics and exact paging. Compact `messages` is a deterministic projection over rc6 `session.history`: only append-origin human `user/message` and model `assistant/message` records are retained, visible text blocks are joined, and non-text block types are reported without exposing reasoning/tool-call bodies. Plugin-produced user context and replacement-origin model copies are excluded. This projection is cold-safe because Host history inspection does not resume/publish an Agent, and it performs no LLM summarization. A transport that lacks authoritative durable history must reject this capability rather than synthesize a partial transcript.
+
 The current admission locks are process-local, so the supported deployment model is one active gateway process for a given DSH Host/public OAuth state. Horizontal replicas would need a distributed admission/ownership protocol before they could preserve the same ordering guarantees. Likewise, the example deployment treats one DSH Host as the owner of a given `DSH_HOME`; it does not use multiple Host processes as concurrent writers to the same durable state.
 
 ## Session discovery is an optional derived capability

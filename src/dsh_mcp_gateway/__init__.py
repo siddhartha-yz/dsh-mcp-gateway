@@ -46,8 +46,9 @@ def build_mcp_server(
         description="Control long-lived DeepSeek Harness agent sessions.",
         instructions=(
             "Use dsh_start for a new task and keep its session_id. "
-            "Use dsh_status or dsh_history to observe it, dsh_history_page for older durable pages, "
-            "dsh_search to recover an older session from remembered message text, then dsh_continue to steer it later."
+            "When reconnecting, use dsh_status and dsh_messages for a compact transcript; use dsh_history or "
+            "dsh_history_page only when raw event detail is needed. Use dsh_search to recover an older session "
+            "from remembered message text, then dsh_continue to steer it later."
         ),
         auth_server_provider=auth_server_provider,
         auth=auth,
@@ -84,6 +85,19 @@ def build_mcp_server(
             session_id,
             before_seq=before_seq,
             max_messages=max_messages,
+        )
+
+    @mcp.tool(name="dsh_messages", annotations=read_only)
+    def dsh_messages(
+        session_id: str,
+        before_seq: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Read a compact human/model transcript without raw tool or reasoning events."""
+        return service.messages(
+            session_id,
+            before_seq=before_seq,
+            limit=limit,
         )
 
     @mcp.tool(name="dsh_list", annotations=read_only)

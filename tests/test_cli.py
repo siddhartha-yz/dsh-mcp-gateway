@@ -49,7 +49,7 @@ class CliTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as tmp,
-            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "12345678"}, clear=False),
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
             patch("dsh_mcp_gateway.cli.ExperimentalWebHostBackend", return_value=fake_backend),
             patch(
                 "dsh_mcp_gateway.cli.build_embedded_oauth_server",

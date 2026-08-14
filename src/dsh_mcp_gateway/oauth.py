@@ -49,8 +49,8 @@ class EmbeddedOAuthConfig:
         object.__setattr__(self, "issuer_url", f"{self.issuer_url.rstrip('/')}/")
         if not self.resource_url:
             raise ValueError("resource_url is required")
-        if len(self.admin_pin) < 6:
-            raise ValueError("admin_pin must contain at least 6 characters")
+        if len(self.admin_pin) < 12:
+            raise ValueError("admin_pin must contain at least 12 characters")
         if not self.scopes or any(not scope for scope in self.scopes):
             raise ValueError("at least one non-empty OAuth scope is required")
         if not self.required_scopes or any(not scope for scope in self.required_scopes):
@@ -724,6 +724,29 @@ class PinAttemptLimiter:
 
 def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
     limiter = PinAttemptLimiter()
+    html_headers = {
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'"
+        ),
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    }
+    redirect_headers = {
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "Referrer-Policy": "no-referrer",
+    }
+
+    def approval_html(body: str, *, status_code: int) -> HTMLResponse:
+        return HTMLResponse(body, status_code=status_code, headers=html_headers)
+
+    def approval_redirect(target: str) -> RedirectResponse:
+        return RedirectResponse(target, status_code=302, headers=redirect_headers)
 
     @mcp.custom_route("/approve", methods=["GET", "POST"], include_in_schema=False)
     async def approval_page(request: Request) -> Response:
@@ -734,7 +757,7 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
             request_id = str(form.get("request", ""))
         pending = await provider.pending(request_id)
         if pending is None:
-            return HTMLResponse("<h1>Invalid or expired authorization request</h1>", status_code=400)
+            return approval_html("<h1>Invalid or expired authorization request</h1>", status_code=400)
 
         client = await provider.get_client(pending.client_id)
         client_name = client.client_name if client is not None and client.client_name else pending.client_id
@@ -746,17 +769,17 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
             if action == "deny":
                 target = await provider.deny(request_id)
                 if target is None:
-                    return HTMLResponse("<h1>Authorization request expired</h1>", status_code=400)
-                return RedirectResponse(target, status_code=302)
+                    return approval_html("<h1>Authorization request expired</h1>", status_code=400)
+                return approval_redirect(target)
             if not limiter.allowed(source):
-                return HTMLResponse("<h1>Too many failed PIN attempts</h1>", status_code=429)
+                return approval_html("<h1>Too many failed PIN attempts</h1>", status_code=429)
             candidate = str(form.get("pin", ""))
             if provider.pin_matches(candidate):
                 limiter.clear(source)
                 target = await provider.approve(request_id)
                 if target is None:
-                    return HTMLResponse("<h1>Authorization request expired</h1>", status_code=400)
-                return RedirectResponse(target, status_code=302)
+                    return approval_html("<h1>Authorization request expired</h1>", status_code=400)
+                return approval_redirect(target)
             limiter.fail(source)
             error = "Invalid PIN"
 
@@ -776,4 +799,4 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
 <button type="submit" name="action" value="deny">Deny</button>
 </form>
 </body></html>"""
-        return HTMLResponse(body, status_code=403 if error else 200, headers={"Cache-Control": "no-store"})
+        return approval_html(body, status_code=403 if error else 200)

@@ -82,7 +82,7 @@ sudo chmod 0600 /etc/dsh-mcp-gateway/dsh.env /etc/dsh-mcp-gateway/gateway.env
 Set at least:
 
 - `DEEPSEEK_API_KEY` in `dsh.env`;
-- `DSH_MCP_GATEWAY_ADMIN_PIN` in `gateway.env`;
+- `DSH_MCP_GATEWAY_ADMIN_PIN` in `gateway.env`; it must be at least 12 characters, and a randomly generated high-entropy value is preferred over a short numeric PIN;
 - `DSH_MCP_PUBLIC_BASE_URL` to the exact public HTTPS origin;
 - `DSH_WORKSPACE` to the agent workspace path.
 

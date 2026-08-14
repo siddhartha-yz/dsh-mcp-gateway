@@ -63,7 +63,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             issuer_url="http://127.0.0.1:8000",
             resource_url="http://127.0.0.1:8000/mcp",
             state_db=root / "oauth.sqlite3",
-            admin_pin="123456",
+            admin_pin="test-admin-pin",
         )
 
     def test_issuer_is_canonicalized_once_for_metadata_and_callbacks(self) -> None:
@@ -79,9 +79,18 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 issuer_url="http://127.0.0.1:8000",
                 resource_url="http://127.0.0.1:8000/mcp",
                 state_db=Path(tmp) / "oauth.sqlite3",
-                admin_pin="123456",
+                admin_pin="test-admin-pin",
                 scopes=("offline_access",),
                 required_scopes=("dsh:control",),
+            )
+
+    def test_admin_pin_requires_at_least_twelve_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "at least 12"):
+            EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="too-short",
             )
 
     def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
@@ -404,12 +413,34 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(authorization.status_code, 302)
                 request_id = parse_qs(urlparse(authorization.headers["location"]).query)["request"][0]
+
+                approval_page = client.get(f"/approve?request={request_id}")
+                self.assertEqual(approval_page.status_code, 200)
+                self.assertEqual(approval_page.headers["cache-control"], "no-store")
+                self.assertEqual(approval_page.headers["pragma"], "no-cache")
+                self.assertEqual(approval_page.headers["referrer-policy"], "no-referrer")
+                self.assertEqual(approval_page.headers["x-content-type-options"], "nosniff")
+                self.assertEqual(approval_page.headers["x-frame-options"], "DENY")
+                self.assertIn("frame-ancestors 'none'", approval_page.headers["content-security-policy"])
+                self.assertIn("form-action 'self'", approval_page.headers["content-security-policy"])
+
+                wrong_pin = client.post(
+                    "/approve",
+                    data={"request": request_id, "pin": "definitely-wrong", "action": "approve"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(wrong_pin.status_code, 403)
+                self.assertEqual(wrong_pin.headers["cache-control"], "no-store")
+                self.assertEqual(wrong_pin.headers["x-frame-options"], "DENY")
+
                 approval = client.post(
                     "/approve",
                     data={"request": request_id, "pin": config.admin_pin, "action": "approve"},
                     follow_redirects=False,
                 )
                 self.assertEqual(approval.status_code, 302)
+                self.assertEqual(approval.headers["cache-control"], "no-store")
+                self.assertEqual(approval.headers["referrer-policy"], "no-referrer")
                 callback = parse_qs(urlparse(approval.headers["location"]).query)
                 self.assertEqual(callback["iss"], [config.issuer_url])
 

@@ -887,8 +887,13 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
             ["session.list", "session.list", "session.models", "session.prompt"],
         )
         self.server.sessions["fresh-1"]["running"] = False
-        self.assertEqual(self.backend.status("fresh-1")["state"], "persisted")
-        self.assertEqual(self.backend.status("fresh-1")["status"], "not-running")
+        self.server.calls.clear()
+        status = self.backend.status("fresh-1")
+        self.assertEqual(status["state"], "persisted")
+        self.assertEqual(status["status"], "not-running")
+        self.assertEqual(status["attachment_state"], "ambiguous-idle-or-cold")
+        self.assertTrue(status["write_attach_probe_required"])
+        self.assertEqual([method for method, _payload in self.server.calls], ["session.list"])
 
     def test_history_page_walks_backwards_with_before_seq_cursor(self) -> None:
         self.server.sessions["page-1"] = {

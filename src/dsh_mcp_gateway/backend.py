@@ -267,9 +267,6 @@ class ExperimentalWebHostBackend:
         return rpc_id
 
     def status(self, session_id: str) -> dict[str, Any]:
-        presence = self.presence(session_id)
-        if presence is SessionPresence.ABSENT:
-            return {"session_id": session_id, "state": "absent"}
         for item in self.list_sessions():
             if item.get("session_id") == session_id:
                 return item
@@ -542,6 +539,8 @@ class ExperimentalWebHostBackend:
                     "session_id": session_id,
                     "state": "live" if running else "persisted",
                     "status": "running" if running else "not-running",
+                    "attachment_state": "running" if running else "ambiguous-idle-or-cold",
+                    "write_attach_probe_required": not running,
                     "updated_at": item.get("updatedAt"),
                     "cwd": item.get("cwd"),
                     "blank": item.get("blank"),

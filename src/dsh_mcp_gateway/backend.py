@@ -188,7 +188,15 @@ class ExperimentalWebHostBackend:
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("base_url must be an absolute http(s) URL")
+            raise ValueError("base_url must be an absolute http(s) origin")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("base_url must not contain user info")
+        if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+            raise ValueError("base_url must be an origin without a path, params, query, or fragment")
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("base_url contains an invalid port") from exc
         if timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         if not allow_non_loopback and not self._is_loopback_host(parsed.hostname):

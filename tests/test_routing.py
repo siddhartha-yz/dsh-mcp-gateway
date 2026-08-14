@@ -841,6 +841,22 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no network authentication"):
             ExperimentalWebHostBackend("http://example.com:3080", cwd="/tmp/project")
 
+    def test_web_host_target_must_be_an_http_origin(self) -> None:
+        cases = (
+            ("http://user:pass@127.0.0.1:3080", "user info"),
+            ("http://127.0.0.1:3080/api", "origin without a path"),
+            ("http://127.0.0.1:3080/;v=1", "origin without a path"),
+            ("http://127.0.0.1:3080/?mode=test", "origin without a path"),
+            ("http://127.0.0.1:3080/#debug", "origin without a path"),
+            ("http://127.0.0.1:not-a-port", "invalid port"),
+        )
+        for base_url, message in cases:
+            with self.subTest(base_url=base_url), self.assertRaisesRegex(ValueError, message):
+                ExperimentalWebHostBackend(base_url, cwd="/tmp/project")
+
+        backend = ExperimentalWebHostBackend("http://127.0.0.1:3080/", cwd="/tmp/project")
+        self.assertEqual(backend.base_url, "http://127.0.0.1:3080")
+
     def test_goal_status_rejects_unknown_session(self) -> None:
         with self.assertRaises(KeyError):
             self.backend.goal_status("missing")

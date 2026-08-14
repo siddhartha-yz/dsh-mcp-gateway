@@ -123,10 +123,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ImportError as exc:
         raise SystemExit("install dsh-mcp-gateway[server] to run the HTTP/OAuth gateway") from exc
 
-    backend = ExperimentalWebHostBackend(
-        args.dsh_web_url,
-        cwd=args.dsh_cwd,
-    )
+    try:
+        backend = ExperimentalWebHostBackend(
+            args.dsh_web_url,
+            cwd=args.dsh_cwd,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"invalid --dsh-web-url: {exc}") from exc
     state_dir = Path(args.state_dir).resolve()
     oauth = EmbeddedOAuthConfig(
         issuer_url=public_base,

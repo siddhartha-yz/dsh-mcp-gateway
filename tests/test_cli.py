@@ -41,6 +41,20 @@ class CliTests(unittest.TestCase):
         ):
             main(["--public-base-url", "https://gateway.example.com"])
 
+    def test_rejects_dsh_web_url_with_path_as_operator_error(self) -> None:
+        with (
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            self.assertRaisesRegex(SystemExit, "invalid --dsh-web-url: .*origin without a path"),
+        ):
+            main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--dsh-web-url",
+                    "http://127.0.0.1:3080/api",
+                ]
+            )
+
     def test_rejects_non_positive_dynamic_client_capacity(self) -> None:
         with self.assertRaisesRegex(SystemExit, "must be positive"):
             main(

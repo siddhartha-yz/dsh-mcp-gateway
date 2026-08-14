@@ -17,7 +17,7 @@ public HTTPS reverse proxy / tunnel
        agent workspace
 ```
 
-The raw DSH Web Host is not an authenticated public API and must stay on loopback or another explicitly trusted private network. The gateway is also loopback-bound in the example deployment; public HTTPS terminates at a reverse proxy or tunnel.
+The raw DSH Web Host is not an authenticated public API and must stay on loopback or another explicitly trusted private network. The gateway is also loopback-bound in the example deployment; public HTTPS terminates at a reverse proxy or tunnel. `--dsh-web-url` names the Host HTTP(S) origin only (for example `http://127.0.0.1:3080`): do not include credentials, an `/api` path prefix, params, query, or fragment. The gateway owns the `/api/<method>` suffix and rejects ambiguous targets at startup.
 
 ## Tested runtime boundary
 

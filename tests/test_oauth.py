@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from dsh_mcp_gateway import build_embedded_oauth_server
@@ -341,6 +342,18 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(limiter.allowed("request-c"))
         limiter.clear("request-a")
         self.assertTrue(limiter.allowed("request-a"))
+
+    def test_pin_limiter_prunes_abandoned_request_keys_and_does_not_track_reads(self) -> None:
+        limiter = PinAttemptLimiter(limit=2, window_s=10)
+        with patch("dsh_mcp_gateway.oauth.time.monotonic", return_value=100.0):
+            limiter.fail("abandoned-request")
+        self.assertIn("abandoned-request", limiter._failures)
+
+        with patch("dsh_mcp_gateway.oauth.time.monotonic", return_value=111.0):
+            self.assertTrue(limiter.allowed("new-request"))
+
+        self.assertNotIn("abandoned-request", limiter._failures)
+        self.assertNotIn("new-request", limiter._failures)
 
     async def issue_tokens(
         self,

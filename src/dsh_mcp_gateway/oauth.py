@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -854,27 +854,33 @@ class PinAttemptLimiter:
         self.limit = limit
         self.window_s = window_s
         self._lock = threading.Lock()
-        self._failures: dict[str, deque[float]] = defaultdict(deque)
+        self._failures: dict[str, deque[float]] = {}
 
     def _prune(self, failures: deque[float], now: float) -> None:
         while failures and now - failures[0] > self.window_s:
             failures.popleft()
 
+    def _prune_all(self, now: float) -> None:
+        stale: list[str] = []
+        for request_id, failures in self._failures.items():
+            self._prune(failures, now)
+            if not failures:
+                stale.append(request_id)
+        for request_id in stale:
+            self._failures.pop(request_id, None)
+
     def allowed(self, request_id: str) -> bool:
         now = time.monotonic()
         with self._lock:
-            failures = self._failures[request_id]
-            self._prune(failures, now)
-            if not failures:
-                self._failures.pop(request_id, None)
-                return True
-            return len(failures) < self.limit
+            self._prune_all(now)
+            failures = self._failures.get(request_id)
+            return failures is None or len(failures) < self.limit
 
     def fail(self, request_id: str) -> None:
         now = time.monotonic()
         with self._lock:
-            failures = self._failures[request_id]
-            self._prune(failures, now)
+            self._prune_all(now)
+            failures = self._failures.setdefault(request_id, deque())
             failures.append(now)
 
     def clear(self, request_id: str) -> None:

@@ -365,14 +365,13 @@ class OAuthStore:
         code = secrets.token_urlsafe(32)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._prune_expired(db, now=now)
             row = db.execute(
-                "SELECT * FROM pending_authorizations WHERE request_id = ? AND expires_at >= ?",
-                (request_id, now),
+                "SELECT * FROM pending_authorizations WHERE request_id = ?",
+                (request_id,),
             ).fetchone()
             if row is None:
-                db.rollback()
                 return None
-            self._prune_expired(db, now=now)
             db.execute("DELETE FROM pending_authorizations WHERE request_id = ?", (request_id,))
             db.execute(
                 """
@@ -408,12 +407,28 @@ class OAuthStore:
         return pending, code
 
     def delete_pending(self, request_id: str) -> PendingAuthorization | None:
-        pending = self.load_pending(request_id)
-        if pending is None:
-            return None
+        now = time.time()
         with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._prune_expired(db, now=now)
+            row = db.execute(
+                "SELECT * FROM pending_authorizations WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                return None
             db.execute("DELETE FROM pending_authorizations WHERE request_id = ?", (request_id,))
-        return pending
+        return PendingAuthorization(
+            request_id=row["request_id"],
+            client_id=row["client_id"],
+            scopes=tuple(json.loads(row["scopes_json"])),
+            code_challenge=row["code_challenge"],
+            redirect_uri=row["redirect_uri"],
+            redirect_uri_provided_explicitly=bool(row["redirect_uri_explicit"]),
+            resource=row["resource"],
+            state=row["state"],
+            expires_at=float(row["expires_at"]),
+        )
 
     def load_code(self, code: str, client_id: str) -> AuthorizationCode | None:
         with self.connection() as db:

@@ -281,6 +281,55 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     self.assertEqual(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0)
 
+    async def test_approve_and_deny_compete_for_one_terminal_pending_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            provider = EmbeddedOAuthProvider(config)
+            client = OAuthClientInformationFull(
+                client_id="client-1",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(client)
+            target = await provider.authorize(
+                client,
+                AuthorizationParams(
+                    state="terminal-race",
+                    scopes=["dsh:control"],
+                    code_challenge="challenge",
+                    redirect_uri="http://127.0.0.1:9999/callback",
+                    redirect_uri_provided_explicitly=True,
+                    resource=config.resource_url,
+                ),
+            )
+            request_id = parse_qs(urlparse(target).query)["request"][0]
+
+            approve_result, deny_result = await asyncio.gather(
+                provider.approve(request_id),
+                provider.deny(request_id),
+            )
+            terminal_results = [result for result in (approve_result, deny_result) if result is not None]
+            self.assertEqual(len(terminal_results), 1)
+            query = parse_qs(urlparse(terminal_results[0]).query)
+            if approve_result is not None:
+                self.assertIn("code", query)
+                self.assertNotIn("error", query)
+                expected_codes = 1
+            else:
+                self.assertEqual(query["error"], ["access_denied"])
+                self.assertNotIn("code", query)
+                expected_codes = 0
+
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM pending_authorizations").fetchone()[0], 0)
+                self.assertEqual(
+                    db.execute("SELECT count(*) FROM authorization_codes").fetchone()[0],
+                    expected_codes,
+                )
+
     def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
         limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)
         self.assertTrue(limiter.allowed("a"))

@@ -139,16 +139,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(bad_origin.status_code, 403)
         self.assertEqual(bad_origin.text, "Invalid Origin header")
 
-    def test_happy_path_builds_loopback_oauth_gateway_with_canonical_issuer(self) -> None:
-        fake_backend = Mock()
-        fake_backend.base_url = "http://127.0.0.1:3080"
-        fake_backend.describe_host.side_effect = RuntimeError("DSH not ready yet")
+    def test_happy_path_builds_runtime_only_oauth_gateway_with_canonical_issuer(self) -> None:
         fake_server = Mock()
 
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
-            patch("dsh_mcp_gateway.cli.ExperimentalWebHostBackend", return_value=fake_backend),
             patch(
                 "dsh_mcp_gateway.cli.build_embedded_oauth_server",
                 return_value=(fake_server, Mock()),
@@ -166,8 +162,10 @@ class CliTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        fake_backend.describe_host.assert_not_called()
+        self.assertIsNone(build_server.call_args.args[0])
         config = build_server.call_args.args[1]
+        session_runtime = build_server.call_args.kwargs["session_runtime"]
+        self.assertEqual(session_runtime.database, Path(tmp).resolve() / "sessions.sqlite3")
         self.assertEqual(config.issuer_url, "https://gateway.example.com/")
         self.assertEqual(config.resource_url, "https://gateway.example.com/mcp")
         self.assertEqual(config.state_db, Path(tmp).resolve() / "oauth.sqlite3")
@@ -188,8 +186,47 @@ class CliTests(unittest.TestCase):
         self.assertIn("127.0.0.1:*", security.allowed_hosts)
         self.assertIn("https://gateway.example.com", security.allowed_origins)
 
+    def test_legacy_dsh_web_host_is_explicit_opt_in(self) -> None:
+        fake_backend = Mock()
+        fake_backend.base_url = "http://127.0.0.1:3080"
+        fake_server = Mock()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            patch("dsh_mcp_gateway.cli.ExperimentalWebHostBackend", return_value=fake_backend) as backend_cls,
+            patch(
+                "dsh_mcp_gateway.cli.build_embedded_oauth_server",
+                return_value=(fake_server, Mock()),
+            ) as build_server,
+        ):
+            result = main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--state-dir",
+                    tmp,
+                    "--dsh-web-url",
+                    "http://127.0.0.1:3080",
+                ]
+            )
+        self.assertEqual(result, 0)
+        backend_cls.assert_called_once_with("http://127.0.0.1:3080", cwd=os.getcwd())
+        service = build_server.call_args.args[0]
+        self.assertIsNotNone(service)
+        self.assertIs(service._backend, fake_backend)
+
 
 class HealthRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runtime_only_readiness_has_no_model_dependency(self) -> None:
+        from mcp.server import MCPServer
+
+        server = MCPServer("health-test")
+        install_health_routes(server)
+        routes = {route.path: route for route in server._custom_starlette_routes}
+        ready = await routes["/readyz"].endpoint(Mock())
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(json.loads(ready.body), {"ok": True, "dependency": "runtime-state"})
+
     async def test_health_and_ready_routes_are_minimal_and_no_store(self) -> None:
         from mcp.server import MCPServer
 

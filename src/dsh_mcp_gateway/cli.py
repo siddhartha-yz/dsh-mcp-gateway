@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from . import build_embedded_oauth_server
 from .backend import ExperimentalWebHostBackend
 from .routing import GatewayService
+from .session_runtime import DurableSessionRuntime
 
 
 def build_transport_security(public_base: str):
@@ -37,12 +38,12 @@ def build_transport_security(public_base: str):
     )
 
 
-def install_health_routes(server, backend) -> None:
+def install_health_routes(server, backend=None) -> None:
     """Install minimal unauthenticated deployment probes.
 
-    Liveness proves only that the gateway process can serve HTTP. Readiness
-    additionally checks that the configured DSH Web Host answers a diagnostic
-    RPC, without returning its descriptor or transport error details.
+    Runtime-only mode has no model-side dependency, so readiness means the
+    gateway process and durable state initialized successfully. When the
+    optional legacy DSH adapter is enabled, readiness also checks its Web Host.
     """
     try:
         from starlette.responses import JSONResponse
@@ -58,6 +59,11 @@ def install_health_routes(server, backend) -> None:
 
     @server.custom_route("/readyz", methods=["GET"], include_in_schema=False)
     async def readyz(_request):
+        if backend is None:
+            return JSONResponse(
+                {"ok": True, "dependency": "runtime-state"},
+                headers={"Cache-Control": "no-store"},
+            )
         try:
             await asyncio.to_thread(backend.describe_host, timeout_s=1.0)
         except Exception:  # noqa: BLE001 - dependency failures collapse to a non-sensitive readiness result.
@@ -75,17 +81,17 @@ def install_health_routes(server, backend) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dsh-mcp-gateway",
-        description="Expose a loopback DeepSeek Harness Web Host as an OAuth-protected MCP server.",
+        description="Expose a durable ChatGPT runtime as an OAuth-protected MCP server.",
     )
     parser.add_argument(
         "--dsh-web-url",
-        default="http://127.0.0.1:3080",
-        help="DSH Web Host base URL; loopback is required by default.",
+        default=None,
+        help="Optional legacy DSH Web Host base URL. Omit for the default model-provider-free runtime.",
     )
     parser.add_argument(
         "--dsh-cwd",
         default=os.getcwd(),
-        help="Working directory used when the gateway creates a new DSH session.",
+        help="Working directory used only by the optional legacy DSH adapter.",
     )
     parser.add_argument(
         "--public-base-url",
@@ -163,13 +169,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ImportError as exc:
         raise SystemExit("install dsh-mcp-gateway[server] to run the HTTP/OAuth gateway") from exc
 
-    try:
-        backend = ExperimentalWebHostBackend(
-            args.dsh_web_url,
-            cwd=args.dsh_cwd,
-        )
-    except ValueError as exc:
-        raise SystemExit(f"invalid --dsh-web-url: {exc}") from exc
+    backend = None
+    service = None
+    if args.dsh_web_url:
+        try:
+            backend = ExperimentalWebHostBackend(
+                args.dsh_web_url,
+                cwd=args.dsh_cwd,
+            )
+        except ValueError as exc:
+            raise SystemExit(f"invalid --dsh-web-url: {exc}") from exc
+        service = GatewayService(backend)
     state_dir = Path(args.state_dir).resolve()
     oauth = EmbeddedOAuthConfig(
         issuer_url=public_base,
@@ -180,9 +190,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_client_metadata_bytes=args.max_client_metadata_bytes,
         max_registration_request_bytes=args.max_registration_request_bytes,
     )
-    server, _provider = build_embedded_oauth_server(GatewayService(backend), oauth)
+    session_runtime = DurableSessionRuntime(state_dir / "sessions.sqlite3")
+    server, _provider = build_embedded_oauth_server(
+        service,
+        oauth,
+        session_runtime=session_runtime,
+    )
     install_health_routes(server, backend)
-    print(f"DSH Web Host configured at {backend.base_url}; readiness is checked via /readyz")
+    if backend is None:
+        print("ChatGPT runtime mode enabled; no model provider or DSH Web Host is configured")
+    else:
+        print(f"Legacy DSH Web Host configured at {backend.base_url}; readiness is checked via /readyz")
     print(f"MCP gateway listening on http://{args.bind_host}:{args.port}/mcp")
     print(f"OAuth issuer: {oauth.issuer_url}")
     server.run(

@@ -157,7 +157,9 @@ if the DSH Host itself restarted
 
 This repository is independent from `fwerkor/local-shell-mcp`.
 
-A possible long-term composition is:
+The same-host stdio composition has now been exercised end-to-end; it remains opt-in because the current LSM catalog adds 43 model-facing tools. See [`docs/local-shell-mcp.md`](docs/local-shell-mcp.md) for the tested boundary, deployment overlay, and current schema-cost caveat.
+
+The composition is:
 
 ```text
 ChatGPT
@@ -173,7 +175,7 @@ ChatGPT
    `-- MCP --> local-shell-mcp --> browser / remote workers / execution
 ```
 
-No migration of local-shell-mcp is assumed by this repository.
+No migration of local-shell-mcp is assumed by this repository, and the base gateway deployment does not enable this backend automatically.
 
 ## License
 

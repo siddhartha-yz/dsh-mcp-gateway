@@ -1,0 +1,32 @@
+# Optional DSH host overlay: expose one local-shell-mcp stdio server to DSH
+# as model-facing tools named mcp__lsm__<rawName>.
+#
+# Required environment variables on the DSH Host process:
+#   DSH_LSM_COMMAND          absolute path to a fully installed local-shell-mcp
+#   DSH_LSM_WORKSPACE_ROOT   workspace that the child may access
+#   DSH_LSM_STATE_DIR        private state directory for this stdio child
+#   DSH_LSM_AUDIT_LOG_PATH   audit JSONL path inside/under that state boundary
+#   DSH_LSM_AGENT_CONFIG_DIR private agent-config directory for this child
+#
+# This is intentionally opt-in. The current local-shell-mcp v4 server exposes
+# its complete MCP catalog; DSH rc6's mcp-client has no per-server tool filter.
+- insert:
+    - id: mcp-local-shell
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: lsm
+        transport: stdio
+        command: !!js process.env.DSH_LSM_COMMAND
+        args: ['--mode', 'stdio', '--no-remote']
+        cwd: !!js process.env.DSH_LSM_WORKSPACE_ROOT
+        env:
+          LOCAL_SHELL_MCP_WORKSPACE_ROOT: !!js process.env.DSH_LSM_WORKSPACE_ROOT
+          LOCAL_SHELL_MCP_STATE_DIR: !!js process.env.DSH_LSM_STATE_DIR
+          LOCAL_SHELL_MCP_AUDIT_LOG_PATH: !!js process.env.DSH_LSM_AUDIT_LOG_PATH
+          LOCAL_SHELL_MCP_AGENT_CONFIG_DIR: !!js process.env.DSH_LSM_AGENT_CONFIG_DIR
+          LOCAL_SHELL_MCP_AUTH_MODE: 'none'
+          LOCAL_SHELL_MCP_REMOTE_ENABLED: 'false'
+          LOCAL_SHELL_MCP_UI_ENABLED: 'false'
+          LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED: 'false'
+          LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER: 'false'
+        failOnStartupError: true

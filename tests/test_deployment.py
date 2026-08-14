@@ -58,12 +58,31 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("--host 127.0.0.1", drop_in)
         self.assertNotIn("--host 0.0.0.0", drop_in)
 
+    def test_optional_local_shell_overlay_is_private_and_workspace_restricted(self) -> None:
+        overlay = (DSH_DEPLOY / "local-shell-mcp.cordis.yml").read_text(encoding="utf-8")
+
+        self.assertIn("name: '@deepseek-ai/dsh-mcp-client'", overlay)
+        self.assertIn("serverName: lsm", overlay)
+        self.assertIn("transport: stdio", overlay)
+        self.assertIn("command: !!js process.env.DSH_LSM_COMMAND", overlay)
+        self.assertIn("cwd: !!js process.env.DSH_LSM_WORKSPACE_ROOT", overlay)
+        self.assertIn("LOCAL_SHELL_MCP_AUTH_MODE: 'none'", overlay)
+        self.assertIn("LOCAL_SHELL_MCP_REMOTE_ENABLED: 'false'", overlay)
+        self.assertIn("LOCAL_SHELL_MCP_UI_ENABLED: 'false'", overlay)
+        self.assertIn("LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED: 'false'", overlay)
+        self.assertIn("LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER: 'false'", overlay)
+        self.assertIn("failOnStartupError: true", overlay)
+        self.assertNotIn("/home/ubuntu", overlay)
+        self.assertNotIn("transport: streamable-http", overlay)
+
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:
         gateway_env = (SYSTEMD / "gateway.env.example").read_text(encoding="utf-8")
         dsh_env = (SYSTEMD / "dsh.env.example").read_text(encoding="utf-8")
 
         self.assertIn("DSH_MCP_GATEWAY_ADMIN_PIN=\n", gateway_env)
         self.assertIn("DEEPSEEK_API_KEY=\n", dsh_env)
+        self.assertIn("# DSH_LSM_COMMAND=", dsh_env)
+        self.assertIn("# DSH_LSM_WORKSPACE_ROOT=", dsh_env)
         self.assertNotIn("poc-key", gateway_env + dsh_env)
         self.assertNotIn("trycloudflare.com", gateway_env + dsh_env)
 

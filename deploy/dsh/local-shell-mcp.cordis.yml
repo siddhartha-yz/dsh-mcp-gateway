@@ -8,8 +8,9 @@
 #   DSH_LSM_AUDIT_LOG_PATH   audit JSONL path inside/under that state boundary
 #   DSH_LSM_AGENT_CONFIG_DIR private agent-config directory for this child
 #
-# This is intentionally opt-in. The current local-shell-mcp v4 server exposes
-# its complete MCP catalog; DSH rc6's mcp-client has no per-server tool filter.
+# This is intentionally opt-in. local-shell-mcp v4 publishes its complete MCP
+# catalog; the adjacent scoped filter keeps only selected LSM tools visible to
+# each model-facing agent while leaving preset-local DSH tools intact.
 - insert:
     - id: mcp-local-shell
       name: '@deepseek-ai/dsh-mcp-client'
@@ -30,3 +31,18 @@
           LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED: 'false'
           LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER: 'false'
         failOnStartupError: true
+    - id: mcp-local-shell-filter
+      # Loader entry names must already be strings; unlike plugin config values,
+      # they cannot be supplied by a !!js environment expression. The systemd
+      # deployment in this repository installs the gateway under /srv.
+      name: /srv/dsh-mcp-gateway/deploy/dsh/plugins/lsm-tool-filter.mjs
+      config:
+        serverName: lsm
+        allowRawNames:
+          - browser_session
+          - browser_snapshot
+          - browser_act
+          - browser_run_script
+          - mcp_tool_search
+          - mcp_tool_inspect
+          - mcp_tool_call

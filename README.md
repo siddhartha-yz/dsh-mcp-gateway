@@ -157,7 +157,7 @@ if the DSH Host itself restarted
 
 This repository is independent from `fwerkor/local-shell-mcp`.
 
-The same-host stdio composition has now been exercised end-to-end; it remains opt-in because the current LSM catalog adds 43 model-facing tools. See [`docs/local-shell-mcp.md`](docs/local-shell-mcp.md) for the tested boundary, deployment overlay, and current schema-cost caveat.
+The same-host stdio composition has now been exercised end-to-end. LSM 4.0.0 publishes 43 tools internally, but the optional deployment overlay uses a DSH agent-scoped filter to expose only seven differentiated browser/dynamic-MCP tools; the tested rc6 model surface is 32 tools total instead of the unfiltered 68. The filtered surface also remained identical after DSH Host restart and cold session resume. See [`docs/local-shell-mcp.md`](docs/local-shell-mcp.md) for the tested boundary and deployment overlay.
 
 The composition is:
 

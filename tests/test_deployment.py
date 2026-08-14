@@ -60,6 +60,7 @@ class DeploymentTemplateTests(unittest.TestCase):
 
     def test_optional_local_shell_overlay_is_private_and_workspace_restricted(self) -> None:
         overlay = (DSH_DEPLOY / "local-shell-mcp.cordis.yml").read_text(encoding="utf-8")
+        filter_plugin = (DSH_DEPLOY / "plugins" / "lsm-tool-filter.mjs").read_text(encoding="utf-8")
 
         self.assertIn("name: '@deepseek-ai/dsh-mcp-client'", overlay)
         self.assertIn("serverName: lsm", overlay)
@@ -72,7 +73,45 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("LOCAL_SHELL_MCP_FILE_DOWNLOAD_ENABLED: 'false'", overlay)
         self.assertIn("LOCAL_SHELL_MCP_ALLOW_FULL_CONTAINER: 'false'", overlay)
         self.assertIn("failOnStartupError: true", overlay)
-        self.assertNotIn("/home/ubuntu", overlay)
+        self.assertIn(
+            "name: /srv/dsh-mcp-gateway/deploy/dsh/plugins/lsm-tool-filter.mjs",
+            overlay,
+        )
+        allowed = {
+            line.strip()[2:]
+            for line in overlay.splitlines()
+            if line.strip().startswith("- ")
+            and line.strip()[2:]
+            in {
+                "browser_session",
+                "browser_snapshot",
+                "browser_act",
+                "browser_run_script",
+                "mcp_tool_search",
+                "mcp_tool_inspect",
+                "mcp_tool_call",
+            }
+        }
+        self.assertEqual(
+            allowed,
+            {
+                "browser_session",
+                "browser_snapshot",
+                "browser_act",
+                "browser_run_script",
+                "mcp_tool_search",
+                "mcp_tool_inspect",
+                "mcp_tool_call",
+            },
+        )
+        self.assertNotIn("- mcp_manage", overlay)
+        self.assertNotIn("- run_shell_tool", overlay)
+        self.assertNotIn("- list_files", overlay)
+        self.assertIn("ctx.on('agent/created'", filter_plugin)
+        self.assertIn("ctx.tools.schemas(agent)", filter_plugin)
+        self.assertIn("agent.ctx.tools.restrict({ deny })", filter_plugin)
+        self.assertNotIn("restrict({ allow })", filter_plugin)
+        self.assertNotIn("/home/ubuntu", overlay + filter_plugin)
         self.assertNotIn("transport: streamable-http", overlay)
 
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:

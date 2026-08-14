@@ -97,3 +97,5 @@ DeepSeek Harness
 ```
 
 This keeps each repository independently useful and avoids a migration dependency between them.
+
+The tested same-host LSM composition uses DSH's stdio MCP client rather than the public OAuth/MCP path. LSM 4.0.0 currently registers 43 MCP tools; a small host plugin narrows only the `mcp__lsm__*` inherited names at `agent/created` time by dynamically denying every provider tool except an explicit seven-tool differentiated subset. The filter is intentionally deny-only: an agent-level allow mask also filters the inherited standard preset and would remove DSH-native tools. In the rc6 smoke test the resulting surface was 25 DSH + 7 LSM tools before and after a Host restart/cold resume. This restriction is composition, not authority; LSM's own workspace containment, policy, and disabled HTTP-only features remain the execution security boundary.

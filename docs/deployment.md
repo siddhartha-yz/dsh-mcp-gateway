@@ -61,13 +61,19 @@ Do not rely on a global `/usr/bin/node`: the checked-in systemd unit explicitly 
 python3 scripts/verify-dsh-runtime-lock.py
 sudo install -m 0644 deploy/dsh-runtime/package.json /opt/dsh-runtime/package.json
 sudo install -m 0644 deploy/dsh-runtime/package-lock.json /opt/dsh-runtime/package-lock.json
-sudo env PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin \
+sudo env \
+  PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin \
+  npm_config_registry=https://registry.npmjs.org/ \
   /opt/dsh-runtime/node/bin/npm ci \
   --prefix /opt/dsh-runtime \
   --omit=dev \
   --no-audit \
   --no-fund
 ```
+
+The registry is explicit on purpose. On the current integration host, inheriting its default Tencent npm mirror made a clean locked install fail with `ECONNRESET`; the same empty-directory `npm ci` completed against `registry.npmjs.org`. A deployment may substitute a vetted mirror, but do so explicitly and keep npm's lockfile integrity verification enabled rather than inheriting an unknown host-global registry setting.
+
+The checked-in graph has also been reconstructed from an empty directory on Linux x86_64/glibc with Node `24.19.0` + npm `11.17.0`: npm installed 530 runtime packages, DSH resolved to `0.1.0-rc.6`, the Web Host answered `host.describe`/`session.list`, an idle Agent and model catalog initialized, a real model-driven `bash` tool call persisted `clean-bash-ok`, and `node-pty` successfully spawned a PTY. npm emitted an `allow-scripts` review warning for five lifecycle-script packages, but its debug log showed those pre/install/postinstall scripts actually ran with exit code 0 in this tested install. This is Linux x86_64 integration evidence, not a claim that every platform-conditioned package in the npm lock has been exercised.
 
 Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environment:
 

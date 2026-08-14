@@ -163,6 +163,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-mcp-gateway", deployment)
         self.assertIn("/opt/dsh-runtime/node/bin/node", deployment)
         self.assertIn("/opt/dsh-runtime/node/bin/npm ci", deployment)
+        self.assertIn("npm_config_registry=https://registry.npmjs.org/", deployment)
         self.assertIn("python3 scripts/verify-dsh-runtime-lock.py", deployment)
         self.assertIn("python3 scripts/preflight-deployment.py", deployment)
         self.assertIn("python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com", deployment)

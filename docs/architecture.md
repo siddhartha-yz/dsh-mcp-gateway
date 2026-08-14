@@ -30,6 +30,10 @@ Preferred order:
 
 Current ACP is not sufficient for this role because its documented surface is fresh-session-only. The current restart-capable implementation therefore uses option 3: `ExperimentalWebHostBackend`, isolated behind the stable backend contract and restricted to loopback by default. It has been exercised against the official rc6 Web Host, including a full Host stop/restart over the same persisted session.
 
+The Web Host currently exposes turn activity (`session.list.running`) but no Host boot id and no reliable live-idle attachment bit. Therefore `running=false` is deliberately treated as an ambiguous durable/non-running state, not cached as proof of a live Agent. Before steering such a session, the adapter calls the turn-free `session.models` resolver: a live-idle Agent is reused, while a session after an independent Host restart is cold-resumed. Consequently an MCP receipt with `action=resumed` means the attach/resume path was taken; it is not telemetry proving that a process-level cold reconstruction occurred.
+
+This matters even when the gateway process itself never restarts. A real rc6 test kept one `ExperimentalWebHostBackend` object alive, completed a first turn, stopped only the DSH Host, restarted it with the same `DSH_HOME`, and then sent a second turn through that same backend object. The second control path returned `action=resumed`; the shared history ended with 37 events and two `turn/end` records. No gateway-lifetime attachment cache is therefore treated as a Host-lifetime fact.
+
 ## Process model
 
 An MCP request should enqueue or steer a DSH session and return a receipt/session id. It should not remain open for the autonomous goal's whole lifetime. DSH continues independently, while observation belongs to separate status/event calls or streams. A later MCP/chat session reconnects using the durable session id.

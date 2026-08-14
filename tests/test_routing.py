@@ -373,19 +373,25 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.assertEqual(self.backend.presence("cold-1"), SessionPresence.LIVE)
         self.assertEqual(self.backend.history("cold-1")[-1]["type"], "user/message")
 
-    def test_idle_attached_session_is_reused_without_resume_probe(self) -> None:
+    def test_non_running_session_uses_attach_resume_probe_even_in_same_gateway(self) -> None:
         service = GatewayService(self.backend)
         first = service.start("work", session_id="fresh-1")
         self.assertEqual(first.action, "created")
+        # running=false is intentionally ambiguous: this can be a live-idle
+        # Agent or the same durable session after the DSH Host restarted while
+        # the gateway process stayed alive. There is no Host boot id to tell.
         self.server.sessions["fresh-1"]["running"] = False
         self.server.calls.clear()
 
         second = service.continue_session("fresh-1", "more work")
-        self.assertEqual(second.action, "reused")
-        self.assertNotIn("session.models", [method for method, _payload in self.server.calls])
+        self.assertEqual(second.action, "resumed")
+        self.assertEqual(
+            [method for method, _payload in self.server.calls],
+            ["session.list", "session.list", "session.models", "session.prompt"],
+        )
         self.server.sessions["fresh-1"]["running"] = False
-        self.assertEqual(self.backend.status("fresh-1")["state"], "live")
-        self.assertEqual(self.backend.status("fresh-1")["status"], "idle")
+        self.assertEqual(self.backend.status("fresh-1")["state"], "persisted")
+        self.assertEqual(self.backend.status("fresh-1")["status"], "not-running")
 
     def test_goal_create_is_structured_and_arms_existing_session(self) -> None:
         created = self.backend.goal_create(
@@ -453,8 +459,8 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.assertEqual(self.backend.status("fresh-1")["state"], "live")
         canceled = self.backend.cancel("fresh-1")
         self.assertTrue(canceled["canceled"])
-        self.assertEqual(self.backend.status("fresh-1")["state"], "live")
-        self.assertEqual(self.backend.status("fresh-1")["status"], "idle")
+        self.assertEqual(self.backend.status("fresh-1")["state"], "persisted")
+        self.assertEqual(self.backend.status("fresh-1")["status"], "not-running")
 
 
 class FakeSubscription:

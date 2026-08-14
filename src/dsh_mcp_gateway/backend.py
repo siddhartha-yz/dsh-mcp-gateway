@@ -156,11 +156,6 @@ class ExperimentalWebHostBackend:
         self.base_url = base_url.rstrip("/")
         self.cwd = str(Path(cwd).resolve())
         self.timeout_s = timeout_s
-        # session.list.running reports turn activity, not attachment. Keep the
-        # sessions this adapter has explicitly created/resumed so an idle live
-        # agent is not repeatedly misclassified as cold within one gateway run.
-        self._attached_sessions: set[str] = set()
-        self._attached_lock = threading.Lock()
 
     @staticmethod
     def _is_loopback_host(host: str) -> bool:
@@ -180,17 +175,10 @@ class ExperimentalWebHostBackend:
         return self._call("host.describe", {})
 
     def presence(self, session_id: str) -> SessionPresence:
-        with self._attached_lock:
-            if session_id in self._attached_sessions:
-                return SessionPresence.LIVE
         for item in self.list_sessions():
             if item.get("session_id") != session_id:
                 continue
-            if item.get("state") == "live":
-                with self._attached_lock:
-                    self._attached_sessions.add(session_id)
-                return SessionPresence.LIVE
-            return SessionPresence.PERSISTED
+            return SessionPresence.LIVE if item.get("state") == "live" else SessionPresence.PERSISTED
         return SessionPresence.ABSENT
 
     def reuse(self, session_id: str) -> SessionHandle:
@@ -202,10 +190,11 @@ class ExperimentalWebHostBackend:
         if self.presence(session_id) is SessionPresence.ABSENT:
             raise KeyError(session_id)
         # session.models is intentionally turn-free but resolves through the
-        # Host's shared agent resolver, which cold-resumes ordinary sessions.
+        # Host's shared agent resolver. DSH does not expose a Host boot id or a
+        # reliable live-idle attachment bit, so this probe is deliberately used
+        # for every existing non-running session: it reuses a live-idle Agent or
+        # cold-resumes a persisted Agent after an independent Host restart.
         self._call("session.models", {"sessionId": session_id})
-        with self._attached_lock:
-            self._attached_sessions.add(session_id)
         return SessionHandle(session_id)
 
     def create(self, session_id: str | None = None) -> SessionHandle:
@@ -216,8 +205,6 @@ class ExperimentalWebHostBackend:
         created = value.get("sessionId")
         if not isinstance(created, str) or not created:
             raise ExperimentalWebHostError("session.create returned no sessionId")
-        with self._attached_lock:
-            self._attached_sessions.add(created)
         return SessionHandle(created)
 
     def prompt(self, session_id: str, text: str) -> str:
@@ -336,14 +323,11 @@ class ExperimentalWebHostBackend:
                 continue
             session_id = item["sessionId"]
             running = item.get("running") is True
-            with self._attached_lock:
-                known_attached = session_id in self._attached_sessions
-            live = running or known_attached
             result.append(
                 {
                     "session_id": session_id,
-                    "state": "live" if live else "persisted",
-                    "status": "running" if running else ("idle" if known_attached else "not-running"),
+                    "state": "live" if running else "persisted",
+                    "status": "running" if running else "not-running",
                     "updated_at": item.get("updatedAt"),
                     "cwd": item.get("cwd"),
                     "blank": item.get("blank"),

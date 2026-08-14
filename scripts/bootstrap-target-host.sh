@@ -21,8 +21,7 @@ Options:
   --replace-source    Replace an existing /srv/dsh-mcp-gateway source tree
   -h, --help          Show this help
 
-Secrets/config are read from existing environment variables when present:
-  DEEPSEEK_API_KEY
+Configuration is read from existing environment variables when present:
   DSH_MCP_PUBLIC_BASE_URL
   DSH_MCP_GATEWAY_ADMIN_PIN
 
@@ -69,6 +68,8 @@ for path in \
   "$SOURCE_ROOT/deploy/dsh-runtime/package.json" \
   "$SOURCE_ROOT/deploy/dsh-runtime/package-lock.json" \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
+  "$SOURCE_ROOT/deploy/dsh/chatgpt-bridge.cordis.yml" \
+  "$SOURCE_ROOT/dsh-bridge-plugin/index.js" \
   "$SOURCE_ROOT/deploy/systemd/dsh-web-host.service" \
   "$SOURCE_ROOT/deploy/systemd/dsh-mcp-gateway.service" \
   "$SOURCE_ROOT/scripts/preflight-deployment.py"; do
@@ -213,10 +214,6 @@ python3 -m venv /srv/dsh-mcp-gateway/.venv
   --constraint /srv/dsh-mcp-gateway/deploy/server-constraints.txt \
   -e '/srv/dsh-mcp-gateway[server]'
 
-if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
-  read -r -s -p "DeepSeek API key: " DEEPSEEK_API_KEY
-  echo
-fi
 if [[ -z "${DSH_MCP_PUBLIC_BASE_URL:-}" ]]; then
   read -r -p "Exact public HTTPS origin (for example https://dsh.example.com): " DSH_MCP_PUBLIC_BASE_URL
 fi
@@ -225,7 +222,6 @@ if [[ -z "${DSH_MCP_GATEWAY_ADMIN_PIN:-}" ]]; then
   echo
 fi
 
-[[ -n "$DEEPSEEK_API_KEY" ]] || { echo "DEEPSEEK_API_KEY must be non-empty" >&2; exit 1; }
 [[ "$DSH_MCP_PUBLIC_BASE_URL" =~ ^https://[^/]+/?$ ]] || {
   echo "DSH_MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path" >&2
   exit 1
@@ -238,12 +234,9 @@ fi
 umask 077
 cat > /etc/dsh-mcp-gateway/dsh.env <<EOF
 DSH_HOME=/var/lib/dsh-harness
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY
 DSH_TELEMETRY_DISABLED=1
 EOF
 cat > /etc/dsh-mcp-gateway/gateway.env <<EOF
-DSH_WORKSPACE=/srv/dsh-workspace
 DSH_MCP_PUBLIC_BASE_URL=$DSH_MCP_PUBLIC_BASE_URL
 DSH_MCP_GATEWAY_ADMIN_PIN=$DSH_MCP_GATEWAY_ADMIN_PIN
 EOF

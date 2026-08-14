@@ -29,6 +29,14 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("ctx.tools.schemas()", plugin)
         self.assertIn("ctx.tools.execute", plugin)
         self.assertNotIn("DEEPSEEK_API_KEY", plugin)
+
+        gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")
+        dsh_unit = (ROOT / "deploy" / "systemd" / "dsh-web-host.service").read_text(encoding="utf-8")
+        dsh_env = (ROOT / "deploy" / "systemd" / "dsh.env.example").read_text(encoding="utf-8")
+        self.assertIn("--dsh-harness-url http://127.0.0.1:3080", gateway_unit)
+        self.assertNotIn("--dsh-web-url", gateway_unit)
+        self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", dsh_unit)
+        self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
         self.assertIn("dsh-bridge-plugin/index.js", overlay)
 
 

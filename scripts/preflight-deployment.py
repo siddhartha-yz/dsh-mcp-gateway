@@ -320,8 +320,16 @@ def main(argv: list[str] | None = None) -> int:
     dsh_env, dsh_env_error = parse_env_file(dsh_env_path) if dsh_env_path.is_file() else ({}, "file missing")
     p.add("DSH env parse", dsh_env_error is None, dsh_env_error or "parsed without exposing values")
     if dsh_env_error is None:
-        for key in ("DSH_HOME", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"):
+        for key in ("DSH_HOME",):
             p.add(f"DSH env {key}", bool(dsh_env.get(key)), f"{key} is {'set' if dsh_env.get(key) else 'missing/empty'}")
+        for obsolete_key in ("DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"):
+            p.add(
+                f"DSH env excludes {obsolete_key}",
+                not bool(dsh_env.get(obsolete_key)),
+                f"{obsolete_key} is absent/empty as required by the model-provider-free harness deployment"
+                if not dsh_env.get(obsolete_key)
+                else f"{obsolete_key} should not be configured for the primary harness deployment",
+            )
         p.add(
             "DSH env DSH_HOME matches layout",
             dsh_env.get("DSH_HOME") == str(args.dsh_home),
@@ -333,18 +341,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add("gateway env parse", gateway_env_error is None, gateway_env_error or "parsed without exposing values")
     if gateway_env_error is None:
-        for key in ("DSH_WORKSPACE", "DSH_MCP_PUBLIC_BASE_URL", "DSH_MCP_GATEWAY_ADMIN_PIN"):
+        for key in ("DSH_MCP_PUBLIC_BASE_URL", "DSH_MCP_GATEWAY_ADMIN_PIN"):
             p.add(
                 f"gateway env {key}",
                 bool(gateway_env.get(key)),
                 f"{key} is {'set' if gateway_env.get(key) else 'missing/empty'}",
             )
         p.add(
-            "gateway env workspace matches layout",
-            gateway_env.get("DSH_WORKSPACE") == str(args.workspace),
-            "DSH_WORKSPACE matches configured preflight path"
-            if gateway_env.get("DSH_WORKSPACE") == str(args.workspace)
-            else "DSH_WORKSPACE does not match configured preflight path",
+            "gateway env excludes legacy DSH_WORKSPACE",
+            not bool(gateway_env.get("DSH_WORKSPACE")),
+            "DSH_WORKSPACE is absent/empty; workspace ownership stays with the DSH Host"
+            if not gateway_env.get("DSH_WORKSPACE")
+            else "DSH_WORKSPACE should not be configured on the thin OAuth/MCP gateway",
         )
         pin = gateway_env.get("DSH_MCP_GATEWAY_ADMIN_PIN", "")
         p.add(

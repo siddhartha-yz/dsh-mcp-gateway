@@ -40,7 +40,9 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["User"], "dsh-gateway")
         self.assertEqual(service["Group"], "dsh-gateway")
         self.assertEqual(service["EnvironmentFile"], "/etc/dsh-mcp-gateway/gateway.env")
-        self.assertIn("--dsh-web-url http://127.0.0.1:3080", command)
+        self.assertIn("--dsh-harness-url http://127.0.0.1:3080", command)
+        self.assertNotIn("--dsh-web-url", command)
+        self.assertNotIn("--dsh-cwd", command)
         self.assertIn("--bind-host 127.0.0.1", command)
         self.assertNotIn("--allow-non-loopback-bind", command)
         self.assertIn("--port 18766", command)
@@ -75,6 +77,7 @@ class DeploymentTemplateTests(unittest.TestCase):
             "PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin",
         )
         self.assertEqual(service["WorkingDirectory"], "/srv/dsh-workspace")
+        self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", command)
         self.assertIn("--host 127.0.0.1", command)
         self.assertNotIn("--trusted-host", command)
         self.assertIn("--port 3080", command)
@@ -97,6 +100,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("dshHomePath('derived/session-query.sqlite3')", overlay)
         self.assertIn("openAt: first-search", overlay)
         self.assertNotIn("openAt: startup", overlay)
+        self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", drop_in)
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/session-search.cordis.yml", drop_in)
         self.assertIn("--host 127.0.0.1", drop_in)
         self.assertNotIn("--host 0.0.0.0", drop_in)
@@ -207,7 +211,9 @@ class DeploymentTemplateTests(unittest.TestCase):
         dsh_env = (SYSTEMD / "dsh.env.example").read_text(encoding="utf-8")
 
         self.assertIn("DSH_MCP_GATEWAY_ADMIN_PIN=\n", gateway_env)
-        self.assertIn("DEEPSEEK_API_KEY=\n", dsh_env)
+        self.assertNotIn("DSH_WORKSPACE", gateway_env)
+        self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
+        self.assertNotIn("DEEPSEEK_BASE_URL", dsh_env)
         self.assertIn("# DSH_LSM_COMMAND=", dsh_env)
         self.assertIn("# DSH_LSM_WORKSPACE_ROOT=", dsh_env)
         self.assertNotIn("poc-key", gateway_env + dsh_env)
@@ -273,8 +279,7 @@ class DeploymentPreflightTests(unittest.TestCase):
             "\n".join(
                 (
                     f"DSH_HOME={paths['dsh_home']}",
-                    "DEEPSEEK_BASE_URL=https://api.deepseek.com",
-                    f"DEEPSEEK_API_KEY={self.secret_marker('api-key')}",
+                    "DSH_TELEMETRY_DISABLED=1",
                 )
             )
             + "\n",
@@ -284,7 +289,6 @@ class DeploymentPreflightTests(unittest.TestCase):
         gateway_env.write_text(
             "\n".join(
                 (
-                    f"DSH_WORKSPACE={paths['workspace']}",
                     "DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com",
                     f"DSH_MCP_GATEWAY_ADMIN_PIN={self.secret_marker('admin-pin')}",
                 )
@@ -348,15 +352,14 @@ class DeploymentPreflightTests(unittest.TestCase):
             report = json.loads(result.stdout)
             self.assertTrue(report["ok"])
             self.assertEqual(report["failed"], 0)
-            self.assertNotIn(self.secret_marker("api-key"), result.stdout)
             self.assertNotIn(self.secret_marker("admin-pin"), result.stdout)
 
-    def test_preflight_reports_secret_file_mode_and_missing_value_without_exposing_values(self) -> None:
+    def test_preflight_reports_secret_file_mode_and_rejects_legacy_model_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self.build_layout(Path(tmp))
             dsh_env = paths["config_dir"] / "dsh.env"
             dsh_env.write_text(
-                f"DSH_HOME={paths['dsh_home']}\nDEEPSEEK_BASE_URL=https://api.deepseek.com\nDEEPSEEK_API_KEY=\n",
+                f"DSH_HOME={paths['dsh_home']}\nDEEPSEEK_API_KEY=legacy-credential\n",
                 encoding="utf-8",
             )
             dsh_env.chmod(0o644)
@@ -366,8 +369,8 @@ class DeploymentPreflightTests(unittest.TestCase):
             report = json.loads(result.stdout)
             failed = {check["name"] for check in report["checks"] if not check["ok"]}
             self.assertIn("DSH env file ownership/mode", failed)
-            self.assertIn("DSH env DEEPSEEK_API_KEY", failed)
-            self.assertNotIn(self.secret_marker("api-key"), result.stdout)
+            self.assertIn("DSH env excludes DEEPSEEK_API_KEY", failed)
+            self.assertNotIn("legacy-credential", result.stdout)
             self.assertNotIn(self.secret_marker("admin-pin"), result.stdout)
 
     def test_preflight_detects_dsh_version_and_installed_unit_drift(self) -> None:

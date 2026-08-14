@@ -1,6 +1,6 @@
 # Deployment
 
-This repository is designed around three independently managed boundaries:
+The primary deployment implements the repository contract directly:
 
 ```text
 public HTTPS reverse proxy / tunnel
@@ -9,44 +9,46 @@ public HTTPS reverse proxy / tunnel
       dsh-mcp-gateway
        127.0.0.1:18766
               |
+              | OAuth-protected MCP -> loopback Harness bridge
               v
         DSH Web Host
         127.0.0.1:3080
               |
               v
-       agent workspace
+        DSH Harness
+    tools / skills / plugins
 ```
 
-The raw DSH Web Host is not an authenticated public API and must stay on loopback or another explicitly trusted private network. The gateway is also loopback-bound in the example deployment; public HTTPS terminates at a reverse proxy or tunnel. `--dsh-web-url` names the Host HTTP(S) origin only (for example `http://127.0.0.1:3080`): do not include credentials, an `/api` path prefix, params, query, or fragment. The gateway owns the `/api/<method>` suffix and rejects ambiguous targets at startup.
+ChatGPT is the reasoning agent. The DSH process is a Harness host and **does not need a model-provider API key** for this path. The checked-in DSH service always loads `deploy/dsh/chatgpt-bridge.cordis.yml`; the public gateway points at it with `--dsh-harness-url`. The legacy autonomous DSH Web API adapter is documented separately in [`legacy-dsh-prototype.md`](legacy-dsh-prototype.md) and is not part of this deployment.
+
+Both HTTP listeners remain loopback-only. Only the OAuth-protected gateway is placed behind public HTTPS; never expose port 3080 directly.
 
 ## Tested runtime boundary
 
-The current experimental Web Host adapter is tested against `@deepseek-ai/dsh@0.1.0-rc.6` using Node `24.19.0`. The rc6 package does not declare an `engines` requirement, so Node 24.19.0 is not claimed as an upstream minimum; it is the exact known-good runtime pin for this repository's current release drills. The example systemd unit therefore uses a self-contained Node tree at `/opt/dsh-runtime/node` instead of inheriting a distribution-global Node. Upgrade either pin deliberately and rerun the gateway/integration evidence before changing it.
-
-A practical layout is:
+The deployment lock currently uses `@deepseek-ai/dsh@0.1.0-rc.6` and Node `24.19.0`. The self-contained Node tree lives at `/opt/dsh-runtime/node`; do not silently substitute a distribution-global Node. Upgrade either pin deliberately and rerun the integration tests.
 
 ```text
 /opt/dsh-runtime/                  pinned DSH CLI/runtime
 /srv/dsh-mcp-gateway/              this repository + Python venv
-/srv/dsh-workspace/                agent working directory
-/var/lib/dsh-harness/              DSH_HOME / durable DSH session state
-/var/lib/dsh-mcp-gateway/          OAuth SQLite state
-/etc/dsh-mcp-gateway/*.env         secrets/configuration, mode 0600
+/srv/dsh-workspace/                DSH host working directory
+/var/lib/dsh-harness/              DSH_HOME
+/var/lib/dsh-mcp-gateway/          OAuth state
+/etc/dsh-mcp-gateway/*.env         private configuration, mode 0600
 ```
 
-## Install
+## Bootstrap
 
-The commands below are examples for a dedicated Linux host. Adjust user/group ownership and package-management policy to the target machine. On Debian/Ubuntu, `python3 -m venv` requires the distribution `python3-venv` package; a minimal server image may have Python installed without that component. The target-host bootstrap checks this by actually creating a throwaway venv and installs `python3-venv` with `apt-get` when necessary.
-
-For a first deployment from a clean git checkout, the repository provides a privileged bootstrap that performs the steps in this section, installs one exact committed source snapshot, verifies the official Node archive against Node's published SHA-256 manifest, runs the repository preflight, and then starts the two systemd services:
+From a clean checkout:
 
 ```sh
 sudo ./scripts/bootstrap-target-host.sh
 ```
 
-It prompts for the DeepSeek API key, exact public HTTPS origin, and gateway owner PIN/passphrase without echoing secret values. Existing environment variables `DEEPSEEK_API_KEY`, `DSH_MCP_PUBLIC_BASE_URL`, and `DSH_MCP_GATEWAY_ADMIN_PIN` may be used instead. The script deliberately does not configure DNS or the reverse proxy itself. Use `--no-start` to stop after install/preflight, and `--replace-source` only for a deliberate replacement of an existing `/srv/dsh-mcp-gateway` tree.
+The bootstrap prompts only for the exact public HTTPS origin and the gateway owner PIN/passphrase. Existing `DSH_MCP_PUBLIC_BASE_URL` and `DSH_MCP_GATEWAY_ADMIN_PIN` values may be supplied through the environment. It deliberately does **not** request `DEEPSEEK_API_KEY` or any other model credential.
 
-The equivalent manual layout follows:
+Use `--no-start` to stop after installation/preflight and `--replace-source` only for a deliberate replacement of `/srv/dsh-mcp-gateway`.
+
+The equivalent service accounts and state directories are:
 
 ```sh
 sudo useradd --system --user-group --home /var/lib/dsh-harness --create-home dsh-agent
@@ -58,14 +60,14 @@ sudo install -d -o dsh-gateway -g dsh-gateway -m 0700 /var/lib/dsh-mcp-gateway
 sudo install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway
 ```
 
-Install a verified self-contained Node `24.19.0` distribution under `/opt/dsh-runtime/node` using your host's approved package/download-verification process. The resulting layout must contain at least:
+Install the verified Node `24.19.0` tree so these paths exist:
 
 ```text
 /opt/dsh-runtime/node/bin/node
 /opt/dsh-runtime/node/bin/npm
 ```
 
-Do not rely on a global `/usr/bin/node`: the checked-in systemd unit explicitly prepends `/opt/dsh-runtime/node/bin` to its service PATH, and the deployment preflight requires that exact Node version by default. The repository also records the exact npm dependency graph that produced the real rc6 integration runtime. Verify it, copy those manifests into `/opt/dsh-runtime`, then install with `npm ci` so transitive packages are reproduced from `package-lock.json` instead of re-resolved:
+Then reproduce the pinned DSH graph:
 
 ```sh
 python3 scripts/verify-dsh-runtime-lock.py
@@ -75,17 +77,10 @@ sudo env \
   PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin \
   npm_config_registry=https://registry.npmjs.org/ \
   /opt/dsh-runtime/node/bin/npm ci \
-  --prefix /opt/dsh-runtime \
-  --omit=dev \
-  --no-audit \
-  --no-fund
+  --prefix /opt/dsh-runtime --omit=dev --no-audit --no-fund
 ```
 
-The registry is explicit on purpose. On the current integration host, inheriting its default Tencent npm mirror made a clean locked install fail with `ECONNRESET`; the same empty-directory `npm ci` completed against `registry.npmjs.org`. A deployment may substitute a vetted mirror, but do so explicitly and keep npm's lockfile integrity verification enabled rather than inheriting an unknown host-global registry setting.
-
-The checked-in graph has also been reconstructed from an empty directory on Linux x86_64/glibc with Node `24.19.0` + npm `11.17.0`: npm installed 530 runtime packages, DSH resolved to `0.1.0-rc.6`, the Web Host answered `host.describe`/`session.list`, an idle Agent and model catalog initialized, a real model-driven `bash` tool call persisted `clean-bash-ok`, and `node-pty` successfully spawned a PTY. npm emitted an `allow-scripts` review warning for five lifecycle-script packages, but its debug log showed those pre/install/postinstall scripts actually ran with exit code 0 in this tested install. This is Linux x86_64 integration evidence, not a claim that every platform-conditioned package in the npm lock has been exercised.
-
-Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environment:
+Install the gateway:
 
 ```sh
 cd /srv/dsh-mcp-gateway
@@ -93,9 +88,27 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --constraint deploy/server-constraints.txt -e '.[server]'
 ```
 
-`pyproject.toml` intentionally keeps the broader `mcp>=2,<3` compatibility range so the normal CI lane detects regressions against newer MCP v2 releases. `deploy/server-constraints.txt` is the separate known-good deployment snapshot and is exercised by its own clean Python 3.12 CI job. The same lane runs `scripts/verify-server-constraints.py`, which rejects a newly added direct `server` dependency unless the snapshot contains an exact `==` pin for it; this prevents a forgotten constraint update from silently turning the supposedly locked deployment back into a floating install. Regenerate that snapshot deliberately when upgrading the server dependency graph; do not treat an incidental reinstall as an upgrade.
+## Configuration
 
-Before relying on the deployment, verify that every direct `server` runtime requirement is covered by an exact known-good pin, then run the runtime-compatible test suite:
+`/etc/dsh-mcp-gateway/dsh.env` needs only Harness-host state for the primary path:
+
+```env
+DSH_HOME=/var/lib/dsh-harness
+DSH_TELEMETRY_DISABLED=1
+```
+
+`/etc/dsh-mcp-gateway/gateway.env` owns only the public MCP/OAuth boundary:
+
+```env
+DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com
+DSH_MCP_GATEWAY_ADMIN_PIN=<private high-entropy value, at least 12 characters>
+```
+
+Keep both files root-owned and mode `0600`. Do not add a model API key merely to make the Harness bridge run. Optional execution-provider configuration, including local-shell-mcp, belongs in the DSH environment because DSH owns that composition.
+
+## Validate before start
+
+Run the repository gates before starting services:
 
 ```sh
 python3 scripts/verify-server-constraints.py
@@ -103,90 +116,46 @@ python3 scripts/verify-dsh-runtime-lock.py
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python -m compileall -q src tests scripts
 ./scripts/verify-systemd.sh
+python3 scripts/preflight-deployment.py
 ```
 
-`verify-systemd.sh` is unprivileged: it validates the checked-in unit directives with `systemd-analyze verify` while substituting only the example `ExecStart` binary paths in temporary copies.
-
-Linting belongs to the contributor/CI environment (`python -m pip install -e '.[dev]' && ruff check src tests scripts`) rather than the minimal production runtime.
-
-## Secrets and environment
-
-Copy the example files from `deploy/systemd/`:
-
-```sh
-sudo cp deploy/systemd/dsh.env.example /etc/dsh-mcp-gateway/dsh.env
-sudo cp deploy/systemd/gateway.env.example /etc/dsh-mcp-gateway/gateway.env
-sudo chmod 0600 /etc/dsh-mcp-gateway/dsh.env /etc/dsh-mcp-gateway/gateway.env
-```
-
-Set at least:
-
-- `DEEPSEEK_API_KEY` in `dsh.env`;
-- `DSH_MCP_GATEWAY_ADMIN_PIN` in `gateway.env`; it must be at least 12 characters, and a randomly generated high-entropy value is preferred over a short numeric PIN;
-- `DSH_MCP_PUBLIC_BASE_URL` to the exact public HTTPS origin;
-- `DSH_WORKSPACE` to the agent workspace path.
-
-Do not put these values in the repository, unit files, shell history, or reverse-proxy configuration.
-
-## systemd
-
-Install the unit files, then run the unprivileged deployment preflight before starting either service:
+Install the units only after those checks pass:
 
 ```sh
 sudo cp deploy/systemd/dsh-web-host.service /etc/systemd/system/
 sudo cp deploy/systemd/dsh-mcp-gateway.service /etc/systemd/system/
-
-python3 scripts/preflight-deployment.py
-
 sudo systemctl daemon-reload
 sudo systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
 ```
 
-`preflight-deployment.py` does not call `sudo` or `systemctl`. It checks the documented service users/groups, target directories and exact owner/mode expectations, the pinned DSH package version, gateway Python/console-script presence, required environment keys and secret-file modes without printing secret values, and whether the installed unit files still match the checked-in templates. It exits nonzero until the layout is ready. `--json` provides the same secret-free result for automation, and path/user options allow staging layouts to be checked without using the production filesystem roots.
+The DSH unit launches:
 
-The gateway uses `Wants=` rather than `Requires=` for the DSH Host. That is intentional: an independent DSH Host restart should not restart the public gateway. Gateway startup also does not synchronously probe DSH, so a slow or temporarily unavailable Host does not put the public process into a restart loop. While DSH is unavailable, `/healthz` remains 200 but `/readyz` returns 503. Readiness uses a dedicated 1-second `host.describe` timeout rather than the normal 10-second control-RPC timeout, so a connected but wedged Host cannot hold each probe open for a full business-operation timeout. Once the Host returns, an existing non-running durable session is routed through the idempotent attach/resume probe. Loopback smoke tests exercised both lifecycle directions without restarting the gateway: DSH absent produced `healthz=200`/`readyz=503`, bringing the dependency up changed `readyz` to 200 in the same gateway process, and a deliberately 2-second Host response produced `readyz=503` in about 1 second while the backend's ordinary RPC timeout remained 10 seconds.
+```text
+dsh web --patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml --host 127.0.0.1 --port 3080
+```
 
-Run one active gateway service instance for this deployment and one DSH Web Host for the configured `DSH_HOME`. Same-session write ordering is enforced with process-local locks; this release does not claim multi-replica admission semantics or support multiple DSH Host writers sharing the same durable state.
+The gateway unit launches with:
 
-Check local service state:
+```text
+--dsh-harness-url http://127.0.0.1:3080
+```
+
+This distinction is a release invariant: production must not silently fall back to the legacy `--dsh-web-url` autonomous-agent adapter.
+
+## Health and readiness
 
 ```sh
 curl -fsS http://127.0.0.1:18766/healthz
 curl -fsS http://127.0.0.1:18766/readyz
 ```
 
-Expected healthy responses are minimal JSON objects; readiness deliberately does not expose DSH provider, workspace, or transport details.
+`/healthz` checks the public gateway process. In primary Harness mode, `/readyz` verifies that the loopback DSH capability bridge can return its current `ctx.tools` catalog. It does not call a model provider.
 
-## Optional durable session search
+The gateway uses `Wants=` rather than `Requires=` for the DSH Host. An independent DSH restart therefore does not tear down OAuth/MCP; readiness becomes unavailable until the Harness bridge returns.
 
-DSH rc6 deliberately ships Web full-text session search disabled (`openAt: never`). The gateway keeps `dsh_search` in a stable tool catalog, but the call fails with a clear capability error unless the DSH deployment opts into the session-query SQLite index.
+## Public HTTPS and OAuth
 
-This repository includes `deploy/dsh/session-search.cordis.yml`, an optional official Cordis overlay that changes only the existing `session-query-sqlite` row:
-
-```yaml
-- id: session-query-sqlite
-  config:
-    path: !!js dshHomePath('derived/session-query.sqlite3')
-    openAt: first-search
-```
-
-`first-search` keeps normal Web startup free of the SQLite import/open cost and builds or reconciles the index only when content search is first used. The database is a disposable derived FTS5 index, not canonical session persistence. In a real rc6 test, search found a remembered phrase before and after a complete Host restart; deleting the entire derived index and restarting still rebuilt it from durable session logs and returned the same session.
-
-To enable it in the example systemd deployment, install the provided drop-in:
-
-```sh
-sudo install -d -m 0755 /etc/systemd/system/dsh-web-host.service.d
-sudo cp deploy/systemd/dsh-web-host-search.conf.example \
-  /etc/systemd/system/dsh-web-host.service.d/search.conf
-sudo systemctl daemon-reload
-sudo systemctl restart dsh-web-host.service
-```
-
-The index contains searchable projections of user/assistant session content, so protect `$DSH_HOME/derived` with the same filesystem trust boundary as the session logs. Do not point the derived-index path at the session-persistence database and do not share one index path between multiple DSH processes.
-
-## Reverse proxy or tunnel
-
-The external HTTPS origin must map to `http://127.0.0.1:18766`. For example, a Cloudflare Tunnel ingress can contain:
+Map the public origin to `http://127.0.0.1:18766`. A Cloudflare Tunnel ingress can use:
 
 ```yaml
 ingress:
@@ -195,80 +164,45 @@ ingress:
   - service: http_status:404
 ```
 
-Configure `DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com` to exactly match that origin. The gateway remains loopback-bound while MCP DNS-rebinding protection explicitly allowlists the declared public Host/Origin plus loopback values.
+Set `DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com` to exactly that origin. Never route public traffic to `127.0.0.1:3080`.
 
-Never expose `127.0.0.1:3080` through the reverse proxy.
-
-## OAuth and MCP checks
-
-After public HTTPS is active:
+After HTTPS is active:
 
 ```sh
 curl -fsS https://dsh.example.com/.well-known/oauth-authorization-server
 curl -fsS https://dsh.example.com/.well-known/oauth-protected-resource/mcp
 curl -fsS https://dsh.example.com/healthz
 curl -fsS https://dsh.example.com/readyz
-```
-
-The authorization-server metadata should advertise `offline_access`; the protected-resource metadata should require only `dsh:control`. Once the real public origin is configured, run the one-shot release smoke from the repository root:
-
-```sh
 python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com
 ```
 
-It prompts for the owner PIN with terminal echo disabled. If an operator deliberately reads the root-only deployment env instead, `--pin-file /etc/dsh-mcp-gateway/gateway.env` accepts that `0600` file without printing the PIN. The smoke requires HTTPS (HTTP is available only behind an explicit loopback-only test flag), verifies health/readiness and OAuth/resource metadata, keeps OAuth endpoints on the declared origin, sends the declared `Origin` on MCP requests, runs DCR + PKCE + owner approval + token exchange, checks unauthenticated MCP rejection, initializes an authenticated MCP session using the negotiated protocol version, verifies the expected tool catalog plus `dsh_list`, and rotates/replay-checks the refresh token. It intentionally leaves one registered public OAuth client in the database, so treat it as a release drill rather than a periodic probe.
+## Optional local-shell-mcp execution provider
 
-Dynamic client registration, PKCE authorization, refresh-token issuance/rotation, and a two-MCP-session DSH continuation flow are also covered by repository tests and development smoke tests. DCR storage is bounded to 256 persisted clients by default; set `--max-registered-clients N` on the gateway service if the deployment intentionally needs a different cap. Reaching the cap rejects only new registrations; existing registered clients continue to authenticate. One normalized client record is also capped at 32 KiB of persisted UTF-8 JSON by default; raise `--max-client-metadata-bytes N` only for a known client that legitimately needs larger metadata. A separate application-level guard rejects raw `POST /register` bodies above 64 KiB by default (`--max-registration-request-bytes N`) before the MCP SDK parses them, including chunked requests without `Content-Length`. Keep reverse-proxy/WAF request-body and rate limits as an earlier defense-in-depth layer and to cover the rest of the public HTTP surface; the gateway no longer relies on that perimeter alone for DCR body size. Pending authorization requests are separately bounded to 512 globally and 8 per client, with expired rows pruned on each authorize write before the atomic capacity check. OAuth write transactions also opportunistically prune expired pending requests, authorization codes, access tokens, and refresh tokens, preventing normal long-lived refresh activity from accumulating dead rows indefinitely.
+`deploy/dsh/local-shell-mcp.cordis.yml` mounts local-shell-mcp behind DSH through DSH's MCP client. The adjacent scoped filter exposes only the selected differentiated LSM capabilities, such as browser and dynamic-MCP execution tools. This is optional composition behind DSH, not a second public Harness.
 
-## Backup and restore
+Configure the commented `DSH_LSM_*` variables in `dsh.env`, apply that overlay in the DSH Host composition, and keep LSM itself private. Its workspace/policy boundary remains authoritative for the calls it executes.
 
-For a consistent full-state backup, quiesce both writers first. Stop the public gateway so no new control/OAuth writes can arrive, then stop the DSH Host so autonomous rounds and workspace/session-log writes have settled:
+## Optional durable session search
 
-```sh
-sudo systemctl stop dsh-mcp-gateway.service
-sudo systemctl stop dsh-web-host.service
-```
-
-Back up these trust domains together:
+`deploy/dsh/session-search.cordis.yml` enables DSH's derived SQLite session index lazily. The supplied systemd drop-in intentionally includes **both** patches:
 
 ```text
-/var/lib/dsh-harness/       DSH_HOME: durable sessions, goals, projections, optional derived state
-/srv/dsh-workspace/         files actually modified by the agent
-/var/lib/dsh-mcp-gateway/   OAuth clients, codes/tokens, gateway state
-/etc/dsh-mcp-gateway/       deployment configuration and secrets; protect separately as sensitive material
+--patch .../chatgpt-bridge.cordis.yml --patch .../session-search.cordis.yml
 ```
 
-The DSH runtime under `/opt/dsh-runtime` and the gateway source/venv under `/srv/dsh-mcp-gateway` are reproducible software artifacts rather than canonical task state; record the deployed gateway Git commit, DSH release, Node/Python versions, and rebuild them from the pinned deployment inputs. The optional search database under `$DSH_HOME/derived` is derived state and may be omitted if the restore procedure is prepared to rebuild it from durable session logs.
+so enabling search cannot accidentally remove the required ChatGPT Harness bridge.
 
-Restore while both services are stopped, preserve the documented ownership/modes (`dsh-agent` for DSH/workspace state, `dsh-gateway` for gateway state, root-only `0600` environment files), then start the Host before the gateway:
+## Backup and upgrades
 
-```sh
-sudo systemctl start dsh-web-host.service
-sudo systemctl start dsh-mcp-gateway.service
-```
-
-OAuth state and DSH task state have deliberately separate failure domains. Losing `/var/lib/dsh-mcp-gateway` invalidates remembered dynamic clients/tokens and requires client registration/authorization again, but it does not delete DSH sessions. Losing `DSH_HOME` is the destructive session-history loss. Restored OAuth tokens remain bound to the configured issuer/resource, so changing the public base URL intentionally makes old tokens unusable. Finally, a restored or restarted DSH process does **not** regain process-local goal continuation authority: a durable goal may still say `phase=active` while remaining disarmed until an explicit `dsh_goal_resume`.
-
-## Restart semantics
-
-A process restart is not equivalent to authorizing autonomous continuation:
+Canonical state domains are:
 
 ```text
-DSH Host restart
-    -> durable session can be attached/cold-resumed
-    -> durable goal phase/revision/history remain
-    -> goal activation is process-local and remains disarmed
-    -> explicit dsh_goal_resume re-arms autonomous rounds
+/var/lib/dsh-harness/       DSH Harness state
+/srv/dsh-workspace/         files modified through DSH/execution providers
+/var/lib/dsh-mcp-gateway/   OAuth client/token state
+/etc/dsh-mcp-gateway/       private deployment configuration
 ```
 
-This is an intentional safety boundary. Do not add a service-level hook that automatically resumes every active durable goal after boot unless a separate durable authorization policy is designed and reviewed.
+For a consistent backup, stop the public gateway first, then the DSH Host; restore ownership/modes before starting DSH and then the gateway. The software trees under `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` are reproducible from the pinned inputs and Git commit.
 
-## Upgrades
-
-Before upgrading MCP or DSH dependencies:
-
-1. update the dependency pin in a branch;
-2. run all repository tests;
-3. rerun cold-resume and public OAuth/MCP smoke tests when DSH wire behavior changes;
-4. review tool schemas/annotations because ChatGPT/custom MCP app deployments may retain an approved snapshot until refreshed;
-5. deploy only after CI is green.
+Before upgrading MCP or DSH: update pins in a branch, run the full tests, rerun the DSH community-tool projection smoke and public OAuth smoke, review projected tool schemas, and deploy only after the primary Harness path remains model-provider-free.

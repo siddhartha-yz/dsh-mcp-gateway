@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dsh-mcp-gateway"
 version = "0.0.1.dev0"
-description = "Experimental MCP gateway for durable DeepSeek Harness agent sessions"
+description = "OAuth/MCP adapter that exposes DSH Harness capabilities to ChatGPT Web"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "siddhartha-yz" }]

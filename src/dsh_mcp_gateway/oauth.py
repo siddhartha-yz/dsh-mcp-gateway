@@ -225,6 +225,26 @@ class OAuthStore:
                     );
                     """
                 )
+            # Create secondary indexes after any legacy token-table rebuild so
+            # DROP TABLE cannot silently remove the fresh token indexes.
+            connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pending_authorizations_expires
+                    ON pending_authorizations(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_pending_authorizations_client
+                    ON pending_authorizations(client_id);
+                CREATE INDEX IF NOT EXISTS idx_authorization_codes_expires
+                    ON authorization_codes(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_access_tokens_expires
+                    ON access_tokens(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_access_tokens_grant
+                    ON access_tokens(grant_id);
+                CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires
+                    ON refresh_tokens(expires_at);
+                CREATE INDEX IF NOT EXISTS idx_refresh_tokens_grant
+                    ON refresh_tokens(grant_id);
+                """
+            )
             connection.commit()
             self._initialized = True
 

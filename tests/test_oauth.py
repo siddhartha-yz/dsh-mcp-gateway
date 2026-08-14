@@ -573,6 +573,24 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("issuer", access_columns)
                 self.assertIn("grant_id", refresh_columns)
                 self.assertIn("issuer", refresh_columns)
+                index_names = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'"
+                    )
+                }
+                self.assertEqual(
+                    index_names,
+                    {
+                        "idx_pending_authorizations_expires",
+                        "idx_pending_authorizations_client",
+                        "idx_authorization_codes_expires",
+                        "idx_access_tokens_expires",
+                        "idx_access_tokens_grant",
+                        "idx_refresh_tokens_expires",
+                        "idx_refresh_tokens_grant",
+                    },
+                )
                 self.assertEqual(db.execute("SELECT count(*) FROM access_tokens").fetchone()[0], 0)
                 self.assertEqual(db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0], 0)
 

@@ -65,8 +65,9 @@ def build_mcp_server(
         instructions=(
             "DSH is the harness authority and ChatGPT is the reasoning agent. DSH ToolRuntime capabilities are "
             "projected as first-class MCP tools and should be called directly. Newly loaded global DSH tool plugins "
-            "appear on the next tools/list refresh without a bespoke ChatGPT wrapper. dsh_tool_catalog and "
-            "dsh_tool_call remain only as compatibility/debugging fallbacks."
+            "appear on the next tools/list refresh without a bespoke ChatGPT wrapper. DSH community skills are "
+            "discoverable through dsh_skill_catalog and loaded through dsh_skill_load using DSH's native SkillRegistry. "
+            "dsh_tool_catalog and dsh_tool_call remain compatibility/debugging fallbacks."
             if harness_bridge is not None
             else (
             "Use session_manage(action='start') before substantial work, keep the returned session_id and "
@@ -100,6 +101,17 @@ def build_mcp_server(
         def dsh_tool_call(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
             """Execute one discovered DSH tool through DSH's guarded ToolRuntime pipeline."""
             return harness_bridge.call(name, arguments)
+
+        @mcp.tool(name="dsh_skill_catalog", annotations=read_only)
+        def dsh_skill_catalog() -> dict[str, Any]:
+            """List model-invocable skills from DSH's native SkillRegistry for the Harness workspace."""
+            skills = harness_bridge.skills()
+            return {"skills": skills, "count": len(skills)}
+
+        @mcp.tool(name="dsh_skill_load", annotations=read_only)
+        def dsh_skill_load(name: str) -> dict[str, Any]:
+            """Load one DSH community skill's instructions through the native SkillRegistry."""
+            return {"skill": harness_bridge.load_skill(name)}
 
     if session_runtime is not None:
 

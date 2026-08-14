@@ -175,6 +175,22 @@ class HarnessBridgeClient:
             raise HarnessBridgeError("DSH bridge returned an invalid tool catalog")
         return [dict(item) for item in tools]
 
+    def skills(self) -> list[dict[str, Any]]:
+        payload = self._request("/api/chatgpt-bridge/skills")
+        skills = payload.get("skills")
+        if not isinstance(skills, list) or not all(isinstance(item, dict) for item in skills):
+            raise HarnessBridgeError("DSH bridge returned an invalid skill catalog")
+        return [dict(item) for item in skills]
+
+    def load_skill(self, name: str) -> dict[str, Any]:
+        if not name.strip():
+            raise ValueError("name must be non-empty")
+        payload = self._request("/api/chatgpt-bridge/skill", payload={"name": name})
+        skill = payload.get("skill")
+        if not isinstance(skill, dict) or not isinstance(skill.get("content"), str):
+            raise HarnessBridgeError("DSH bridge returned an invalid skill definition")
+        return dict(skill)
+
     def call(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         if not name.strip():
             raise ValueError("name must be non-empty")

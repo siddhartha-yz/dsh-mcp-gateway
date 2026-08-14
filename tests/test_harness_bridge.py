@@ -34,18 +34,28 @@ class HarnessBridgeClientTests(unittest.TestCase):
             seen.append((request.full_url, request.method, request.data, timeout))
             if request.full_url.endswith("/tools"):
                 return _Response({"tools": [{"name": "community_echo", "description": "echo", "parameters": {}}]})
+            if request.full_url.endswith("/skills"):
+                return _Response({"skills": [{"name": "community-review", "description": "review", "provider": "demo"}]})
+            if request.full_url.endswith("/skill"):
+                return _Response({"skill": {"name": "community-review", "description": "review", "provider": "demo", "content": "Review carefully."}})
             return _Response({"isError": False, "value": {"echo": "hi"}, "content": []})
 
         client = HarnessBridgeClient("http://127.0.0.1:3080", timeout_s=7)
         with patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=fake_urlopen):
             self.assertEqual(client.tools()[0]["name"], "community_echo")
+            self.assertEqual(client.skills()[0]["name"], "community-review")
+            self.assertEqual(client.load_skill("community-review")["content"], "Review carefully.")
             result = client.call("community_echo", {"text": "hi"})
 
         self.assertFalse(result["isError"])
         self.assertEqual(seen[0][0], "http://127.0.0.1:3080/api/chatgpt-bridge/tools")
         self.assertEqual(seen[0][1], "GET")
-        self.assertEqual(seen[1][1], "POST")
-        self.assertEqual(json.loads(seen[1][2]), {"name": "community_echo", "arguments": {"text": "hi"}})
+        self.assertEqual(seen[1][0], "http://127.0.0.1:3080/api/chatgpt-bridge/skills")
+        self.assertEqual(seen[1][1], "GET")
+        self.assertEqual(seen[2][0], "http://127.0.0.1:3080/api/chatgpt-bridge/skill")
+        self.assertEqual(json.loads(seen[2][2]), {"name": "community-review"})
+        self.assertEqual(seen[3][1], "POST")
+        self.assertEqual(json.loads(seen[3][2]), {"name": "community_echo", "arguments": {"text": "hi"}})
 
     def test_invalid_catalog_is_rejected(self) -> None:
         client = HarnessBridgeClient("http://127.0.0.1:3080")
@@ -62,14 +72,28 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
             def tools(self):
                 return [{"name": "community_echo", "description": "echo", "parameters": {"type": "object"}}]
 
+            def skills(self):
+                return [{"name": "community-review", "description": "review", "provider": "demo"}]
+
+            def load_skill(self, name):
+                return {"name": name, "description": "review", "provider": "demo", "content": "Review carefully."}
+
             def call(self, name, arguments=None):
                 return {"isError": False, "value": {"name": name, "arguments": arguments or {}}, "content": []}
 
         server = build_mcp_server(None, harness_bridge=FakeBridge())
         tools = {tool.name: tool for tool in await server.list_tools()}
-        self.assertEqual(set(tools), {"community_echo", "dsh_tool_catalog", "dsh_tool_call"})
+        self.assertEqual(
+            set(tools),
+            {"community_echo", "dsh_tool_catalog", "dsh_tool_call", "dsh_skill_catalog", "dsh_skill_load"},
+        )
         self.assertEqual(tools["community_echo"].input_schema, {"type": "object"})
         self.assertEqual(tools["community_echo"].meta, {"dsh/projected": True})
+
+        skill_catalog = await server.call_tool("dsh_skill_catalog", {})
+        self.assertEqual(skill_catalog.structured_content["count"], 1)
+        loaded_skill = await server.call_tool("dsh_skill_load", {"name": "community-review"})
+        self.assertEqual(loaded_skill.structured_content["skill"]["content"], "Review carefully.")
 
         result = await server.call_tool("community_echo", {"text": "hello"})
         self.assertFalse(result.is_error)

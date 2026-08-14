@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 export const name = 'dsh-chatgpt-bridge'
-export const inject = ['webServer', 'tools']
+export const inject = ['webServer', 'tools', 'skills']
 
 const PREFIX = '/api/chatgpt-bridge'
 const MAX_BODY_BYTES = 1_000_000
@@ -35,6 +35,79 @@ export function apply(ctx) {
     path: `${PREFIX}/tools`,
     handler: (_req, res) => {
       json(res, 200, { tools: ctx.tools.schemas() })
+    },
+  }))
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: `${PREFIX}/skills`,
+    handler: async (_req, res) => {
+      try {
+        const skills = await ctx.skills.list({ cwd: process.cwd() })
+        json(res, 200, {
+          skills: skills
+            .filter(skill => skill.invocation?.modelInvocable === true)
+            .map(skill => ({
+              name: skill.name,
+              description: skill.description,
+              ...(skill.whenToUse ? { whenToUse: skill.whenToUse } : {}),
+              source: skill.source,
+              provider: skill.provider,
+              ...(skill.resourceBase ? { resourceBase: skill.resourceBase } : {}),
+            })),
+        })
+      } catch (error) {
+        json(res, 500, {
+          error: 'bridge_error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+  }))
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: `${PREFIX}/skill`,
+    handler: async (req, res) => {
+      if (req.method !== 'POST') {
+        json(res, 405, { error: 'method_not_allowed' })
+        return
+      }
+      try {
+        const payload = await readJson(req)
+        const skillName = typeof payload?.name === 'string' ? payload.name.trim() : ''
+        if (!skillName) {
+          json(res, 400, { error: 'invalid_request', message: 'name must be a non-empty string' })
+          return
+        }
+        const lookup = { cwd: process.cwd() }
+        const summary = (await ctx.skills.list(lookup)).find(skill => skill.name === skillName)
+        if (!summary || summary.invocation?.modelInvocable !== true) {
+          json(res, 404, { error: 'skill_unavailable', message: `skill "${skillName}" is unavailable for model invocation` })
+          return
+        }
+        const skill = await ctx.skills.get(skillName, lookup)
+        if (!skill || skill.invocation?.modelInvocable !== true) {
+          json(res, 404, { error: 'skill_unavailable', message: `skill "${skillName}" is unavailable for model invocation` })
+          return
+        }
+        json(res, 200, {
+          skill: {
+            name: skill.name,
+            description: skill.description,
+            ...(skill.whenToUse ? { whenToUse: skill.whenToUse } : {}),
+            source: skill.source,
+            provider: skill.provider,
+            ...(skill.resourceBase ? { resourceBase: skill.resourceBase } : {}),
+            content: skill.content,
+          },
+        })
+      } catch (error) {
+        json(res, 400, {
+          error: 'bridge_error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
     },
   }))
 

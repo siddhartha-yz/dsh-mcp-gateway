@@ -28,6 +28,8 @@ class ArchitectureContractTests(unittest.TestCase):
 
         self.assertIn("ctx.tools.schemas()", plugin)
         self.assertIn("ctx.tools.execute", plugin)
+        self.assertIn("ctx.skills.list", plugin)
+        self.assertIn("ctx.skills.get", plugin)
         self.assertNotIn("DEEPSEEK_API_KEY", plugin)
 
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")

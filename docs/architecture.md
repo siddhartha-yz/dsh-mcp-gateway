@@ -66,6 +66,8 @@ The gateway listener and the public MCP origin are separate concepts. The proces
 
 OAuth bearer state is also fail-closed across deployment changes. Persisted access/refresh rows are bound to both issuer and resource, and each authorization grant has a private family id retained through refresh rotation. Revoking either an access or refresh token deletes the whole family. A database created by the earlier token schema cannot safely infer those families, so migration preserves registered OAuth clients but invalidates legacy authorization-code/token state and requires reauthorization.
 
+OAuth discovery separates scopes clients may request from scopes the MCP resource requires. `offline_access` is advertised and may ride the authorization/refresh grant, while Bearer authorization for `/mcp` requires only `dsh:control`. The currently tested MCP Python SDK 2.0.0 accepts DCR public clients using `token_endpoint_auth_method=none`, but its generated authorization-server metadata does not advertise that method. The gateway regression-tests the actual public-client PKCE flow but does not fork or shadow the SDK metadata route solely to paper over that upstream discrepancy.
+
 ## Future composition
 
 ```text

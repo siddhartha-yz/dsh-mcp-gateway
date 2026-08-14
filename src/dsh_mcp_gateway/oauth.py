@@ -36,7 +36,8 @@ class EmbeddedOAuthConfig:
     resource_url: str
     state_db: Path
     admin_pin: str
-    scopes: tuple[str, ...] = ("dsh:control",)
+    scopes: tuple[str, ...] = ("dsh:control", "offline_access")
+    required_scopes: tuple[str, ...] = ("dsh:control",)
     pending_ttl_s: int = 600
     code_ttl_s: int = 300
     access_token_ttl_s: int = 3600
@@ -52,6 +53,10 @@ class EmbeddedOAuthConfig:
             raise ValueError("admin_pin must contain at least 6 characters")
         if not self.scopes or any(not scope for scope in self.scopes):
             raise ValueError("at least one non-empty OAuth scope is required")
+        if not self.required_scopes or any(not scope for scope in self.required_scopes):
+            raise ValueError("at least one non-empty required OAuth scope is required")
+        if not set(self.required_scopes).issubset(self.scopes):
+            raise ValueError("required OAuth scopes must be a subset of allowed scopes")
         for name in ("pending_ttl_s", "code_ttl_s", "access_token_ttl_s", "refresh_token_ttl_s"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import sqlite3
 import tempfile
@@ -16,6 +18,7 @@ MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 if MCP_AVAILABLE:
     from mcp.server.auth.provider import AuthorizationParams, TokenError
     from mcp.shared.auth import OAuthClientInformationFull
+    from starlette.testclient import TestClient
 
     from dsh_mcp_gateway.oauth import (
         EmbeddedOAuthConfig,
@@ -67,6 +70,19 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             self.assertEqual(config.issuer_url, "http://127.0.0.1:8000/")
+            self.assertEqual(config.scopes, ("dsh:control", "offline_access"))
+            self.assertEqual(config.required_scopes, ("dsh:control",))
+
+    def test_required_scopes_must_be_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "subset"):
+            EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="123456",
+                scopes=("offline_access",),
+                required_scopes=("dsh:control",),
+            )
 
     def test_pin_limiter_enforces_per_source_and_global_failure_budgets(self) -> None:
         limiter = PinAttemptLimiter(limit=2, global_limit=3, window_s=300)
@@ -338,6 +354,81 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("/revoke", paths)
             self.assertIn("/approve", paths)
             self.assertIn("/mcp", paths)
+
+    def test_public_client_pkce_flow_advertises_offline_access_and_issues_refresh_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
+            verifier = "v" * 48
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+            redirect_uri = "https://example.com/chatgpt-callback"
+
+            with TestClient(app) as client:
+                metadata = client.get("/.well-known/oauth-authorization-server")
+                self.assertEqual(metadata.status_code, 200)
+                self.assertIn("offline_access", metadata.json()["scopes_supported"])
+                protected = client.get("/.well-known/oauth-protected-resource/mcp")
+                self.assertEqual(protected.status_code, 200)
+                self.assertEqual(protected.json()["scopes_supported"], ["dsh:control"])
+
+                registration = client.post(
+                    "/register",
+                    json={
+                        "client_name": "chatgpt-public-client-test",
+                        "redirect_uris": [redirect_uri],
+                        "response_types": ["code"],
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "token_endpoint_auth_method": "none",
+                        "scope": "dsh:control offline_access",
+                    },
+                )
+                self.assertEqual(registration.status_code, 201)
+                registered = registration.json()
+                self.assertEqual(registered["token_endpoint_auth_method"], "none")
+                self.assertNotIn("client_secret", registered)
+
+                authorization = client.get(
+                    "/authorize",
+                    params={
+                        "response_type": "code",
+                        "client_id": registered["client_id"],
+                        "redirect_uri": redirect_uri,
+                        "scope": "dsh:control offline_access",
+                        "state": "state-public-client",
+                        "code_challenge": challenge,
+                        "code_challenge_method": "S256",
+                        "resource": config.resource_url,
+                    },
+                    follow_redirects=False,
+                )
+                self.assertEqual(authorization.status_code, 302)
+                request_id = parse_qs(urlparse(authorization.headers["location"]).query)["request"][0]
+                approval = client.post(
+                    "/approve",
+                    data={"request": request_id, "pin": config.admin_pin, "action": "approve"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(approval.status_code, 302)
+                callback = parse_qs(urlparse(approval.headers["location"]).query)
+                self.assertEqual(callback["iss"], [config.issuer_url])
+
+                token = client.post(
+                    "/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "client_id": registered["client_id"],
+                        "code": callback["code"][0],
+                        "redirect_uri": redirect_uri,
+                        "code_verifier": verifier,
+                        "resource": config.resource_url,
+                    },
+                )
+                self.assertEqual(token.status_code, 200)
+                issued = token.json()
+                self.assertTrue(issued["access_token"])
+                self.assertTrue(issued["refresh_token"])
+                self.assertEqual(set(issued["scope"].split()), {"dsh:control", "offline_access"})
 
 
 if __name__ == "__main__":

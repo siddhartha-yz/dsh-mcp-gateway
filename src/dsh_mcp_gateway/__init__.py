@@ -129,10 +129,11 @@ def build_embedded_oauth_server(service: GatewayService, config: Any) -> tuple[A
 
     provider = EmbeddedOAuthProvider(config)
     scopes = list(config.scopes)
+    required_scopes = list(config.required_scopes)
     auth = AuthSettings(
         issuer_url=AnyHttpUrl(config.issuer_url),
         resource_server_url=AnyHttpUrl(config.resource_url),
-        required_scopes=scopes,
+        required_scopes=required_scopes,
         client_registration_options=ClientRegistrationOptions(
             enabled=True,
             valid_scopes=scopes,

@@ -64,7 +64,9 @@ Generic Harness operations cover both DSH tools and DSH community skills:
 - `dsh_skill_catalog`: lists model-invocable entries from DSH's native `SkillRegistry` for the Harness workspace.
 - `dsh_skill_load`: loads one compatible community skill's instructions from that registry.
 
-This means adding another global DSH tool plugin does not require another Python wrapper or gateway restart; it appears on the next MCP tool-list refresh. Community skills likewise cross one generic SkillRegistry bridge rather than getting bespoke wrappers. Agent-scoped DSH capabilities still need an explicit ChatGPT authority/scope design before they can be exposed safely, and automatic MCP `tools/list_changed` notification is a later refinement rather than a prerequisite for direct projection.
+The bridge now uses DSH's own AgentRegistry and agent-preset composition only as a **capability/scope identity**: it creates one idle DSH Agent with no provider/model configuration, mounts the deployment's default preset through `agentPresets.mount(...)`, never submits a prompt to that Agent, and passes the resulting Agent to `ToolRuntime.schemas(agent)` / `ToolRuntime.execute({ ..., agent })` and SkillRegistry scope lookup. This preserves DSH's preset restrictions, guards, jobs/filesystem/session ownership, and community-extension scope instead of promoting scoped registrations to globals. A real rc6 smoke verified preset-scoped `bash` discovery and execution with no model-provider API key configured.
+
+This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper or gateway restart; it is available through the same generic bridge. Automatic MCP `tools/list_changed` notification is a later refinement rather than a prerequisite for direct projection.
 
 The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).
 

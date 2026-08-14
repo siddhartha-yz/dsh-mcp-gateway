@@ -26,10 +26,15 @@ class ArchitectureContractTests(unittest.TestCase):
         plugin = (ROOT / "dsh-bridge-plugin" / "index.js").read_text(encoding="utf-8")
         overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
 
-        self.assertIn("ctx.tools.schemas()", plugin)
+        self.assertIn("agents.create", plugin)
+        self.assertIn("presets.mount(agentCtx)", plugin)
+        self.assertIn("ctx.tools.schemas(agent)", plugin)
         self.assertIn("ctx.tools.execute", plugin)
+        self.assertIn("...(agent ? { agent } : {})", plugin)
         self.assertIn("ctx.skills.list", plugin)
         self.assertIn("ctx.skills.get", plugin)
+        self.assertIn("...(agent ? { scope: agent } : {})", plugin)
+        self.assertIn("supplies no provider/model config", plugin)
         self.assertNotIn("DEEPSEEK_API_KEY", plugin)
 
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")

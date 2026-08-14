@@ -30,11 +30,73 @@ async function readJson(req) {
 }
 
 export function apply(ctx) {
+  let capabilityHandlePromise
+
+  async function capabilityAgent() {
+    const agents = ctx.get('agents')
+    const presets = ctx.get('agentPresets')
+    if (!agents || !presets) return undefined
+    if (capabilityHandlePromise) return (await capabilityHandlePromise).agent
+
+    capabilityHandlePromise = agents.create({
+      sessionId: `chatgpt-bridge-${randomUUID()}`,
+      meta: {
+        cwd: process.cwd(),
+        agentPreset: presets.defaultId,
+      },
+      // This Agent is only DSH's native scope/capability identity. The bridge
+      // never submits a prompt to it, and supplies no provider/model config.
+      // ChatGPT remains the sole reasoning/model agent while ToolRuntime still
+      // sees the exact preset-scoped world DSH intended for a session.
+      setup: async agentCtx => {
+        await presets.mount(agentCtx)
+      },
+    }).catch((error) => {
+      capabilityHandlePromise = undefined
+      throw error
+    })
+    return (await capabilityHandlePromise).agent
+  }
+
+  ctx.effect(() => async () => {
+    const pending = capabilityHandlePromise
+    capabilityHandlePromise = undefined
+    if (!pending) return
+    try {
+      const handle = await pending
+      await handle.dispose()
+    } catch {
+      // Creation failures already roll their unpublished scope back.
+    }
+  }, 'dsh-chatgpt-bridge.capability-agent')
+
+  async function scopedLookup() {
+    const agent = await capabilityAgent()
+    return {
+      agent,
+      skillOptions: {
+        cwd: agent?.session?.header?.meta?.cwd ?? process.cwd(),
+        ...(agent ? { scope: agent } : {}),
+      },
+    }
+  }
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: `${PREFIX}/tools`,
-    handler: (_req, res) => {
-      json(res, 200, { tools: ctx.tools.schemas() })
+    handler: async (_req, res) => {
+      try {
+        const { agent } = await scopedLookup()
+        json(res, 200, {
+          tools: ctx.tools.schemas(agent),
+          scope: agent ? 'dsh-agent-preset' : 'global',
+        })
+      } catch (error) {
+        json(res, 500, {
+          error: 'bridge_error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
     },
   }))
 
@@ -43,7 +105,8 @@ export function apply(ctx) {
     path: `${PREFIX}/skills`,
     handler: async (_req, res) => {
       try {
-        const skills = await ctx.skills.list({ cwd: process.cwd() })
+        const { skillOptions } = await scopedLookup()
+        const skills = await ctx.skills.list(skillOptions)
         json(res, 200, {
           skills: skills
             .filter(skill => skill.invocation?.modelInvocable === true)
@@ -80,13 +143,13 @@ export function apply(ctx) {
           json(res, 400, { error: 'invalid_request', message: 'name must be a non-empty string' })
           return
         }
-        const lookup = { cwd: process.cwd() }
-        const summary = (await ctx.skills.list(lookup)).find(skill => skill.name === skillName)
+        const { skillOptions } = await scopedLookup()
+        const summary = (await ctx.skills.list(skillOptions)).find(skill => skill.name === skillName)
         if (!summary || summary.invocation?.modelInvocable !== true) {
           json(res, 404, { error: 'skill_unavailable', message: `skill "${skillName}" is unavailable for model invocation` })
           return
         }
-        const skill = await ctx.skills.get(skillName, lookup)
+        const skill = await ctx.skills.get(skillName, skillOptions)
         if (!skill || skill.invocation?.modelInvocable !== true) {
           json(res, 404, { error: 'skill_unavailable', message: `skill "${skillName}" is unavailable for model invocation` })
           return
@@ -125,11 +188,13 @@ export function apply(ctx) {
           json(res, 400, { error: 'invalid_request', message: 'name must be a non-empty string' })
           return
         }
+        const { agent } = await scopedLookup()
         const result = await ctx.tools.execute({
           callId: `chatgpt-${randomUUID()}`,
           name: payload.name,
           arguments: payload.arguments ?? {},
           signal: AbortSignal.timeout(120_000),
+          ...(agent ? { agent } : {}),
         })
         json(res, 200, result)
       } catch (error) {

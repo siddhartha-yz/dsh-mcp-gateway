@@ -96,6 +96,16 @@ class FakeBackend:
         self.calls.append(("goal_create", session_id, objective, max_goal_rounds))
         return {"session_id": session_id, "action": "created", "ref": {"id": "g1", "revision": 1}}
 
+    def goal_edit(
+        self,
+        session_id: str,
+        *,
+        objective: str | None = None,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(("goal_edit", session_id, objective, max_goal_rounds))
+        return {"session_id": session_id, "action": "edited", "ref": {"id": "g1", "revision": 2}}
+
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         self.calls.append(("goal_resume", session_id))
         return {"session_id": session_id, "action": "resumed"}
@@ -103,6 +113,14 @@ class FakeBackend:
     def goal_pause(self, session_id: str) -> dict[str, Any]:
         self.calls.append(("goal_pause", session_id))
         return {"session_id": session_id, "action": "paused"}
+
+    def goal_complete(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("goal_complete", session_id))
+        return {"session_id": session_id, "action": "completed", "ref": {"id": "g1", "revision": 3}}
+
+    def goal_clear(self, session_id: str) -> dict[str, Any]:
+        self.calls.append(("goal_clear", session_id))
+        return {"session_id": session_id, "action": "cleared", "cleared": True}
 
 
 class SessionRouterTests(unittest.TestCase):
@@ -311,6 +329,34 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
                     "updatedAt": 1,
                 }
                 result = {"ok": True, "value": {"ref": {"id": "goal-created-1", "revision": 1}}}
+        elif method == "goal.edit":
+            session_id = payload["sessionId"]
+            state = sessions[session_id]
+            projection = state.get("goal")
+            if not isinstance(projection, dict) or not isinstance(projection.get("goal"), dict):
+                result = {
+                    "ok": False,
+                    "error": {"code": "goal-missing", "message": "no current goal", "details": {}},
+                }
+            else:
+                goal = projection["goal"]
+                expected_ref = {"id": goal["id"], "revision": goal["revision"]}
+                if payload.get("ref") != expected_ref:
+                    result = {
+                        "ok": False,
+                        "error": {"code": "goal-stale-ref", "message": "stale goal ref", "details": {}},
+                    }
+                else:
+                    goal["revision"] += 1
+                    if "objective" in payload:
+                        goal["objective"] = payload["objective"]
+                    if "maxGoalRounds" in payload:
+                        goal["maxGoalRounds"] = payload["maxGoalRounds"]
+                    projection["updatedAt"] = projection.get("updatedAt", 1) + 1
+                    result = {
+                        "ok": True,
+                        "value": {"ref": {"id": goal["id"], "revision": goal["revision"]}},
+                    }
         elif method in {"goal.resume", "goal.pause"}:
             session_id = payload["sessionId"]
             state = sessions[session_id]
@@ -335,6 +381,50 @@ class FakeWebHostHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "value": {"ref": {"id": goal["id"], "revision": goal["revision"]}},
                     }
+        elif method == "goal.complete":
+            session_id = payload["sessionId"]
+            state = sessions[session_id]
+            projection = state.get("goal")
+            if not isinstance(projection, dict) or not isinstance(projection.get("goal"), dict):
+                result = {
+                    "ok": False,
+                    "error": {"code": "goal-missing", "message": "no current goal", "details": {}},
+                }
+            else:
+                goal = projection["goal"]
+                expected_ref = {"id": goal["id"], "revision": goal["revision"]}
+                if payload.get("ref") != expected_ref:
+                    result = {
+                        "ok": False,
+                        "error": {"code": "goal-stale-ref", "message": "stale goal ref", "details": {}},
+                    }
+                else:
+                    goal["revision"] += 1
+                    goal["phase"] = "complete"
+                    result = {
+                        "ok": True,
+                        "value": {"ref": {"id": goal["id"], "revision": goal["revision"]}},
+                    }
+        elif method == "goal.clear":
+            session_id = payload["sessionId"]
+            state = sessions[session_id]
+            projection = state.get("goal")
+            if not isinstance(projection, dict) or not isinstance(projection.get("goal"), dict):
+                result = {
+                    "ok": False,
+                    "error": {"code": "goal-missing", "message": "no current goal", "details": {}},
+                }
+            else:
+                goal = projection["goal"]
+                expected_ref = {"id": goal["id"], "revision": goal["revision"]}
+                if payload.get("ref") != expected_ref:
+                    result = {
+                        "ok": False,
+                        "error": {"code": "goal-stale-ref", "message": "stale goal ref", "details": {}},
+                    }
+                else:
+                    state["goal"] = None
+                    result = {"ok": True, "value": {"cleared": True}}
         elif method == "session.cancel":
             session_id = payload["sessionId"]
             sessions[session_id]["running"] = False
@@ -500,6 +590,82 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_goal_rounds"):
             self.backend.goal_create("cold-1", "work", max_goal_rounds=0)
 
+    def test_goal_edit_complete_and_clear_use_latest_cas_refs(self) -> None:
+        self.server.sessions["cold-1"]["goal"] = {
+            "goal": {
+                "id": "goal-lifecycle-1",
+                "revision": 3,
+                "objective": "original objective",
+                "phase": "blocked",
+                "blockedReason": {"code": "round-limit", "message": "limit reached"},
+                "maxGoalRounds": 2,
+            },
+            "roundsStarted": 2,
+            "createdAt": 1,
+            "updatedAt": 3,
+        }
+        self.server.calls.clear()
+
+        edited = self.backend.goal_edit(
+            "cold-1",
+            objective="  revised objective  ",
+            max_goal_rounds=5,
+        )
+        self.assertEqual(edited["previous_ref"], {"id": "goal-lifecycle-1", "revision": 3})
+        self.assertEqual(edited["ref"], {"id": "goal-lifecycle-1", "revision": 4})
+        after_edit = self.backend.goal_status("cold-1")["goal"]["goal"]
+        self.assertEqual(after_edit["phase"], "blocked")
+        self.assertEqual(after_edit["objective"], "revised objective")
+        self.assertEqual(after_edit["maxGoalRounds"], 5)
+
+        resumed = self.backend.goal_resume("cold-1")
+        self.assertEqual(resumed["previous_ref"], {"id": "goal-lifecycle-1", "revision": 4})
+        self.assertEqual(resumed["ref"], {"id": "goal-lifecycle-1", "revision": 5})
+        self.assertEqual(self.backend.goal_status("cold-1")["goal"]["goal"]["phase"], "active")
+
+        completed = self.backend.goal_complete("cold-1")
+        self.assertEqual(completed["previous_ref"], {"id": "goal-lifecycle-1", "revision": 5})
+        self.assertEqual(completed["ref"], {"id": "goal-lifecycle-1", "revision": 6})
+        self.assertEqual(self.backend.goal_status("cold-1")["goal"]["goal"]["phase"], "complete")
+
+        cleared = self.backend.goal_clear("cold-1")
+        self.assertEqual(cleared["previous_ref"], {"id": "goal-lifecycle-1", "revision": 6})
+        self.assertTrue(cleared["cleared"])
+        self.assertIsNone(self.backend.goal_status("cold-1")["goal"])
+
+        edit_calls = [payload for method, payload in self.server.calls if method == "goal.edit"]
+        self.assertEqual(
+            edit_calls,
+            [
+                {
+                    "sessionId": "cold-1",
+                    "ref": {"id": "goal-lifecycle-1", "revision": 3},
+                    "objective": "revised objective",
+                    "maxGoalRounds": 5,
+                }
+            ],
+        )
+
+    def test_goal_edit_validates_requested_changes(self) -> None:
+        self.server.sessions["cold-1"]["goal"] = {
+            "goal": {
+                "id": "goal-edit-1",
+                "revision": 1,
+                "objective": "work",
+                "phase": "paused",
+                "maxGoalRounds": 5,
+            },
+            "roundsStarted": 1,
+            "createdAt": 1,
+            "updatedAt": 1,
+        }
+        with self.assertRaisesRegex(ValueError, "requires objective and/or"):
+            self.backend.goal_edit("cold-1")
+        with self.assertRaisesRegex(ValueError, "objective"):
+            self.backend.goal_edit("cold-1", objective="   ")
+        with self.assertRaisesRegex(ValueError, "max_goal_rounds"):
+            self.backend.goal_edit("cold-1", max_goal_rounds=0)
+
     def test_goal_resume_uses_projection_cas_after_cold_attach(self) -> None:
         self.server.sessions["cold-1"]["goal"] = {
             "goal": {
@@ -642,9 +808,15 @@ class PublicSdkBackendTests(unittest.TestCase):
             with self.assertRaises(GoalControlUnavailable):
                 backend.goal_create("s1", "work", max_goal_rounds=5)
             with self.assertRaises(GoalControlUnavailable):
+                backend.goal_edit("s1", max_goal_rounds=10)
+            with self.assertRaises(GoalControlUnavailable):
                 backend.goal_resume("s1")
             with self.assertRaises(GoalControlUnavailable):
                 backend.goal_pause("s1")
+            with self.assertRaises(GoalControlUnavailable):
+                backend.goal_complete("s1")
+            with self.assertRaises(GoalControlUnavailable):
+                backend.goal_clear("s1")
 
     def test_public_sdk_durable_history_pagination_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -696,8 +868,11 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_cancel",
                 "dsh_goal_status",
                 "dsh_goal_create",
+                "dsh_goal_edit",
                 "dsh_goal_resume",
                 "dsh_goal_pause",
+                "dsh_goal_complete",
+                "dsh_goal_clear",
             ],
         )
         start = tools[0]
@@ -718,8 +893,11 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             "dsh_continue",
             "dsh_cancel",
             "dsh_goal_create",
+            "dsh_goal_edit",
             "dsh_goal_resume",
             "dsh_goal_pause",
+            "dsh_goal_complete",
+            "dsh_goal_clear",
         ):
             annotations = by_name[name].annotations
             assert annotations is not None
@@ -774,6 +952,33 @@ class McpSurfaceTests(unittest.IsolatedAsyncioTestCase):
             {"session_id": "s1", "action": "created", "ref": {"id": "g1", "revision": 1}},
         )
         self.assertEqual(backend.calls, [("goal_create", "s1", "finish work", 12)])
+
+    async def test_goal_lifecycle_tools_delegate_structured_operations(self) -> None:
+        backend = FakeBackend(SessionPresence.LIVE)
+        server = build_mcp_server(GatewayService(backend))
+
+        edited = await server.call_tool(
+            "dsh_goal_edit",
+            {"session_id": "s1", "objective": "revised", "max_goal_rounds": 20},
+        )
+        self.assertFalse(edited.is_error)
+        self.assertEqual(edited.structured_content["action"], "edited")
+
+        completed = await server.call_tool("dsh_goal_complete", {"session_id": "s1"})
+        self.assertFalse(completed.is_error)
+        self.assertEqual(completed.structured_content["action"], "completed")
+
+        cleared = await server.call_tool("dsh_goal_clear", {"session_id": "s1"})
+        self.assertFalse(cleared.is_error)
+        self.assertEqual(cleared.structured_content["action"], "cleared")
+        self.assertEqual(
+            backend.calls,
+            [
+                ("goal_edit", "s1", "revised", 20),
+                ("goal_complete", "s1"),
+                ("goal_clear", "s1"),
+            ],
+        )
 
     async def test_public_sdk_factory_wires_mcp_to_event_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -52,11 +52,16 @@ session.history projections.values.goal
         v
 current {id, revision}
         |
+        +-- goal.edit(ref, objective?, maxGoalRounds?)
         +-- goal.resume(ref)
-        `-- goal.pause(ref)
+        +-- goal.pause(ref)
+        +-- goal.complete(ref)
+        `-- goal.clear(ref)
 ```
 
-The CAS ref is re-read for every mutation. A goal may change phase or revision between two control calls; such races are reported by DSH rather than hidden with an automatic retry. In particular, a resumed goal may become blocked or complete before a later pause request arrives.
+The CAS ref is re-read for every mutation. A goal may change phase or revision between two control calls; such races are reported by DSH rather than hidden with an automatic retry. In particular, a resumed goal may become blocked or complete before a later pause request arrives. `goal.edit` is the structured recovery path when policy allows more work after a round-limit block: it can increase `maxGoalRounds` without changing phase, after which an explicit `goal.resume` re-arms continuation. `goal.complete` gives the operator a durable terminal transition, while `goal.clear` removes the current goal only after recording DSH's durable tombstone/history.
+
+A real rc6 lifecycle test exercised exactly that recovery sequence: the goal blocked at 1/1 rounds, the gateway edited its objective/cap to 3 while it remained blocked, resumed it until 3/3 and another round-limit block, completed it, then cleared it. Every transition used the latest durable revision; the observed ref advanced from revision 2 through 6 before clear.
 
 ## Security boundary
 

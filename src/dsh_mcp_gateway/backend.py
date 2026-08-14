@@ -54,9 +54,21 @@ class DshControlBackend(DshSessionBackend, Protocol):
         max_goal_rounds: int | None = None,
     ) -> dict[str, Any]: ...
 
+    def goal_edit(
+        self,
+        session_id: str,
+        *,
+        objective: str | None = None,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]: ...
+
     def goal_resume(self, session_id: str) -> dict[str, Any]: ...
 
     def goal_pause(self, session_id: str) -> dict[str, Any]: ...
+
+    def goal_complete(self, session_id: str) -> dict[str, Any]: ...
+
+    def goal_clear(self, session_id: str) -> dict[str, Any]: ...
 
 
 class PublicSdkSubscription(Protocol):
@@ -331,6 +343,46 @@ class ExperimentalWebHostBackend:
             "ref": ref,
         }
 
+    def goal_edit(
+        self,
+        session_id: str,
+        *,
+        objective: str | None = None,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        if objective is not None:
+            objective = objective.strip()
+            if not objective:
+                raise ValueError("objective must be non-empty when supplied")
+        if max_goal_rounds is not None and (
+            not isinstance(max_goal_rounds, int)
+            or isinstance(max_goal_rounds, bool)
+            or max_goal_rounds <= 0
+        ):
+            raise ValueError("max_goal_rounds must be a positive integer")
+        if objective is None and max_goal_rounds is None:
+            raise ValueError("goal edit requires objective and/or max_goal_rounds")
+        self._ensure_attached(session_id)
+        projection = self._goal_projection(session_id)
+        if projection is None:
+            raise ExperimentalWebHostError(f"session {session_id!r} has no current goal")
+        ref = self._goal_ref(projection)
+        payload: dict[str, Any] = {"sessionId": session_id, "ref": ref}
+        if objective is not None:
+            payload["objective"] = objective
+        if max_goal_rounds is not None:
+            payload["maxGoalRounds"] = max_goal_rounds
+        value = self._call("goal.edit", payload)
+        new_ref = value.get("ref")
+        if not isinstance(new_ref, dict):
+            raise ExperimentalWebHostError("goal.edit returned invalid ref")
+        return {
+            "session_id": session_id,
+            "action": "edited",
+            "previous_ref": ref,
+            "ref": new_ref,
+        }
+
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         self._ensure_attached(session_id)
         projection = self._goal_projection(session_id)
@@ -357,6 +409,39 @@ class ExperimentalWebHostBackend:
             "action": "paused",
             "previous_ref": ref,
             "ref": value.get("ref"),
+        }
+
+    def goal_complete(self, session_id: str) -> dict[str, Any]:
+        self._ensure_attached(session_id)
+        projection = self._goal_projection(session_id)
+        if projection is None:
+            raise ExperimentalWebHostError(f"session {session_id!r} has no current goal")
+        ref = self._goal_ref(projection)
+        value = self._call("goal.complete", {"sessionId": session_id, "ref": ref})
+        new_ref = value.get("ref")
+        if not isinstance(new_ref, dict):
+            raise ExperimentalWebHostError("goal.complete returned invalid ref")
+        return {
+            "session_id": session_id,
+            "action": "completed",
+            "previous_ref": ref,
+            "ref": new_ref,
+        }
+
+    def goal_clear(self, session_id: str) -> dict[str, Any]:
+        self._ensure_attached(session_id)
+        projection = self._goal_projection(session_id)
+        if projection is None:
+            raise ExperimentalWebHostError(f"session {session_id!r} has no current goal")
+        ref = self._goal_ref(projection)
+        value = self._call("goal.clear", {"sessionId": session_id, "ref": ref})
+        if value.get("cleared") is not True:
+            raise ExperimentalWebHostError("goal.clear did not acknowledge the clear")
+        return {
+            "session_id": session_id,
+            "action": "cleared",
+            "previous_ref": ref,
+            "cleared": True,
         }
 
     def list_sessions(self) -> list[dict[str, Any]]:
@@ -710,6 +795,17 @@ class PublicSdkBackend:
             raise KeyError(session_id)
         raise GoalControlUnavailable("the current public DSH SDK does not expose goal.create")
 
+    def goal_edit(
+        self,
+        session_id: str,
+        *,
+        objective: str | None = None,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose goal.edit")
+
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         if self.presence(session_id) is SessionPresence.ABSENT:
             raise KeyError(session_id)
@@ -719,3 +815,13 @@ class PublicSdkBackend:
         if self.presence(session_id) is SessionPresence.ABSENT:
             raise KeyError(session_id)
         raise GoalControlUnavailable("the current public DSH SDK does not expose goal.pause")
+
+    def goal_complete(self, session_id: str) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose goal.complete")
+
+    def goal_clear(self, session_id: str) -> dict[str, Any]:
+        if self.presence(session_id) is SessionPresence.ABSENT:
+            raise KeyError(session_id)
+        raise GoalControlUnavailable("the current public DSH SDK does not expose goal.clear")

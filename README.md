@@ -66,8 +66,11 @@ dsh_list
 dsh_cancel
 dsh_goal_status
 dsh_goal_create
+dsh_goal_edit
 dsh_goal_resume
 dsh_goal_pause
+dsh_goal_complete
+dsh_goal_clear
 ```
 
 The MCP layer depends only on the stable gateway backend contract; it does not know whether DSH is reached through the Python SDK, ACP, a protocol-driver plugin, or a future official resumable API.
@@ -78,7 +81,7 @@ A local proof of concept using DeepSeek Harness `0.1.0rc6` verified that an init
 
 The current public Python SDK still cannot cold-resume an existing persisted session: a fresh SDK runtime follows the create path and hits a persisted-log id collision. The experimental Web Host adapter closes that transport gap without changing the MCP/service contract. In a real rc6 restart test, the first turn produced 22 durable events; after stopping and restarting the whole Host, the same session resumed, accepted a second turn, and retained both prompts in one history (37 events, two `turn/end` records).
 
-Goal lifecycle has a separate safety boundary. DSH deliberately does not persist process-local goal activation: after session resume, a durable goal may still be `phase=active` while automatic continuation remains disarmed. A real rc6 test confirmed that cold-resuming the Agent did not create a new goal round; an explicit `goal.resume` CAS mutation re-armed continuation. The gateway therefore exposes explicit goal controls rather than silently auto-rearming goals after restart.
+Goal lifecycle has a separate safety boundary. DSH deliberately does not persist process-local goal activation: after session resume, a durable goal may still be `phase=active` while automatic continuation remains disarmed. A real rc6 test confirmed that cold-resuming the Agent did not create a new goal round; an explicit `goal.resume` CAS mutation re-armed continuation. The gateway therefore exposes explicit goal controls rather than silently auto-rearming goals after restart. The structured operator lifecycle now also covers `goal.edit`, `goal.complete`, and `goal.clear`. In a real rc6 round-limit test, a goal blocked after round 1, `goal.edit` raised its cap to 3 without changing the blocked phase, `goal.resume` ran rounds 2-3 until it blocked again, `goal.complete` moved it to `phase=complete`, and `goal.clear` removed the current goal while retaining DSH's durable history/tombstone semantics.
 
 A public HTTPS development smoke test also exercised the complete client-facing chain through a temporary reverse proxy: dynamic client registration, PKCE authorization, owner PIN approval, authorization-code exchange, MCP initialization/tool discovery, `dsh_start`, structured `dsh_goal_create`, closing that MCP session, reconnecting from a second MCP session to the same DSH session, reading status/history/goal state, sending `dsh_continue`, and refresh-token rotation. The test exposed an important deployment requirement: MCP DNS-rebinding protection must explicitly allow the declared public reverse-proxy Host/Origin while the process itself remains bound to loopback.
 

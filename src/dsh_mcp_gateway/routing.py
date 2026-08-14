@@ -109,8 +109,27 @@ class GatewayService:
             max_goal_rounds=max_goal_rounds,
         )
 
+    def goal_edit(
+        self,
+        session_id: str,
+        *,
+        objective: str | None = None,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        return self._backend.goal_edit(
+            session_id,
+            objective=objective,
+            max_goal_rounds=max_goal_rounds,
+        )
+
     def goal_resume(self, session_id: str) -> dict[str, Any]:
         return self._backend.goal_resume(session_id)
 
     def goal_pause(self, session_id: str) -> dict[str, Any]:
         return self._backend.goal_pause(session_id)
+
+    def goal_complete(self, session_id: str) -> dict[str, Any]:
+        return self._backend.goal_complete(session_id)
+
+    def goal_clear(self, session_id: str) -> dict[str, Any]:
+        return self._backend.goal_clear(session_id)

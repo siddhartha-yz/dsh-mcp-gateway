@@ -112,6 +112,19 @@ def build_mcp_server(
             max_goal_rounds=max_goal_rounds,
         )
 
+    @mcp.tool(name="dsh_goal_edit", annotations=consequential_control)
+    def dsh_goal_edit(
+        session_id: str,
+        objective: str | None = None,
+        max_goal_rounds: int | None = None,
+    ) -> dict[str, Any]:
+        """Edit the current durable goal objective and/or round cap using its latest CAS revision."""
+        return service.goal_edit(
+            session_id,
+            objective=objective,
+            max_goal_rounds=max_goal_rounds,
+        )
+
     @mcp.tool(name="dsh_goal_resume", annotations=consequential_control)
     def dsh_goal_resume(session_id: str) -> dict[str, Any]:
         """Explicitly re-arm/resume the current goal using its latest durable CAS revision."""
@@ -121,6 +134,16 @@ def build_mcp_server(
     def dsh_goal_pause(session_id: str) -> dict[str, Any]:
         """Pause the current goal using its latest durable CAS revision."""
         return service.goal_pause(session_id)
+
+    @mcp.tool(name="dsh_goal_complete", annotations=consequential_control)
+    def dsh_goal_complete(session_id: str) -> dict[str, Any]:
+        """Mark the current non-complete durable goal complete using its latest CAS revision."""
+        return service.goal_complete(session_id)
+
+    @mcp.tool(name="dsh_goal_clear", annotations=consequential_control)
+    def dsh_goal_clear(session_id: str) -> dict[str, Any]:
+        """Clear the current durable goal while retaining DSH's durable tombstone/history."""
+        return service.goal_clear(session_id)
 
     return mcp
 

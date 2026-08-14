@@ -69,6 +69,10 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["User"], "dsh-agent")
         self.assertEqual(service["Group"], "dsh-agent")
         self.assertEqual(service["EnvironmentFile"], "/etc/dsh-mcp-gateway/dsh.env")
+        self.assertEqual(
+            service["Environment"],
+            "PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin",
+        )
         self.assertEqual(service["WorkingDirectory"], "/srv/dsh-workspace")
         self.assertIn("--host 127.0.0.1", command)
         self.assertNotIn("--trusted-host", command)
@@ -156,6 +160,8 @@ class DeploymentTemplateTests(unittest.TestCase):
         deployment = DEPLOYMENT_DOC.read_text(encoding="utf-8")
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-harness", deployment)
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-mcp-gateway", deployment)
+        self.assertIn("/opt/dsh-runtime/node/bin/node", deployment)
+        self.assertIn("/opt/dsh-runtime/node/bin/npm install", deployment)
         self.assertIn("python3 scripts/preflight-deployment.py", deployment)
         self.assertIn("python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com", deployment)
         self.assertLess(
@@ -182,7 +188,7 @@ class DeploymentPreflightTests(unittest.TestCase):
 
     def build_layout(self, root: Path) -> dict[str, Path]:
         paths = {
-            "node": root / "bin" / "node",
+            "node": root / "opt" / "dsh-runtime" / "node" / "bin" / "node",
             "dsh_runtime": root / "opt" / "dsh-runtime",
             "gateway_root": root / "srv" / "dsh-mcp-gateway",
             "workspace": root / "srv" / "dsh-workspace",
@@ -285,8 +291,6 @@ class DeploymentPreflightTests(unittest.TestCase):
             user,
             "--config-group",
             group,
-            "--node-executable",
-            str(paths["node"]),
             "--json",
         ]
 
@@ -334,6 +338,8 @@ class DeploymentPreflightTests(unittest.TestCase):
             paths = self.build_layout(Path(tmp))
             package = paths["dsh_runtime"] / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
             package.write_text(json.dumps({"version": "0.1.0-rc.999"}), encoding="utf-8")
+            paths["node"].write_text("#!/bin/sh\necho v99.0.0\n", encoding="utf-8")
+            paths["node"].chmod(0o755)
             installed = paths["systemd_dir"] / "dsh-web-host.service"
             installed.write_text(installed.read_text(encoding="utf-8") + "\n# drift\n", encoding="utf-8")
 
@@ -341,6 +347,7 @@ class DeploymentPreflightTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             report = json.loads(result.stdout)
             failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("Node pinned version", failed)
             self.assertIn("DSH pinned version", failed)
             self.assertIn("installed dsh-web-host.service", failed)
 

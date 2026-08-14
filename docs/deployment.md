@@ -21,7 +21,7 @@ The raw DSH Web Host is not an authenticated public API and must stay on loopbac
 
 ## Tested runtime boundary
 
-The current experimental Web Host adapter is tested against `@deepseek-ai/dsh@0.1.0-rc.6` using Node `24.19.0`. The Node value records the runtime used for this repository's real integration evidence; the rc6 package does not declare an `engines` requirement, so it is not presented as an upstream minimum. Pin the DSH version for a deployment that should match the repository's evidence. DSH is a developer-preview dependency, so upgrade it deliberately and run the gateway test suite before changing the pin.
+The current experimental Web Host adapter is tested against `@deepseek-ai/dsh@0.1.0-rc.6` using Node `24.19.0`. The rc6 package does not declare an `engines` requirement, so Node 24.19.0 is not claimed as an upstream minimum; it is the exact known-good runtime pin for this repository's current release drills. The example systemd unit therefore uses a self-contained Node tree at `/opt/dsh-runtime/node` instead of inheriting a distribution-global Node. Upgrade either pin deliberately and rerun the gateway/integration evidence before changing it.
 
 A practical layout is:
 
@@ -48,10 +48,21 @@ sudo install -d -o dsh-gateway -g dsh-gateway -m 0700 /var/lib/dsh-mcp-gateway
 sudo install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway
 ```
 
-Install the DSH runtime at the path used by the service template and pin the tested release:
+Install a verified self-contained Node `24.19.0` distribution under `/opt/dsh-runtime/node` using your host's approved package/download-verification process. The resulting layout must contain at least:
+
+```text
+/opt/dsh-runtime/node/bin/node
+/opt/dsh-runtime/node/bin/npm
+```
+
+Do not rely on a global `/usr/bin/node`: the checked-in systemd unit explicitly prepends `/opt/dsh-runtime/node/bin` to its service PATH, and the deployment preflight requires that exact Node version by default. Then install the exact DSH release with that runtime:
 
 ```sh
-sudo npm install --prefix /opt/dsh-runtime --save-exact @deepseek-ai/dsh@0.1.0-rc.6
+sudo env PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin \
+  /opt/dsh-runtime/node/bin/npm install \
+  --prefix /opt/dsh-runtime \
+  --save-exact \
+  @deepseek-ai/dsh@0.1.0-rc.6
 ```
 
 Install this gateway into `/srv/dsh-mcp-gateway` and create its virtual environment:

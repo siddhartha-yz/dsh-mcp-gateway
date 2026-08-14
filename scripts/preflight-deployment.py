@@ -8,7 +8,6 @@ import grp
 import json
 import os
 import pwd
-import shutil
 import stat
 import subprocess
 from dataclasses import asdict, dataclass
@@ -16,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 TESTED_DSH_VERSION = "0.1.0-rc.6"
+TESTED_NODE_VERSION = "24.19.0"
 MIN_PYTHON = (3, 11)
 
 
@@ -195,7 +195,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-owner", default="root")
     parser.add_argument("--config-group", default="root")
     parser.add_argument("--expected-dsh-version", default=TESTED_DSH_VERSION)
-    parser.add_argument("--node-executable", default="node", help="Node executable visible to the DSH service environment.")
+    parser.add_argument("--expected-node-version", default=TESTED_NODE_VERSION)
+    parser.add_argument(
+        "--node-executable",
+        type=Path,
+        help="Node executable used by the DSH service; defaults to <dsh-runtime>/node/bin/node.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable results without secret values.")
     return parser
 
@@ -250,16 +255,21 @@ def main(argv: list[str] | None = None) -> int:
         expected_mode=0o700,
     )
 
-    node_executable = shutil.which(args.node_executable) if os.sep not in args.node_executable else args.node_executable
-    node_ok = node_executable is not None and Path(node_executable).is_file() and os.access(node_executable, os.X_OK)
+    node_executable = args.node_executable or args.dsh_runtime / "node" / "bin" / "node"
+    node_ok = node_executable.is_file() and os.access(node_executable, os.X_OK)
     p.add(
         "Node executable",
         node_ok,
-        f"{node_executable} (executable)" if node_ok else f"{args.node_executable!r} is not executable in the service PATH",
+        f"{node_executable} (executable)" if node_ok else f"{node_executable} is missing or not executable",
     )
-    if node_ok and node_executable is not None:
-        ok, rendered = run_command(node_executable, "--version")
-        p.add("Node runtime", ok, rendered)
+    if node_ok:
+        command_ok, rendered = run_command(node_executable, "--version")
+        expected_rendered = f"v{args.expected_node_version}"
+        p.add(
+            "Node pinned version",
+            command_ok and rendered == expected_rendered,
+            f"version={rendered!r}; expected={expected_rendered!r}",
+        )
 
     dsh_bin = args.dsh_runtime / "node_modules" / ".bin" / "dsh"
     dsh_package = args.dsh_runtime / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"

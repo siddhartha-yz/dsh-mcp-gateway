@@ -9,6 +9,7 @@ Type=simple
 User=dsh-agent
 Group=dsh-agent
 EnvironmentFile=/etc/dsh-mcp-gateway/dsh.env
+Environment=PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin
 WorkingDirectory=/srv/dsh-workspace
 ExecStart=/opt/dsh-runtime/node_modules/.bin/dsh web --host 127.0.0.1 --port 3080
 Restart=on-failure

@@ -184,4 +184,4 @@ No migration of local-shell-mcp is assumed by this repository, and the base gate
 
 ## License
 
-No license has been selected yet.
+The repository is licensed under MIT; see [`../LICENSE`](../LICENSE).

@@ -139,4 +139,4 @@ The server dependency graph used by CI is pinned in [`deploy/server-constraints.
 
 ## License
 
-No license has been selected yet.
+MIT. See [`LICENSE`](LICENSE). Security reporting guidance is in [`SECURITY.md`](SECURITY.md).

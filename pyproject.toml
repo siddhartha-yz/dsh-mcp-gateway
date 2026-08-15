@@ -9,6 +9,7 @@ description = "OAuth/MCP adapter that exposes DSH Harness capabilities to ChatGP
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "siddhartha-yz" }]
+license = { file = "LICENSE" }
 dependencies = []
 
 [project.scripts]

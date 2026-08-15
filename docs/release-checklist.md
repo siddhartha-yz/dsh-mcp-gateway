@@ -33,7 +33,7 @@ These remain unchecked until performed against the intended long-running host an
 - [ ] Perform an operating-system reboot drill and verify the DSH Harness, gateway, OAuth state, configured DSH plugins/skills, and projected ChatGPT capability surface recover automatically.
 - [ ] Perform an offline backup/restore drill for DSH configuration/state, workspace data, and OAuth state; verify the restored Harness exposes the same intended capability surface.
 - [ ] Decide the first release version/tag and write release notes from the exact commit that passed the drills above. Keep the package on a development version until these gates pass.
-- [ ] If distributing the project for third-party use, choose and add an explicit license/security-support policy; do not infer a license from repository visibility.
+- [x] Third-party distribution policy is explicit: the repository uses the MIT License and includes `SECURITY.md` with supported-version, private-reporting, deployment-boundary, and backup-secret guidance.
 
 ## Known boundaries
 

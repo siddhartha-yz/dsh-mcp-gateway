@@ -26,6 +26,7 @@ def build_mcp_server(
     *,
     session_runtime: DurableSessionRuntime | None = None,
     harness_bridge: HarnessBridgeClient | None = None,
+    project_dsh_tools: bool = False,
     auth_server_provider: Any | None = None,
     auth: Any | None = None,
     _server_cls: Any | None = None,
@@ -52,7 +53,7 @@ def build_mcp_server(
 
     server_cls = _server_cls or MCPServer
     harness_lifespan = None
-    if harness_bridge is not None:
+    if harness_bridge is not None and project_dsh_tools:
         try:
             from mcp.shared.subscriptions import ToolsListChanged
         except ImportError as exc:  # pragma: no cover - server dependency boundary
@@ -95,9 +96,13 @@ def build_mcp_server(
             "DSH is the harness authority and ChatGPT is the reasoning agent. The stable meta-tools "
             "dsh_tool_catalog/dsh_tool_call and dsh_skill_catalog/dsh_skill_load are the correctness path for DSH "
             "community extensions: use them to discover and invoke capabilities even if the ChatGPT client keeps a "
-            "frozen MCP tool snapshot. DSH ToolRuntime capabilities are also projected as first-class MCP tools when "
-            "the client refreshes tools/list; that projection is an optional UX optimization, not a requirement for "
-            "extension availability."
+            "frozen MCP tool snapshot."
+            + (
+                " This server also projects compatible DSH ToolRuntime capabilities as first-class MCP tools as an "
+                "explicit optional UX mode; extension availability must not depend on that projection."
+                if project_dsh_tools
+                else " This server is in meta-only mode, so DSH-internal tools are intentionally absent from the MCP tool list."
+            )
             if harness_bridge is not None
             else (
             "Use session_manage(action='start') before substantial work, keep the returned session_id and "
@@ -117,6 +122,19 @@ def build_mcp_server(
         auth=auth,
         lifespan=harness_lifespan,
     )
+    if harness_bridge is not None and not project_dsh_tools:
+        # MCP 2026-07-28 derives tools.listChanged from whether the modern
+        # subscriptions/listen endpoint is served. MCPServer currently enables
+        # that endpoint by default even when this gateway never publishes tool
+        # changes. Meta-only mode deliberately removes it so a client cannot
+        # infer or receive a dynamic first-class tool-refresh channel. There is
+        # no public SDK switch for this yet, so fail closed if the SDK internals
+        # change instead of silently weakening the product invariant.
+        lowlevel = getattr(mcp, "_lowlevel_server", None)
+        handlers = getattr(lowlevel, "_request_handlers", None)
+        if not isinstance(handlers, dict) or "subscriptions/listen" not in handlers:
+            raise RuntimeError("MCP SDK subscription internals changed; cannot guarantee meta-only tool surface")
+        handlers.pop("subscriptions/listen")
     if harness_bridge is not None:
         mcp._dsh_harness_bridge = harness_bridge
 
@@ -311,6 +329,7 @@ def build_embedded_oauth_server(
     *,
     session_runtime: DurableSessionRuntime | None = None,
     harness_bridge: HarnessBridgeClient | None = None,
+    project_dsh_tools: bool = False,
 ) -> tuple[Any, Any]:
     """Build a self-contained OAuth-protected MCP server plus its provider."""
     try:
@@ -359,6 +378,7 @@ def build_embedded_oauth_server(
         service,
         session_runtime=session_runtime,
         harness_bridge=harness_bridge,
+        project_dsh_tools=project_dsh_tools,
         auth_server_provider=provider,
         auth=auth,
         _server_cls=EmbeddedOAuthMCPServer,

@@ -41,6 +41,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["Group"], "dsh-gateway")
         self.assertEqual(service["EnvironmentFile"], "/etc/dsh-mcp-gateway/gateway.env")
         self.assertIn("--dsh-harness-url http://127.0.0.1:3080", command)
+        self.assertIn("--tool-surface meta-only", command)
         self.assertNotIn("--dsh-web-url", command)
         self.assertNotIn("--dsh-cwd", command)
         self.assertIn("--bind-host 127.0.0.1", command)

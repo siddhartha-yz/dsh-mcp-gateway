@@ -12,11 +12,11 @@ A checked item requires executable or recorded integration evidence; documentati
 - [x] DSH community skills are discovered and loaded through the native scoped `SkillRegistry` with model-invocation policy preserved.
 - [x] DSH image results and attachment-backed images reach ChatGPT as MCP image content without per-tool wrappers.
 - [x] DSH `additionalContexts` survive the external-model boundary, including policy/guard reminders and nested multimodal contexts.
-- [x] First-class DSH tool projection remains available as an optional UX optimization. Live DSH `tools/change` invalidations advance a bridge catalog revision and the gateway publishes MCP `tools/list_changed` for subscription-capable clients; correctness does not depend on clients honoring it.
-- [x] The modern MCP `2026-07-28` capability surface advertises `tools.listChanged=true` through the SDK subscription seam.
+- [x] Default Harness mode is protocol-level meta-only: MCP `tools/list` stays fixed to the four stable DSH meta-tools and the modern MCP capability surface does not advertise `tools.listChanged`.
+- [x] First-class DSH tool projection remains available only as explicit `--tool-surface projected` UX opt-in. In that mode live DSH `tools/change` invalidations advance a bridge catalog revision and the gateway publishes MCP `tools/list_changed` for subscription-capable clients.
 - [x] Embedded OAuth persists DCR clients/tokens, supports PKCE public clients, rotates refresh tokens, revokes grant families, bounds anonymous registration state, and keeps the DSH Host private behind the OAuth-protected MCP gateway.
 - [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound; Host/Origin rebinding checks are regression-tested.
-- [x] The exact DSH runtime is pinned to `@deepseek-ai/dsh@0.1.0-rc.6`; the checked lock contains 587 integrity-pinned packages and the deployment uses Node 24.19.0.
+- [x] The exact DSH runtime is pinned to `@deepseek-ai/dsh@0.1.0-rc.6`; the checked lock contains 588 integrity-pinned packages and the deployment uses Node 24.19.0.
 - [x] Optional local-shell-mcp composition stays behind DSH and narrows its overlapping tool surface, keeping LSM as an execution/access provider rather than the primary Harness.
 
 ## Release-blocking drills
@@ -26,7 +26,7 @@ These remain unchecked until performed against the intended long-running host an
 - [ ] Install the pinned DSH runtime and gateway using the checked-in deployment templates on the target host; make `python3 scripts/preflight-deployment.py` pass first and verify both services use the documented Unix users, state directories, and loopback boundaries.
 - [ ] Put the real public HTTPS reverse proxy/domain in front of the loopback gateway and make `python3 scripts/smoke-public-oauth.py --base-url https://<exact-origin>` pass with the exact production issuer/resource/Host/Origin configuration.
 - [ ] Connect the production MCP endpoint from a normal ChatGPT Web conversation and verify DSH-native preset tools can be discovered and called with no `DEEPSEEK_API_KEY` or other second-model credential configured.
-- [ ] Perform the product-level acceptance test from `AGENTS.md` using the pinned independent specimen and procedure in [`community-extension-acceptance.md`](community-extension-acceptance.md): after ChatGPT has already approved/loaded the connector, install the community DSH extension, discover it through the already-present stable meta-tools, and successfully use it from ChatGPT Web without an extension-specific wrapper, connector re-publication/re-approval, or first-class tool-list refresh.
+- [ ] Perform the strict product-level acceptance test from `AGENTS.md` using the pinned independent specimen and procedure in [`community-extension-acceptance.md`](community-extension-acceptance.md): first prove ChatGPT sees only the four meta-tools in default meta-only mode, then install a previously absent community DSH extension and use it through catalog/call without changing the public MCP schema.
 - [ ] Separately test the optional UX path: while ChatGPT remains connected, add/remove a compatible DSH tool and observe whether the client honors emitted `tools/list_changed`. If ChatGPT keeps a frozen tool snapshot, record that as an expected client boundary; the stable meta-tool acceptance test above must still pass.
 - [ ] Perform an operating-system reboot drill and verify the DSH Harness, gateway, OAuth state, configured DSH plugins/skills, and projected ChatGPT capability surface recover automatically.
 - [ ] Perform an offline backup/restore drill for DSH configuration/state, workspace data, and OAuth state; verify the restored Harness exposes the same intended capability surface.
@@ -35,6 +35,6 @@ These remain unchecked until performed against the intended long-running host an
 
 ## Known boundaries
 
-- Dynamic first-class tool refresh depends on the MCP client honoring the modern tool-list change subscription mechanism. The gateway publishes the standard event but does not maintain a second shadow catalog solely to work around a client that ignores it.
+- Dynamic first-class tool refresh exists only in explicit `--tool-surface projected` mode and depends on the MCP client honoring the modern tool-list change subscription mechanism. Default meta-only mode has no such channel.
 - The DSH bridge is loopback-internal. Public authentication and transport security terminate at `dsh-mcp-gateway`; exposing the raw bridge is outside the supported security boundary.
 - DSH is still a developer-preview dependency. DSH-specific compatibility code should remain concentrated in the small bridge seam so an upstream contract change does not spread through the public MCP layer.

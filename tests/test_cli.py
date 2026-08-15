@@ -213,6 +213,35 @@ class CliTests(unittest.TestCase):
         bridge_cls.assert_called_once_with("http://127.0.0.1:3080")
         self.assertIsNone(build_server.call_args.kwargs["session_runtime"])
         self.assertIs(build_server.call_args.kwargs["harness_bridge"], fake_bridge)
+        self.assertFalse(build_server.call_args.kwargs["project_dsh_tools"])
+
+    def test_projected_tool_surface_is_explicit_opt_in(self) -> None:
+        fake_bridge = Mock()
+        fake_bridge.base_url = "http://127.0.0.1:3080"
+        fake_server = Mock()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            patch("dsh_mcp_gateway.cli.HarnessBridgeClient", return_value=fake_bridge),
+            patch(
+                "dsh_mcp_gateway.cli.build_embedded_oauth_server",
+                return_value=(fake_server, Mock()),
+            ) as build_server,
+        ):
+            result = main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--state-dir",
+                    tmp,
+                    "--dsh-harness-url",
+                    "http://127.0.0.1:3080",
+                    "--tool-surface",
+                    "projected",
+                ]
+            )
+        self.assertEqual(result, 0)
+        self.assertTrue(build_server.call_args.kwargs["project_dsh_tools"])
 
     def test_legacy_dsh_web_host_is_explicit_opt_in(self) -> None:
         fake_backend = Mock()

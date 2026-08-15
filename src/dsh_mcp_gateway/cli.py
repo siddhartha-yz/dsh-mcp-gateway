@@ -103,6 +103,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Primary DSH Harness bridge origin, normally loopback (for example http://127.0.0.1:3080).",
     )
     parser.add_argument(
+        "--tool-surface",
+        choices=("meta-only", "projected"),
+        default="meta-only",
+        help=(
+            "ChatGPT-facing DSH tool surface. meta-only (default) exposes only stable catalog/call meta-tools; "
+            "projected additionally exposes individual DSH tools and publishes tools/list_changed."
+        ),
+    )
+    parser.add_argument(
         "--dsh-web-url",
         default=None,
         help="Optional legacy DSH Web Host base URL. Omit for the default model-provider-free runtime.",
@@ -222,10 +231,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         oauth,
         session_runtime=session_runtime,
         harness_bridge=harness_bridge,
+        project_dsh_tools=args.tool_surface == "projected",
     )
     install_health_routes(server, backend, harness_bridge)
     if harness_bridge is not None:
-        print(f"DSH Harness bridge configured at {harness_bridge.base_url}; ChatGPT remains the reasoning agent")
+        print(
+            f"DSH Harness bridge configured at {harness_bridge.base_url}; ChatGPT remains the reasoning agent; "
+            f"tool surface={args.tool_surface}"
+        )
     elif backend is None:
         print("Legacy standalone session runtime enabled; no DSH Harness bridge is configured")
     else:

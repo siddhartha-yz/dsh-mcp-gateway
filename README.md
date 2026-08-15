@@ -64,7 +64,7 @@ Generic Harness operations cover both DSH tools and DSH community skills:
 - `dsh_skill_catalog`: lists model-invocable entries from DSH's native `SkillRegistry` for the Harness workspace.
 - `dsh_skill_load`: loads one compatible community skill's instructions from that registry.
 
-The gateway also projects compatible DSH ToolRuntime schemas as first-class MCP tools on `tools/list`. That makes common calls more ergonomic when the client accepts catalog refreshes, but it is only an optimization. DSH extension availability does not depend on `tools/list_changed` or on ChatGPT dynamically adding new first-class tools.
+The default gateway mode is deliberately **meta-only**: `tools/list` exposes only those four stable DSH meta-tools, individual DSH ToolRuntime schemas are not projected into ChatGPT, and the gateway does not advertise the modern tool-list change subscription. This makes the frozen-snapshot property an enforced protocol boundary rather than an assumption about client behavior. Operators may explicitly enable `--tool-surface projected` as a separate UX mode when they want compatible DSH tools to appear as first-class MCP tools.
 
 The bridge now uses DSH's own AgentRegistry and agent-preset composition only as a **capability/scope identity**: it creates one idle DSH Agent, mounts the deployment's default preset through `agentPresets.mount(...)`, never submits a prompt to that Agent, and passes the resulting Agent to `ToolRuntime.schemas(agent)` / `ToolRuntime.execute({ ..., agent })` and SkillRegistry scope lookup. This preserves DSH's preset restrictions, guards, jobs/filesystem/session ownership, and community-extension scope instead of promoting scoped registrations to globals.
 
@@ -72,7 +72,7 @@ For native DSH tools whose execution is gated by the routed model's declared mod
 
 DSH `additionalContexts` are also preserved across the external-agent boundary. DSH uses these follow-up user contexts for guard reminders and for nested Code Mode results such as an image returned by `run_code`. The bridge materializes attachment-backed images inside those contexts and the MCP adapter appends their visible text/image blocks to the tool result, so replacing DSH's own model loop with ChatGPT Web does not silently discard policy or nested multimodal context.
 
-This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper, gateway restart, or ChatGPT app re-publication. The fixed meta-tools discover the live catalog on demand. Separately, the DSH-side bridge tracks native `tools/change` invalidations and the gateway publishes MCP `tools/list_changed`, so clients that do support dynamic refresh can also gain a first-class tool entry without reconnecting.
+This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper, gateway restart, or ChatGPT app re-publication. The fixed meta-tools discover the live catalog on demand. In the optional `projected` tool-surface mode only, the DSH-side bridge tracks native `tools/change` invalidations and the gateway publishes MCP `tools/list_changed`, allowing clients that support dynamic refresh to gain first-class tool entries.
 
 The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).
 

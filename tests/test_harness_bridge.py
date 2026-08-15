@@ -152,12 +152,20 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
 
         # Simulate ChatGPT approving/caching one initial MCP tool snapshot.
         initial_snapshot = {tool.name for tool in await server.list_tools()}
-        self.assertIn("dsh_tool_catalog", initial_snapshot)
-        self.assertIn("dsh_tool_call", initial_snapshot)
-        self.assertNotIn("second", initial_snapshot)
+        self.assertEqual(
+            initial_snapshot,
+            {"dsh_tool_catalog", "dsh_tool_call", "dsh_skill_catalog", "dsh_skill_load"},
+        )
+        capabilities = server._lowlevel_server.get_capabilities(protocol_version="2026-07-28")
+        self.assertFalse(capabilities.tools.list_changed)
 
         # A DSH community plugin appears later. Do not refresh tools/list.
         bridge.catalog.append({"name": "second", "description": "second", "parameters": {"type": "object"}})
+
+        # Even if the client asks for tools/list again, meta-only mode keeps the
+        # ChatGPT-facing schema frozen to the same four generic tools.
+        refreshed_snapshot = {tool.name for tool in await server.list_tools()}
+        self.assertEqual(refreshed_snapshot, initial_snapshot)
 
         catalog = await server.call_tool("dsh_tool_catalog", {})
         self.assertEqual([item["name"] for item in catalog.structured_content["tools"]], ["first", "second"])
@@ -220,7 +228,7 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
             def call(self, name, arguments=None):
                 return {"isError": False, "value": {"name": name, "arguments": arguments or {}}, "content": []}
 
-        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        server = build_mcp_server(None, harness_bridge=FakeBridge(), project_dsh_tools=True)
         capabilities = server._lowlevel_server.get_capabilities(protocol_version="2026-07-28")
         self.assertTrue(capabilities.tools.list_changed)
 
@@ -263,7 +271,7 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
 
-        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        server = build_mcp_server(None, harness_bridge=FakeBridge(), project_dsh_tools=True)
         result = await server.call_tool("community_image", {})
 
         self.assertFalse(result.is_error)
@@ -298,7 +306,7 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
 
-        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        server = build_mcp_server(None, harness_bridge=FakeBridge(), project_dsh_tools=True)
         result = await server.call_tool("run_code", {})
 
         self.assertFalse(result.is_error)
@@ -321,7 +329,7 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
                 return {"isError": False, "value": name, "content": []}
 
         bridge = FakeBridge()
-        server = build_mcp_server(None, harness_bridge=bridge)
+        server = build_mcp_server(None, harness_bridge=bridge, project_dsh_tools=True)
         first = {tool.name for tool in await server.list_tools()}
         self.assertIn("first", first)
         self.assertNotIn("second", first)
@@ -344,7 +352,7 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
             def call(self, name, arguments=None):
                 raise AssertionError("reserved gateway tool must not dispatch to DSH")
 
-        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        server = build_mcp_server(None, harness_bridge=FakeBridge(), project_dsh_tools=True)
         tools = [tool for tool in await server.list_tools() if tool.name == "dsh_tool_catalog"]
         self.assertEqual(len(tools), 1)
         result = await server.call_tool("dsh_tool_catalog", {})

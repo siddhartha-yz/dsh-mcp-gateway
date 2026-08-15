@@ -1,0 +1,134 @@
+name: Release
+
+"on":
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to publish or refresh"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.ref }}-${{ inputs.tag || 'auto' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            tag="$REF_NAME"
+          else
+            mapfile -t release_tags < <(git tag --list 'v*' --sort=-v:refname)
+            tag="${release_tags[0]:-}"
+          fi
+          if [[ -z "$tag" || ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Unable to resolve a valid release tag" >&2
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out tagged source
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "$TAG"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Verify release metadata
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -f "docs/releases/$TAG.md"
+          python - "$VERSION" <<'PY'
+          import pathlib, re, sys
+          expected = sys.argv[1]
+          pyproject = pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+          init = pathlib.Path("src/dsh_mcp_gateway/__init__.py").read_text(encoding="utf-8")
+          package = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE).group(1)
+          runtime = re.search(r'^__version__ = "([^"]+)"$', init, re.MULTILINE).group(1)
+          if package != expected or runtime != expected:
+              raise SystemExit(f"tag/package version mismatch: tag={expected} package={package} runtime={runtime}")
+          PY
+
+      - name: Build wheel and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade build
+          python -m build --wheel --outdir dist
+          (cd dist && sha256sum *.whl > SHA256SUMS)
+
+      - name: Prepare release notes
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          awk 'NR == 1 && /^# / { next } { print }' "docs/releases/$TAG.md" > /tmp/release-notes.md
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="dsh-mcp-gateway $TAG"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --notes-file /tmp/release-notes.md \
+              --latest
+            gh release upload "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file /tmp/release-notes.md \
+              --latest
+          fi

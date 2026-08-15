@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,7 @@ PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
 BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
 VERIFY_BACKUP = ROOT / "scripts" / "verify-backup-restore.sh"
+GATEWAY_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
 def read_unit(name: str) -> configparser.RawConfigParser:
@@ -335,7 +337,10 @@ class DeploymentPreflightTests(unittest.TestCase):
         gateway_cli = venv_bin / "dsh-mcp-gateway"
         gateway_cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         gateway_cli.chmod(0o755)
-        (paths["gateway_root"] / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+        (paths["gateway_root"] / "pyproject.toml").write_text(
+            f"[project]\nname='test'\nversion='{GATEWAY_VERSION}'\n",
+            encoding="utf-8",
+        )
         deploy_dir = paths["gateway_root"] / "deploy"
         (deploy_dir / "systemd").mkdir(parents=True)
         (deploy_dir / "dsh-runtime").mkdir(parents=True)
@@ -455,6 +460,27 @@ class DeploymentPreflightTests(unittest.TestCase):
             self.assertNotIn("legacy-credential", result.stdout)
             self.assertNotIn(self.secret_marker("admin-pin"), result.stdout)
 
+    def test_preflight_reports_permission_denied_without_traceback_or_secret_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            config_dir = paths["config_dir"]
+            try:
+                config_dir.chmod(0o000)
+                result = self.run_preflight(paths)
+            finally:
+                config_dir.chmod(0o700)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, "")
+            report = json.loads(result.stdout)
+            failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("DSH env file", failed)
+            self.assertIn("gateway env file", failed)
+            self.assertIn("DSH env parse", failed)
+            self.assertIn("gateway env parse", failed)
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertNotIn(self.secret_marker("admin-pin"), result.stdout + result.stderr)
+
     def test_preflight_detects_dsh_version_and_installed_unit_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self.build_layout(Path(tmp))
@@ -475,6 +501,23 @@ class DeploymentPreflightTests(unittest.TestCase):
             self.assertIn("DSH pinned version", failed)
             self.assertIn("installed DSH package-lock.json", failed)
             self.assertIn("installed dsh-web-host.service", failed)
+
+    def test_preflight_detects_gateway_release_version_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            (paths["gateway_root"] / "pyproject.toml").write_text(
+                "[project]\nname='test'\nversion='0.0.1.dev0'\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_preflight(paths)
+            self.assertEqual(result.returncode, 1)
+            report = json.loads(result.stdout)
+            failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("gateway project version", failed)
+            check = next(check for check in report["checks"] if check["name"] == "gateway project version")
+            self.assertIn("0.0.1.dev0", check["detail"])
+            self.assertIn(GATEWAY_VERSION, check["detail"])
 
 
 if __name__ == "__main__":

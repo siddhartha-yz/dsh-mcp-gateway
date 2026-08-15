@@ -10,6 +10,7 @@ import os
 import pwd
 import stat
 import subprocess
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -17,6 +18,22 @@ from urllib.parse import urlparse
 TESTED_DSH_VERSION = "0.1.0-rc.6"
 TESTED_NODE_VERSION = "24.19.0"
 MIN_PYTHON = (3, 11)
+
+
+def project_version(path: Path) -> tuple[str | None, str | None]:
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        return None, f"cannot parse project metadata: {type(exc).__name__}"
+    value = data.get("project", {}).get("version")
+    if not isinstance(value, str) or not value:
+        return None, "project.version is missing or invalid"
+    return value, None
+
+
+SOURCE_GATEWAY_VERSION, SOURCE_GATEWAY_VERSION_ERROR = project_version(
+    Path(__file__).resolve().parents[1] / "pyproject.toml"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,12 +51,16 @@ class Preflight:
         self.checks.append(Check(name=name, ok=ok, detail=detail))
 
     def require_path(self, name: str, path: Path, *, kind: str) -> bool:
-        if kind == "dir":
-            ok = path.is_dir()
-        elif kind == "file":
-            ok = path.is_file()
-        else:  # pragma: no cover - internal programming error
-            raise ValueError(f"unknown path kind: {kind}")
+        try:
+            if kind == "dir":
+                ok = path.is_dir()
+            elif kind == "file":
+                ok = path.is_file()
+            else:  # pragma: no cover - internal programming error
+                raise ValueError(f"unknown path kind: {kind}")
+        except OSError as exc:
+            self.add(name, False, f"{path} (cannot inspect: {type(exc).__name__})")
+            return False
         self.add(name, ok, f"{path} ({'present' if ok else 'missing'})")
         return ok
 
@@ -70,10 +91,14 @@ class Preflight:
         gid: int | None,
         expected_mode: int,
     ) -> None:
-        if not path.exists():
-            self.add(name, False, f"{path} is missing")
+        try:
+            if not path.exists():
+                self.add(name, False, f"{path} is missing")
+                return
+            info = path.stat()
+        except OSError as exc:
+            self.add(name, False, f"{path} cannot be inspected: {type(exc).__name__}")
             return
-        info = path.stat()
         mode = stat.S_IMODE(info.st_mode)
         owner_ok = uid is not None and info.st_uid == uid
         group_ok = gid is not None and info.st_gid == gid
@@ -163,13 +188,23 @@ def run_version(executable: Path) -> tuple[tuple[int, int] | None, str]:
 
 
 def check_executable(preflight: Preflight, name: str, path: Path) -> None:
-    ok = path.is_file() and os.access(path, os.X_OK)
+    try:
+        ok = path.is_file() and os.access(path, os.X_OK)
+    except OSError as exc:
+        preflight.add(name, False, f"{path} cannot be inspected: {type(exc).__name__}")
+        return
     preflight.add(name, ok, f"{path} ({'executable' if ok else 'missing or not executable'})")
 
 
 def check_file_matches(preflight: Preflight, name: str, installed: Path, template: Path) -> None:
-    if not installed.is_file() or not template.is_file():
-        preflight.add(name, False, f"installed={installed.is_file()} template={template.is_file()}")
+    try:
+        installed_is_file = installed.is_file()
+        template_is_file = template.is_file()
+    except OSError as exc:
+        preflight.add(name, False, f"cannot inspect files: {type(exc).__name__}")
+        return
+    if not installed_is_file or not template_is_file:
+        preflight.add(name, False, f"installed={installed_is_file} template={template_is_file}")
         return
     try:
         ok = installed.read_bytes() == template.read_bytes()
@@ -202,6 +237,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-group", default="root")
     parser.add_argument("--expected-dsh-version", default=TESTED_DSH_VERSION)
     parser.add_argument("--expected-node-version", default=TESTED_NODE_VERSION)
+    parser.add_argument(
+        "--expected-gateway-version",
+        default=SOURCE_GATEWAY_VERSION,
+        help="Expected gateway project version; defaults to the repository containing this preflight script.",
+    )
     parser.add_argument(
         "--node-executable",
         type=Path,
@@ -262,7 +302,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     node_executable = args.node_executable or args.dsh_runtime / "node" / "bin" / "node"
-    node_ok = node_executable.is_file() and os.access(node_executable, os.X_OK)
+    try:
+        node_ok = node_executable.is_file() and os.access(node_executable, os.X_OK)
+    except OSError:
+        node_ok = False
     p.add(
         "Node executable",
         node_ok,
@@ -302,12 +345,39 @@ def main(argv: list[str] | None = None) -> int:
     gateway_cli = args.gateway_root / ".venv" / "bin" / "dsh-mcp-gateway"
     check_executable(p, "gateway Python", gateway_python)
     check_executable(p, "gateway console script", gateway_cli)
-    if gateway_cli.is_file() and os.access(gateway_cli, os.X_OK):
+    try:
+        gateway_cli_ok = gateway_cli.is_file() and os.access(gateway_cli, os.X_OK)
+    except OSError:
+        gateway_cli_ok = False
+    if gateway_cli_ok:
         ok, rendered = run_command(gateway_cli, "--help")
         p.add("gateway CLI import/help", ok, rendered)
-    p.require_path("gateway pyproject", args.gateway_root / "pyproject.toml", kind="file")
+    gateway_pyproject = args.gateway_root / "pyproject.toml"
+    if p.require_path("gateway pyproject", gateway_pyproject, kind="file"):
+        actual_gateway_version, version_error = project_version(gateway_pyproject)
+        expected_gateway_version = args.expected_gateway_version
+        if expected_gateway_version:
+            p.add(
+                "gateway project version",
+                version_error is None and actual_gateway_version == expected_gateway_version,
+                (
+                    f"version={actual_gateway_version!r}; expected={expected_gateway_version!r}"
+                    if version_error is None
+                    else version_error
+                ),
+            )
+        else:
+            p.add(
+                "gateway project version",
+                False,
+                SOURCE_GATEWAY_VERSION_ERROR or "expected gateway version is missing/empty",
+            )
     p.require_path("server constraints", args.gateway_root / "deploy" / "server-constraints.txt", kind="file")
-    if gateway_python.is_file() and os.access(gateway_python, os.X_OK):
+    try:
+        gateway_python_ok = gateway_python.is_file() and os.access(gateway_python, os.X_OK)
+    except OSError:
+        gateway_python_ok = False
+    if gateway_python_ok:
         version, rendered = run_version(gateway_python)
         p.add("gateway Python version", version is not None and version >= MIN_PYTHON, rendered)
 
@@ -323,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_mode=0o600,
             )
 
-    dsh_env, dsh_env_error = parse_env_file(dsh_env_path) if dsh_env_path.is_file() else ({}, "file missing")
+    dsh_env, dsh_env_error = parse_env_file(dsh_env_path)
     p.add("DSH env parse", dsh_env_error is None, dsh_env_error or "parsed without exposing values")
     if dsh_env_error is None:
         for key in ("DSH_HOME",):
@@ -342,9 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             "DSH_HOME matches configured preflight path" if dsh_env.get("DSH_HOME") == str(args.dsh_home) else "DSH_HOME does not match configured preflight path",
         )
 
-    gateway_env, gateway_env_error = (
-        parse_env_file(gateway_env_path) if gateway_env_path.is_file() else ({}, "file missing")
-    )
+    gateway_env, gateway_env_error = parse_env_file(gateway_env_path)
     p.add("gateway env parse", gateway_env_error is None, gateway_env_error or "parsed without exposing values")
     if gateway_env_error is None:
         for key in ("DSH_MCP_PUBLIC_BASE_URL", "DSH_MCP_GATEWAY_ADMIN_PIN"):

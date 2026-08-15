@@ -15,10 +15,17 @@ sed \
   "$ROOT/deploy/systemd/dsh-mcp-gateway.service" \
   > "$TMP/dsh-mcp-gateway.service"
 
+sed \
+  's#^ExecStart=/usr/local/bin/cloudflared #ExecStart=/bin/true #' \
+  "$ROOT/deploy/systemd/dsh-cloudflared.service" \
+  > "$TMP/dsh-cloudflared.service"
+
 grep -q '^ExecStart=/bin/true ' "$TMP/dsh-web-host.service"
 grep -q '^ExecStart=/bin/true ' "$TMP/dsh-mcp-gateway.service"
+grep -q '^ExecStart=/bin/true ' "$TMP/dsh-cloudflared.service"
 
 SYSTEMD_UNIT_PATH="$TMP:/usr/lib/systemd/system:/lib/systemd/system" \
   systemd-analyze verify \
   "$TMP/dsh-web-host.service" \
-  "$TMP/dsh-mcp-gateway.service"
+  "$TMP/dsh-mcp-gateway.service" \
+  "$TMP/dsh-cloudflared.service"

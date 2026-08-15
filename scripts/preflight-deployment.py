@@ -184,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dsh-runtime", type=Path, default=Path("/opt/dsh-runtime"))
     parser.add_argument("--gateway-root", type=Path, default=Path("/srv/dsh-mcp-gateway"))
     parser.add_argument("--workspace", type=Path, default=Path("/srv/dsh-workspace"))
+    parser.add_argument(
+        "--workspace-mode",
+        type=lambda value: int(value, 8),
+        default=0o750,
+        help="Expected workspace directory mode in octal (default: 0750).",
+    )
     parser.add_argument("--dsh-home", type=Path, default=Path("/var/lib/dsh-harness"))
     parser.add_argument("--gateway-state", type=Path, default=Path("/var/lib/dsh-mcp-gateway"))
     parser.add_argument("--config-dir", type=Path, default=Path("/etc/dsh-mcp-gateway"))
@@ -231,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         args.workspace,
         uid=dsh_user.pw_uid if dsh_user else None,
         gid=dsh_group.gr_gid if dsh_group else None,
-        expected_mode=0o750,
+        expected_mode=args.workspace_mode,
     )
     p.check_owner_mode(
         "DSH_HOME ownership/mode",

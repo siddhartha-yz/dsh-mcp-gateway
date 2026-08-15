@@ -48,6 +48,50 @@ The bootstrap prompts only for the exact public HTTPS origin and the gateway own
 
 Use `--no-start` to stop after installation/preflight and `--replace-source` only for a deliberate replacement of `/srv/dsh-mcp-gateway`.
 
+### Promote an already-validated personal host
+
+The generic bootstrap intentionally defaults to an isolated `dsh-agent` and
+`/srv/dsh-workspace`. A personal host that has already been validated against a
+real workspace should not silently switch to an empty isolated workspace merely
+to gain systemd supervision. `scripts/promote-live-host.sh` is the one-time
+cutover path for that case.
+
+The promotion helper keeps the user's existing workspace/identity, moves
+`DSH_HOME` to `/var/lib/dsh-harness`, moves OAuth state to
+`/var/lib/dsh-mcp-gateway`, copies local plugin tarballs under
+`DSH_HOME/plugin-artifacts`, localizes pinned Git/GitHub dependencies from their
+already-validated installed package without running package scripts, writes a
+`plugin-artifacts/source-manifest.json` provenance record, regenerates the
+profile lock so no acceptance-only or network Git dependency remains, and
+installs the existing named Cloudflare tunnel under a
+dedicated `dsh-tunnel` account. The DSH systemd drop-in uses
+`ProtectHome=read-only` plus a writable exception for the selected workspace;
+this retains read-only access to the user's Git/SSH configuration while limiting
+normal writes to the workspace and Harness state. Common XDG/npm/pnpm cache and
+state locations are redirected into `/var/lib/dsh-harness`, so the read-only home
+policy does not make normal package/tool execution depend on writable dotfiles.
+
+For a strict before/after comparison, capture the live bridge responses before
+stopping the temporary jobs:
+
+```sh
+curl -fsS http://127.0.0.1:18401/api/chatgpt-bridge/tools > /tmp/dsh-tools-before.json
+curl -fsS http://127.0.0.1:18401/api/chatgpt-bridge/skills > /tmp/dsh-skills-before.json
+```
+
+Then stop the temporary Harness, gateway, and named-tunnel jobs and run:
+
+```sh
+sudo ./scripts/promote-live-host.sh \
+  --tools-snapshot /tmp/dsh-tools-before.json \
+  --skills-snapshot /tmp/dsh-skills-before.json
+```
+
+The script fails closed if the old listeners/tunnel are still running. It starts
+the formal services in dependency order and compares the new ToolRuntime and
+SkillRegistry names with the captured snapshots before declaring the cutover
+complete. It does not create or request any model-provider credential.
+
 The equivalent service accounts and state directories are:
 
 ```sh
@@ -181,6 +225,14 @@ ingress:
 ```
 
 Set `DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com` to exactly that origin. Never route public traffic to `127.0.0.1:3080`.
+
+For a named Cloudflare Tunnel managed on the same host, the optional checked-in
+`deploy/systemd/dsh-cloudflared.service` expects a rewritten config at
+`/etc/dsh-cloudflared/config.yml` and credentials at
+`/etc/dsh-cloudflared/credentials.json`. `promote-live-host.sh` performs that
+migration for an existing tunnel and runs it as the dedicated `dsh-tunnel`
+account; the tunnel only `Wants=` the gateway so independent gateway restarts do
+not tear down the Cloudflare connector.
 
 After HTTPS is active:
 

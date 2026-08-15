@@ -18,6 +18,7 @@ DSH_DEPLOY = ROOT / "deploy" / "dsh"
 DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
 DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
+PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
 
 
 def read_unit(name: str) -> configparser.RawConfigParser:
@@ -92,6 +93,44 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["ProtectHome"], "true")
         self.assertIn("/var/lib/dsh-harness", service["ReadWritePaths"])
         self.assertIn("/srv/dsh-workspace", service["ReadWritePaths"])
+
+    def test_cloudflared_unit_is_dedicated_and_depends_softly_on_gateway(self) -> None:
+        unit = read_unit("dsh-cloudflared.service")
+        unit_section = unit["Unit"]
+        service = unit["Service"]
+
+        self.assertIn("dsh-mcp-gateway.service", unit_section["Wants"])
+        self.assertNotIn("Requires", unit_section)
+        self.assertEqual(service["User"], "dsh-tunnel")
+        self.assertEqual(service["Group"], "dsh-tunnel")
+        self.assertIn("--config /etc/dsh-cloudflared/config.yml run", service["ExecStart"])
+        self.assertEqual(service["Restart"], "always")
+        self.assertEqual(service["UMask"], "0077")
+        self.assertEqual(service["NoNewPrivileges"], "true")
+        self.assertEqual(service["ProtectSystem"], "strict")
+        self.assertEqual(service["ProtectHome"], "true")
+
+    def test_live_promotion_preserves_real_workspace_and_migrates_state(self) -> None:
+        script = PROMOTE_LIVE.read_text(encoding="utf-8")
+
+        self.assertIn('WORKSPACE="/home/ubuntu/workspace"', script)
+        self.assertIn("ProtectHome=read-only", script)
+        self.assertIn("ReadWritePaths=$WORKSPACE /var/lib/dsh-harness", script)
+        self.assertIn("artifacts = root / 'plugin-artifacts'", script)
+        self.assertIn("source-manifest.json", script)
+        self.assertIn("npm',\n                'pack'", script)
+        self.assertIn("--ignore-scripts", script)
+        self.assertIn("network git dependency instead of a local artifact", script)
+        self.assertIn("npm_config_store_dir=/var/lib/dsh-harness/pnpm-store", script)
+        self.assertIn("npm_config_cache=/var/lib/dsh-harness/npm-cache", script)
+        self.assertIn("SYSTEMD_UNIT_PATH=/etc/systemd/system", script)
+        self.assertIn("/var/lib/dsh-mcp-gateway/oauth.sqlite3", script)
+        self.assertIn("OAuth SQLite copy checksum mismatch", script)
+        self.assertIn("/etc/dsh-cloudflared/credentials.json", script)
+        self.assertIn("temporary DSH/gateway listener is still active", script)
+        self.assertIn("tool catalog changed across promotion", script)
+        self.assertIn("SkillRegistry changed across promotion", script)
+        self.assertNotIn("DEEPSEEK_API_" + "KEY=", script)
 
     def test_optional_session_search_overlay_is_durable_and_lazy(self) -> None:
         overlay = (DSH_DEPLOY / "session-search.cordis.yml").read_text(encoding="utf-8")
@@ -356,6 +395,15 @@ class DeploymentPreflightTests(unittest.TestCase):
             self.assertTrue(report["ok"])
             self.assertEqual(report["failed"], 0)
             self.assertNotIn(self.secret_marker("admin-pin"), result.stdout)
+
+    def test_preflight_accepts_explicit_personal_workspace_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            paths["workspace"].chmod(0o700)
+            command = self.preflight_command(paths)
+            command[command.index("--json"):command.index("--json")] = ["--workspace-mode", "0700"]
+            result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_preflight_reports_secret_file_mode_and_rejects_legacy_model_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

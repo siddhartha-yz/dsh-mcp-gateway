@@ -484,6 +484,41 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         assert tokens.refresh_token is not None
         return config, provider, client, tokens
 
+    async def test_retried_approval_reuses_same_unexpired_authorization_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            provider = EmbeddedOAuthProvider(config)
+            client = OAuthClientInformationFull(
+                client_id="client-1",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code", "refresh_token"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(client)
+            target = await provider.authorize(
+                client,
+                AuthorizationParams(
+                    state="retry-state",
+                    scopes=["dsh:control"],
+                    code_challenge="challenge",
+                    redirect_uri="http://127.0.0.1:9999/callback",
+                    redirect_uri_provided_explicitly=True,
+                    resource=config.resource_url,
+                ),
+            )
+            request_id = parse_qs(urlparse(target).query)["request"][0]
+            first = await provider.approve(request_id)
+            second = await provider.approve(request_id)
+            self.assertEqual(first, second)
+            assert first is not None
+            query = parse_qs(urlparse(first).query)
+            self.assertEqual(query["state"], ["retry-state"])
+            self.assertNotIn("iss", query)
+            with sqlite3.connect(config.state_db) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM authorization_codes").fetchone()[0], 1)
+
     async def test_authorization_code_is_single_use_under_concurrent_exchange(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
@@ -676,6 +711,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                         "idx_pending_authorizations_expires",
                         "idx_pending_authorizations_client",
                         "idx_authorization_codes_expires",
+                        "idx_authorization_codes_request",
                         "idx_access_tokens_expires",
                         "idx_access_tokens_grant",
                         "idx_refresh_tokens_expires",
@@ -714,7 +750,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             redirect = await provider.approve(request_id)
             assert redirect is not None
             redirect_query = parse_qs(urlparse(redirect).query)
-            self.assertEqual(redirect_query["iss"], [config.issuer_url])
+            self.assertNotIn("iss", redirect_query)
             code = redirect_query["code"][0]
             auth_code = await provider.load_authorization_code(client, code)
             assert auth_code is not None
@@ -759,7 +795,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             redirect = await provider.approve(request_id)
             assert redirect is not None
             redirect_query = parse_qs(urlparse(redirect).query)
-            self.assertEqual(redirect_query["iss"], [config.issuer_url])
+            self.assertNotIn("iss", redirect_query)
             code = redirect_query["code"][0]
             auth_code = await provider.load_authorization_code(client, code)
             assert auth_code is not None
@@ -1017,7 +1053,15 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(approval.headers["cache-control"], "no-store")
                 self.assertEqual(approval.headers["referrer-policy"], "no-referrer")
                 callback = parse_qs(urlparse(approval.headers["location"]).query)
-                self.assertEqual(callback["iss"], [config.issuer_url])
+                self.assertNotIn("iss", callback)
+
+                repeated_approval = client.post(
+                    "/approve",
+                    data={"request": request_id, "pin": config.admin_pin, "action": "approve"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(repeated_approval.status_code, 302)
+                self.assertEqual(repeated_approval.headers["location"], approval.headers["location"])
 
                 token = client.post(
                     "/token",

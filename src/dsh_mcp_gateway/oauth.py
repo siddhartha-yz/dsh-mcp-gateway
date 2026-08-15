@@ -230,7 +230,9 @@ class OAuthStore:
                     redirect_uri TEXT NOT NULL,
                     redirect_uri_explicit INTEGER NOT NULL,
                     resource TEXT NOT NULL,
-                    subject TEXT NOT NULL
+                    subject TEXT NOT NULL,
+                    request_id TEXT,
+                    state TEXT
                 );
                 CREATE TABLE IF NOT EXISTS access_tokens (
                     token TEXT PRIMARY KEY,
@@ -301,6 +303,14 @@ class OAuthStore:
                     );
                     """
                 )
+            authorization_code_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(authorization_codes)").fetchall()
+            }
+            if "request_id" not in authorization_code_columns:
+                connection.execute("ALTER TABLE authorization_codes ADD COLUMN request_id TEXT")
+            if "state" not in authorization_code_columns:
+                connection.execute("ALTER TABLE authorization_codes ADD COLUMN state TEXT")
+
             # Create secondary indexes after any legacy token-table rebuild so
             # DROP TABLE cannot silently remove the fresh token indexes.
             connection.executescript(
@@ -311,6 +321,8 @@ class OAuthStore:
                     ON pending_authorizations(client_id);
                 CREATE INDEX IF NOT EXISTS idx_authorization_codes_expires
                     ON authorization_codes(expires_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_authorization_codes_request
+                    ON authorization_codes(request_id) WHERE request_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS idx_access_tokens_expires
                     ON access_tokens(expires_at);
                 CREATE INDEX IF NOT EXISTS idx_access_tokens_grant
@@ -474,8 +486,8 @@ class OAuthStore:
                 """
                 INSERT INTO authorization_codes(
                     code, client_id, scopes_json, expires_at, code_challenge,
-                    redirect_uri, redirect_uri_explicit, resource, subject
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    redirect_uri, redirect_uri_explicit, resource, subject, request_id, state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     code,
@@ -487,6 +499,8 @@ class OAuthStore:
                     row["redirect_uri_explicit"],
                     row["resource"],
                     subject,
+                    row["request_id"],
+                    row["state"],
                 ),
             )
             db.commit()
@@ -502,6 +516,19 @@ class OAuthStore:
             expires_at=float(row["expires_at"]),
         )
         return pending, code
+
+    def load_completed_approval(self, request_id: str) -> tuple[str, str, str | None] | None:
+        """Return an unexpired authorization redirect payload for a retried approval POST."""
+        now = time.time()
+        with self.connection() as db:
+            self._prune_expired(db, now=now)
+            row = db.execute(
+                "SELECT redirect_uri, code, state FROM authorization_codes WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["redirect_uri"]), str(row["code"]), row["state"]
 
     def delete_pending(self, request_id: str) -> PendingAuthorization | None:
         now = time.time()
@@ -881,15 +908,18 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
             code_ttl_s=self.config.code_ttl_s,
             subject="owner",
         )
-        if result is None:
+        if result is not None:
+            pending, code = result
+            return construct_redirect_uri(
+                pending.redirect_uri,
+                code=code,
+                state=pending.state,
+            )
+        completed = await asyncio.to_thread(self.store.load_completed_approval, request_id)
+        if completed is None:
             return None
-        pending, code = result
-        return construct_redirect_uri(
-            pending.redirect_uri,
-            code=code,
-            state=pending.state,
-            iss=self.config.issuer_url,
-        )
+        redirect_uri, code, state = completed
+        return construct_redirect_uri(redirect_uri, code=code, state=state)
 
     async def deny(self, request_id: str) -> str | None:
         pending = await asyncio.to_thread(self.store.delete_pending, request_id)
@@ -899,7 +929,6 @@ class EmbeddedOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, 
             pending.redirect_uri,
             error="access_denied",
             state=pending.state,
-            iss=self.config.issuer_url,
         )
 
 
@@ -1028,6 +1057,14 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
             request_id = str(form.get("request", ""))
         pending = await provider.pending(request_id)
         if pending is None:
+            if request.method == "POST":
+                action = str(form.get("action", "approve"))
+                candidate = str(form.get("pin", ""))
+                if action == "approve" and provider.pin_matches(candidate):
+                    target = await provider.approve(request_id)
+                    if target is not None:
+                        limiter.clear(request_id)
+                        return approval_redirect(target)
             return approval_html("<h1>Invalid or expired authorization request</h1>", status_code=400)
 
         client = await provider.get_client(pending.client_id)

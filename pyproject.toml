@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dsh-mcp-gateway"
-version = "0.0.1.dev0"
+version = "0.1.0"
 description = "OAuth/MCP adapter that exposes DSH Harness capabilities to ChatGPT Web"
 readme = "README.md"
 requires-python = ">=3.11"

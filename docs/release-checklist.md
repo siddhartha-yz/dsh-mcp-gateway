@@ -20,20 +20,23 @@ A checked item requires executable or recorded integration evidence; documentati
 - [x] Optional local-shell-mcp composition stays behind DSH and narrows its overlapping tool surface, keeping LSM as an execution/access provider rather than the primary Harness.
 - [x] Process-level cold restart recovery is proven for the DSH Harness, installed community tools, filesystem Skills, gateway OAuth SQLite state, refresh-token rotation, the real ChatGPT Web client's automatic refresh-token recovery without reconnect/rescan/reauthorization, and the fixed four-tool MCP contract; see [`restart-recovery-acceptance.md`](restart-recovery-acceptance.md). This is intentionally separate from the still-pending host reboot drill.
 
-## Release-blocking drills
+## v0.1 release gates
 
-These remain unchecked until performed against the intended long-running host and real ChatGPT Web UI.
+Checked items below are required for the first release. Host-wide and optional-client UX experiments that do not affect the default meta-only correctness path are listed separately under post-v0.1 follow-ups.
 
 - [x] Install the pinned DSH runtime and gateway on the intended host using the checked-in deployment templates plus the documented personal-workspace override; promotion preflight passed, systemd owns the live processes, durable state is under `/var/lib`, and the Harness/gateway remain loopback-bound. See [`persistent-host-acceptance.md`](persistent-host-acceptance.md).
 - [x] Put the real public HTTPS named tunnel/domain in front of the loopback gateway and make the current meta-only `scripts/smoke-public-oauth.py` pass against `https://dsh.example.com`, including exact four-tool MCP surface, 34-tool DSH catalog, PKCE, `offline_access`, and single-use refresh rotation. See [`persistent-host-acceptance.md`](persistent-host-acceptance.md).
 - [x] Connect the production MCP endpoint from a normal ChatGPT Web conversation and verify the already-connected App continues through the persistent systemd deployment without reconnect/rescan: the real ChatGPT client reported 34 DSH-internal tools, including `time`, `encoding`, `csv`, and `schema`, plus the `diagnosing-bugs` Skill. The production DSH environment remains model-provider-free.
 - [x] Perform the strict product-level acceptance test from `AGENTS.md` using independent community extensions and the procedure in [`community-extension-acceptance.md`](community-extension-acceptance.md): ChatGPT saw exactly four meta-tools with `tools.listChanged=false`; four previously absent community tools were then installed behind the unchanged gateway and used through catalog/call without changing the public MCP schema. The multi-tool result was independently verified against the hidden fixture.
 - [x] Perform the strict DSH Skill ecosystem acceptance test in [`community-skill-acceptance.md`](community-skill-acceptance.md): start with an empty SkillRegistry, hot-add an independent community `SKILL.md` without restarting DSH/gateway or refreshing ChatGPT, load it through the two fixed skill meta-tools, and verify that its instructions materially change ChatGPT's debugging workflow while public `tools/list` remains the same four tools.
-- [ ] Separately test the optional UX path: while ChatGPT remains connected, add/remove a compatible DSH tool and observe whether the client honors emitted `tools/list_changed`. If ChatGPT keeps a frozen tool snapshot, record that as an expected client boundary; the stable meta-tool acceptance test above must still pass.
-- [ ] Perform an operating-system reboot drill and verify the DSH Harness, gateway, OAuth state, configured DSH plugins/skills, and projected ChatGPT capability surface recover automatically.
-- [ ] Perform an offline backup/restore drill for DSH configuration/state, workspace data, and OAuth state; verify the restored Harness exposes the same intended capability surface.
-- [ ] Decide the first release version/tag and write release notes from the exact commit that passed the drills above. Keep the package on a development version until these gates pass.
+- [x] Perform an offline backup/restore drill for DSH configuration/state, selected representative workspace data, and OAuth state; verify an isolated restored Harness exposes the same 34-tool catalog, `diagnosing-bugs` Skill, exact four-tool MCP surface, and a working cloned ChatGPT refresh grant. See [`backup-restore-acceptance.md`](backup-restore-acceptance.md).
+- [x] Select `v0.1.0` as the first release version and write release notes in [`releases/v0.1.0.md`](releases/v0.1.0.md). The package/runtime version is `0.1.0`; the annotated Git tag is created from the final release commit after all final tests/build checks pass.
 - [x] Third-party distribution policy is explicit: the repository uses the MIT License and includes `SECURITY.md` with supported-version, private-reporting, deployment-boundary, and backup-secret guidance.
+
+## Post-v0.1 follow-ups
+
+- [ ] Separately test the optional projected UX path: while ChatGPT remains connected, add/remove a compatible DSH tool and observe whether the client honors emitted `tools/list_changed`. If ChatGPT keeps a frozen tool snapshot, record that as an expected client boundary. The default meta-only path does not depend on this behavior.
+- [ ] During a normal host maintenance window, perform an operating-system reboot drill and verify the DSH Harness, gateway, OAuth state, configured DSH plugins/skills, and public tunnel recover automatically. This is intentionally deferred because the acceptance host also runs unrelated important projects; process-level cold restart and systemd enablement are already proven.
 
 ## Known boundaries
 

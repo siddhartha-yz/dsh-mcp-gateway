@@ -181,6 +181,64 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
             {"value": {"name": "second", "arguments": {"value": 7}}},
         )
 
+    async def test_stable_meta_tools_unlock_hot_added_skill_without_tools_list_refresh(self) -> None:
+        class FakeBridge:
+            def __init__(self):
+                self.skill_catalog = []
+
+            def tools(self):
+                return []
+
+            def skills(self):
+                return list(self.skill_catalog)
+
+            def load_skill(self, name):
+                match = next((skill for skill in self.skill_catalog if skill["name"] == name), None)
+                if match is None:
+                    raise AssertionError(name)
+                return {
+                    **match,
+                    "content": "Build a red-capable feedback loop before forming a root-cause theory.",
+                }
+
+            def call(self, name, arguments=None):
+                raise AssertionError((name, arguments))
+
+        bridge = FakeBridge()
+        server = build_mcp_server(None, harness_bridge=bridge)
+
+        initial_snapshot = {tool.name for tool in await server.list_tools()}
+        self.assertEqual(
+            initial_snapshot,
+            {"dsh_tool_catalog", "dsh_tool_call", "dsh_skill_catalog", "dsh_skill_load"},
+        )
+        capabilities = server._lowlevel_server.get_capabilities(protocol_version="2026-07-28")
+        self.assertFalse(capabilities.tools.list_changed)
+
+        initial_catalog = await server.call_tool("dsh_skill_catalog", {})
+        self.assertEqual(initial_catalog.structured_content, {"skills": [], "count": 0})
+
+        # Simulate DSH SkillFilesystem hot-discovering a new community SKILL.md
+        # after ChatGPT has already approved/cached the four-tool MCP surface.
+        bridge.skill_catalog.append(
+            {
+                "name": "diagnosing-bugs",
+                "description": "Diagnosis loop for hard bugs.",
+                "provider": "filesystem",
+                "source": "user-dsh",
+            }
+        )
+
+        refreshed_snapshot = {tool.name for tool in await server.list_tools()}
+        self.assertEqual(refreshed_snapshot, initial_snapshot)
+
+        catalog = await server.call_tool("dsh_skill_catalog", {})
+        self.assertEqual(catalog.structured_content["count"], 1)
+        self.assertEqual(catalog.structured_content["skills"][0]["name"], "diagnosing-bugs")
+
+        loaded = await server.call_tool("dsh_skill_load", {"name": "diagnosing-bugs"})
+        self.assertIn("red-capable feedback loop", loaded.structured_content["skill"]["content"])
+
     async def test_meta_tool_call_preserves_native_image_content(self) -> None:
         class FakeBridge:
             def tools(self):

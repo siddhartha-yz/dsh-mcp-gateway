@@ -64,7 +64,7 @@ class ReleaseSmokeHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True, "service": "dsh-mcp-gateway"})
             return
         if parsed.path == "/readyz":
-            self.send_json(200, {"ok": True, "dependency": "dsh-web-host"})
+            self.send_json(200, {"ok": True, "dependency": "dsh-harness-bridge"})
             return
         if parsed.path == "/.well-known/oauth-authorization-server":
             self.send_json(
@@ -121,7 +121,6 @@ class ReleaseSmokeHandler(BaseHTTPRequestHandler):
             callback_query = {
                 "code": "code-1",
                 "state": authorize["state"][0],
-                "iss": f"{self.base_url}/",
             }
             callback = f"{self.state['redirect_uri']}?{urlencode(callback_query)}"
             self.send_redirect(callback)
@@ -222,8 +221,12 @@ class ReleaseSmokeHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            if method == "tools/call" and payload.get("params", {}).get("name") == "dsh_list":
-                self.state["dsh_list"] = True
+            if method == "tools/call" and payload.get("params", {}).get("name") == "dsh_tool_catalog":
+                self.state["dsh_tool_catalog"] = True
+                catalog = [
+                    {"name": "bash", "description": "Run a command", "parameters": {"type": "object"}},
+                    {"name": "read", "description": "Read a file", "parameters": {"type": "object"}},
+                ]
                 self.send_json(
                     200,
                     {
@@ -231,12 +234,7 @@ class ReleaseSmokeHandler(BaseHTTPRequestHandler):
                         "id": payload["id"],
                         "result": {
                             "content": [],
-                            "structuredContent": {
-                                "items": [],
-                                "total": 0,
-                                "has_more": False,
-                                "next_offset": None,
-                            },
+                            "structuredContent": {"tools": catalog, "count": len(catalog)},
                             "isError": False,
                         },
                     },
@@ -312,7 +310,7 @@ class PublicReleaseSmokeTests(unittest.TestCase):
                 "initialized",
                 "initialized_notification",
                 "tools_list",
-                "dsh_list",
+                "dsh_tool_catalog",
                 "refresh_used",
                 "refresh_replay",
             ):

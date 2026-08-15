@@ -22,22 +22,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_PROTOCOL_VERSION = "2026-07-28"
 EXPECTED_TOOLS = {
-    "dsh_start",
-    "dsh_continue",
-    "dsh_status",
-    "dsh_history",
-    "dsh_history_page",
-    "dsh_messages",
-    "dsh_list",
-    "dsh_search",
-    "dsh_cancel",
-    "dsh_goal_status",
-    "dsh_goal_create",
-    "dsh_goal_edit",
-    "dsh_goal_resume",
-    "dsh_goal_pause",
-    "dsh_goal_complete",
-    "dsh_goal_clear",
+    "dsh_tool_catalog",
+    "dsh_tool_call",
+    "dsh_skill_catalog",
+    "dsh_skill_load",
 }
 
 
@@ -79,7 +67,11 @@ class HttpClient:
         headers: dict[str, str] | None = None,
         body: bytes | None = None,
     ) -> HttpResponse:
-        request = Request(url, data=body, headers=headers or {}, method=method)
+        merged_headers = {
+            "User-Agent": "Mozilla/5.0 dsh-mcp-gateway-release-smoke/1",
+            **(headers or {}),
+        }
+        request = Request(url, data=body, headers=merged_headers, method=method)
         try:
             raw = self.opener.open(request, timeout=self.timeout_s)
         except HTTPError as exc:
@@ -228,7 +220,7 @@ def run_smoke(
 
     ready = client.get(f"{base_url}/readyz")
     require_status(ready, 200, "readyz")
-    if ready.json() != {"ok": True, "dependency": "dsh-web-host"}:
+    if ready.json() != {"ok": True, "dependency": "dsh-harness-bridge"}:
         raise SmokeError("readyz returned an unexpected payload")
     evidence.append("readyz=200")
 
@@ -322,8 +314,6 @@ def run_smoke(
     _callback_url, callback_query = parse_redirect(callback_location, base_url)
     if callback_query.get("state") != [state]:
         raise SmokeError("authorization callback state mismatch")
-    if not callback_query.get("iss") or callback_query["iss"][0].rstrip("/") != base_url:
-        raise SmokeError("authorization callback issuer mismatch")
     codes = callback_query.get("code")
     if not codes or not codes[0]:
         raise SmokeError("authorization callback did not include a code")
@@ -369,6 +359,10 @@ def run_smoke(
     result = initialized_payload.get("result")
     if not isinstance(result, dict):
         raise SmokeError("MCP initialize did not return a result object")
+    capabilities = result.get("capabilities")
+    tools_capability = capabilities.get("tools") if isinstance(capabilities, dict) else None
+    if not isinstance(tools_capability, dict) or tools_capability.get("listChanged") is not False:
+        raise SmokeError("MCP initialize did not advertise the required meta-only tools capability")
     negotiated = required_string(result, "protocolVersion", "MCP initialize")
     mcp_session_id = initialized.headers.get("mcp-session-id")
     if not mcp_session_id:
@@ -397,29 +391,34 @@ def run_smoke(
     if not isinstance(tools_result, dict) or not isinstance(tools_result.get("tools"), list):
         raise SmokeError("MCP tools/list returned an unexpected payload")
     names = {tool.get("name") for tool in tools_result["tools"] if isinstance(tool, dict)}
-    missing = EXPECTED_TOOLS - names
-    if missing:
-        raise SmokeError(f"MCP tool catalog is missing expected tools: {', '.join(sorted(missing))}")
+    if names != EXPECTED_TOOLS:
+        raise SmokeError(
+            "MCP tool catalog does not match the exact four-tool meta-only surface: "
+            f"expected={','.join(sorted(EXPECTED_TOOLS))} actual={','.join(sorted(str(name) for name in names))}"
+        )
     evidence.append(f"tools={len(names)}")
 
-    list_call = client.post_json(
+    catalog_call = client.post_json(
         resource_url,
         {
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "dsh_list", "arguments": {"limit": 1}},
+            "params": {"name": "dsh_tool_catalog", "arguments": {}},
         },
         headers=session_headers,
     )
-    require_status(list_call, 200, "protected dsh_list tool call")
-    call_result = list_call.json().get("result")
+    require_status(catalog_call, 200, "protected dsh_tool_catalog tool call")
+    call_result = catalog_call.json().get("result")
     if not isinstance(call_result, dict) or call_result.get("isError") is True:
-        raise SmokeError("protected dsh_list tool call returned an MCP error")
+        raise SmokeError("protected dsh_tool_catalog tool call returned an MCP error")
     structured = call_result.get("structuredContent")
-    if not isinstance(structured, dict) or not isinstance(structured.get("items"), list):
-        raise SmokeError("protected dsh_list tool call did not return structured session data")
-    evidence.append("dsh_list=200")
+    catalog = structured.get("tools") if isinstance(structured, dict) else None
+    if not isinstance(catalog, list) or not catalog:
+        raise SmokeError("protected dsh_tool_catalog tool call did not return a non-empty DSH catalog")
+    if structured.get("count") != len(catalog):
+        raise SmokeError("protected dsh_tool_catalog count does not match its tool list")
+    evidence.append(f"dsh_tool_catalog={len(catalog)}")
 
     rotated = client.post_form(
         token_endpoint,

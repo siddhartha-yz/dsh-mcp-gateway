@@ -18,7 +18,7 @@ A checked item requires executable or recorded integration evidence; documentati
 - [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound; Host/Origin rebinding checks are regression-tested.
 - [x] The exact DSH runtime is pinned to `@deepseek-ai/dsh@0.1.0-rc.6`; the checked lock contains 588 integrity-pinned packages and the deployment uses Node 24.19.0.
 - [x] Optional local-shell-mcp composition stays behind DSH and narrows its overlapping tool surface, keeping LSM as an execution/access provider rather than the primary Harness.
-- [x] Process-level cold restart recovery is proven for the DSH Harness, installed community tools, filesystem Skills, gateway OAuth SQLite state, refresh-token rotation, and the fixed four-tool MCP contract; see [`restart-recovery-acceptance.md`](restart-recovery-acceptance.md). This is intentionally separate from the still-pending host reboot drill.
+- [x] Process-level cold restart recovery is proven for the DSH Harness, installed community tools, filesystem Skills, gateway OAuth SQLite state, refresh-token rotation, the real ChatGPT Web client's automatic refresh-token recovery without reconnect/rescan/reauthorization, and the fixed four-tool MCP contract; see [`restart-recovery-acceptance.md`](restart-recovery-acceptance.md). This is intentionally separate from the still-pending host reboot drill.
 
 ## Release-blocking drills
 

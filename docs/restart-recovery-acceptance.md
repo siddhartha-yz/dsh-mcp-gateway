@@ -59,11 +59,27 @@ through `dsh_tool_catalog`, and discovered `diagnosing-bugs` through
 The isolated OAuth drill client and its tokens were removed after the test. The
 ChatGPT user's durable refresh grant was left untouched.
 
+## Real ChatGPT client recovery
+
+After the isolated drill client was removed, the gateway database was left with
+the real ChatGPT client's durable refresh grant but no live access token. The
+user then returned to the already-connected ChatGPT Web conversation and invoked
+`dsh_skill_catalog` without reconnecting, rescanning tools, or reauthorizing the
+App. The call succeeded and returned the hot-loaded `diagnosing-bugs` Skill.
+
+Immediately after that call, the OAuth database showed one newly issued access
+token and one refresh token for the same ChatGPT client and the same grant id.
+There were no authorization codes or pending authorization requests. The new
+access token expires at `2026-08-15T08:05:37Z`; the rotated refresh token expires
+at `2026-09-14T07:05:37Z`. This proves the real ChatGPT client recovered through
+the persisted refresh-token grant after the gateway process restart rather than
+through a new authorization flow.
+
 ## Result
 
 Process-level recovery is proven for the composed Harness, installed DSH plugins,
-filesystem Skills, gateway OAuth state, refresh-token rotation, and the public
-meta-only MCP contract.
+filesystem Skills, gateway OAuth state, refresh-token rotation, real ChatGPT Web
+client auto-refresh, and the public meta-only MCP contract.
 
 This does **not** satisfy the operating-system reboot gate. A host reboot still
 needs to prove that the chosen service manager starts the named tunnel, DSH

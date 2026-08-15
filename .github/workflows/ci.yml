@@ -32,6 +32,9 @@ jobs:
       - name: Ruff
         run: ruff check src tests scripts
 
+      - name: Reject tracked infrastructure identifiers
+        run: python scripts/check-private-identifiers.py --no-network-ip-detection
+
       - name: Unit tests
         run: python -m unittest discover -s tests -q
 

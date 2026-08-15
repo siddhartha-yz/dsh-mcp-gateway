@@ -16,6 +16,8 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("ChatGPT Web is the only primary reasoning/model agent", contract)
         self.assertIn("local-shell-mcp is not the primary harness", contract)
         self.assertIn("community DSH extension", contract)
+        self.assertIn("stable set of meta-tools", contract)
+        self.assertIn("must not depend on dynamic first-class tool refresh", contract)
 
         self.assertIn("AGENTS.md", readme)
         self.assertIn("Give ChatGPT Web a mature DSH Harness", readme)

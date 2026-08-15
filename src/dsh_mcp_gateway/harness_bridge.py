@@ -39,7 +39,7 @@ def _projected_tool(schema: dict[str, Any]):
     )
 
 
-def _tool_result(result: dict[str, Any]):
+def tool_result_to_mcp(result: dict[str, Any]):
     """Translate a DSH ToolRuntime execution result into an MCP call result."""
     try:
         from mcp.types import CallToolResult, ImageContent, TextContent
@@ -193,7 +193,7 @@ class HarnessProjectionMixin:
         if bridge is None or self._tool_manager.get_tool(name) is not None:
             return await super().call_tool(name, arguments, context)
         result = await asyncio.to_thread(bridge.call, name, arguments)
-        return _tool_result(result)
+        return tool_result_to_mcp(result)
 
 
 @dataclass(slots=True)

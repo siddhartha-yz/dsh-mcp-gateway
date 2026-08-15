@@ -35,6 +35,8 @@ ChatGPT Web is the only primary reasoning/model agent. The project must not requ
 
 The primary product is the thinnest practical MCP/access adapter that exposes a DSH-managed capability surface to ChatGPT Web. Installing a compatible DSH community extension should, ideally, make that capability available to ChatGPT without writing a bespoke ChatGPT wrapper for every extension.
 
+ChatGPT clients may keep an approved MCP tool surface as a snapshot and may not immediately adopt later `tools/list_changed` additions. Therefore extension availability must not depend on dynamic first-class tool refresh. A small stable set of meta-tools (catalog/discovery + generic invocation) is the correctness path. First-class projection of individual DSH tools is a best-effort UX optimization only.
+
 The adapter may also contain the public-access engineering required by ChatGPT Web, such as OAuth integration, MCP transport glue, capability projection, and compatibility code that cannot live inside DSH itself.
 
 ### DSH
@@ -84,5 +86,7 @@ When in doubt, prefer integration over duplication.
 A central acceptance criterion is:
 
 > Install a representative community DSH extension with little or no modification, expose it through the adapter, and successfully use that capability from a normal ChatGPT Web conversation.
+
+The acceptance test must pass **without requiring the ChatGPT app/connector to be re-published, re-approved, or to refresh its first-class MCP tool snapshot**. Discovering the new capability through stable meta-tools and invoking it generically is sufficient for correctness. Dynamic first-class projection is tested separately as an optional client UX enhancement.
 
 Progress that does not move toward this test should be treated as secondary unless it fixes a prerequisite or regression.

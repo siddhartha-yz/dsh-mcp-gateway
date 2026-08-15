@@ -126,6 +126,86 @@ class HarnessCatalogWatcherTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stable_meta_tools_unlock_new_plugin_without_tools_list_refresh(self) -> None:
+        class FakeBridge:
+            def __init__(self):
+                self.catalog = [{"name": "first", "description": "first", "parameters": {"type": "object"}}]
+
+            def tools(self):
+                return list(self.catalog)
+
+            def skills(self):
+                return []
+
+            def load_skill(self, name):
+                raise AssertionError(name)
+
+            def call(self, name, arguments=None):
+                return {
+                    "isError": False,
+                    "value": {"name": name, "arguments": arguments or {}},
+                    "content": [{"type": "text", "text": f"called {name}"}],
+                }
+
+        bridge = FakeBridge()
+        server = build_mcp_server(None, harness_bridge=bridge)
+
+        # Simulate ChatGPT approving/caching one initial MCP tool snapshot.
+        initial_snapshot = {tool.name for tool in await server.list_tools()}
+        self.assertIn("dsh_tool_catalog", initial_snapshot)
+        self.assertIn("dsh_tool_call", initial_snapshot)
+        self.assertNotIn("second", initial_snapshot)
+
+        # A DSH community plugin appears later. Do not refresh tools/list.
+        bridge.catalog.append({"name": "second", "description": "second", "parameters": {"type": "object"}})
+
+        catalog = await server.call_tool("dsh_tool_catalog", {})
+        self.assertEqual([item["name"] for item in catalog.structured_content["tools"]], ["first", "second"])
+
+        result = await server.call_tool(
+            "dsh_tool_call",
+            {"name": "second", "arguments": {"value": 7}},
+        )
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.content[0].text, "called second")
+        self.assertEqual(
+            result.structured_content,
+            {"value": {"name": "second", "arguments": {"value": 7}}},
+        )
+
+    async def test_meta_tool_call_preserves_native_image_content(self) -> None:
+        class FakeBridge:
+            def tools(self):
+                return []
+
+            def skills(self):
+                return []
+
+            def load_skill(self, name):
+                raise AssertionError(name)
+
+            def call(self, name, arguments=None):
+                return {
+                    "isError": False,
+                    "value": {"name": name},
+                    "content": [
+                        {"type": "text", "text": "meta image"},
+                        {
+                            "type": "image",
+                            "data": base64.b64encode(b"meta-png").decode("ascii"),
+                            "mediaType": "image/png",
+                        },
+                    ],
+                }
+
+        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        result = await server.call_tool("dsh_tool_call", {"name": "community_image", "arguments": {}})
+
+        self.assertFalse(result.is_error)
+        self.assertEqual([block.type for block in result.content], ["text", "image"])
+        self.assertEqual(result.content[0].text, "meta image")
+        self.assertEqual(base64.b64decode(result.content[1].data), b"meta-png")
+
     async def test_harness_mode_projects_dsh_tools_as_first_class_mcp_tools(self) -> None:
         class FakeBridge:
             def tools(self):

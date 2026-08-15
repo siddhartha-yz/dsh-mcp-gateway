@@ -12,6 +12,7 @@ from .backend import PublicSdkBridge, PublicSdkClient, SessionCatalog
 from .harness_bridge import (
     HarnessBridgeClient,
     HarnessProjectionMixin,
+    tool_result_to_mcp,
     watch_tool_catalog,
 )
 from .routing import GatewayService
@@ -91,11 +92,12 @@ def build_mcp_server(
             )
         ),
         instructions=(
-            "DSH is the harness authority and ChatGPT is the reasoning agent. DSH ToolRuntime capabilities are "
-            "projected as first-class MCP tools and should be called directly. Newly loaded global DSH tool plugins "
-            "appear on the next tools/list refresh without a bespoke ChatGPT wrapper. DSH community skills are "
-            "discoverable through dsh_skill_catalog and loaded through dsh_skill_load using DSH's native SkillRegistry. "
-            "dsh_tool_catalog and dsh_tool_call remain compatibility/debugging fallbacks."
+            "DSH is the harness authority and ChatGPT is the reasoning agent. The stable meta-tools "
+            "dsh_tool_catalog/dsh_tool_call and dsh_skill_catalog/dsh_skill_load are the correctness path for DSH "
+            "community extensions: use them to discover and invoke capabilities even if the ChatGPT client keeps a "
+            "frozen MCP tool snapshot. DSH ToolRuntime capabilities are also projected as first-class MCP tools when "
+            "the client refreshes tools/list; that projection is an optional UX optimization, not a requirement for "
+            "extension availability."
             if harness_bridge is not None
             else (
             "Use session_manage(action='start') before substantial work, keep the returned session_id and "
@@ -127,9 +129,9 @@ def build_mcp_server(
             return {"tools": tools, "count": len(tools)}
 
         @mcp.tool(name="dsh_tool_call", annotations=consequential_control)
-        def dsh_tool_call(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        def dsh_tool_call(name: str, arguments: dict[str, Any] | None = None) -> Any:
             """Execute one discovered DSH tool through DSH's guarded ToolRuntime pipeline."""
-            return harness_bridge.call(name, arguments)
+            return tool_result_to_mcp(harness_bridge.call(name, arguments))
 
         @mcp.tool(name="dsh_skill_catalog", annotations=read_only)
         def dsh_skill_catalog() -> dict[str, Any]:

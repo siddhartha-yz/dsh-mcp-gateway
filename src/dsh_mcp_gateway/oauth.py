@@ -1028,7 +1028,15 @@ def install_approval_route(mcp: Any, provider: EmbeddedOAuthProvider) -> None:
         "Cache-Control": "no-store",
         "Pragma": "no-cache",
         "Content-Security-Policy": (
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+            # Do not set form-action='self' here. The fixed form POSTs to
+            # /approve, whose successful OAuth response redirects to the
+            # registered client callback on another origin (for ChatGPT,
+            # https://chatgpt.com/connector/oauth/...). Chromium applies
+            # form-action across that navigation chain and otherwise blocks
+            # the callback after the authorization code has already been
+            # issued. The form action itself is hard-coded below; scripts and
+            # base-uri remain disabled.
+            "default-src 'none'; style-src 'unsafe-inline'; "
             "frame-ancestors 'none'; base-uri 'none'"
         ),
         "Referrer-Policy": "no-referrer",

@@ -1028,7 +1028,8 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(approval_page.headers["x-content-type-options"], "nosniff")
                 self.assertEqual(approval_page.headers["x-frame-options"], "DENY")
                 self.assertIn("frame-ancestors 'none'", approval_page.headers["content-security-policy"])
-                self.assertIn("form-action 'self'", approval_page.headers["content-security-policy"])
+                self.assertNotIn("form-action", approval_page.headers["content-security-policy"])
+                self.assertIn("base-uri 'none'", approval_page.headers["content-security-policy"])
                 approval_text = approval_page.text
                 self.assertIn("chatgpt-public-client-test", approval_text)
                 self.assertIn(registered["client_id"], approval_text)

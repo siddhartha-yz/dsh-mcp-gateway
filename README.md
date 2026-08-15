@@ -68,6 +68,8 @@ The bridge now uses DSH's own AgentRegistry and agent-preset composition only as
 
 For native DSH tools whose execution is gated by the routed model's declared modalities, the idle capability Agent points at a local **metadata-only ChatGPT Web route**. That route declares `text` + `image` input so DSH's own `read_image` gate can validate the external ChatGPT consumer, but its `stream()` method always fails and the bridge never drives the Agent. It therefore performs no inference, requires no model API key, and cannot become a hidden second model. A real rc6 smoke verified preset-scoped `bash` execution and native `read_image` returning an image block through the bridge with no provider credential configured.
 
+DSH `additionalContexts` are also preserved across the external-agent boundary. DSH uses these follow-up user contexts for guard reminders and for nested Code Mode results such as an image returned by `run_code`. The bridge materializes attachment-backed images inside those contexts and the MCP adapter appends their visible text/image blocks to the tool result, so replacing DSH's own model loop with ChatGPT Web does not silently discard policy or nested multimodal context.
+
 This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper or gateway restart; it is available through the same generic bridge. Automatic MCP `tools/list_changed` notification is a later refinement rather than a prerequisite for direct projection.
 
 The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).

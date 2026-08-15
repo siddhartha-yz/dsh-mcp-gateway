@@ -50,12 +50,12 @@ function json(res, status, body) {
   res.end(data)
 }
 
-async function materializeToolContent(ctx, result) {
-  if (!Array.isArray(result?.content)) return result
+async function materializeContentBlocks(ctx, blocks) {
+  if (!Array.isArray(blocks)) return blocks
   const attachments = ctx.get('attachments')
-  if (!attachments || !result.content.some(block => block?.type === 'image' && block.attachment)) return result
+  if (!attachments || !blocks.some(block => block?.type === 'image' && block.attachment)) return blocks
 
-  const content = await Promise.all(result.content.map(async (block) => {
+  return Promise.all(blocks.map(async (block) => {
     if (block?.type !== 'image' || !block.attachment) return block
     const stored = await attachments.readImage(block.attachment)
     return {
@@ -64,7 +64,22 @@ async function materializeToolContent(ctx, result) {
       mediaType: stored.ref.mediaType,
     }
   }))
-  return { ...result, content }
+}
+
+async function materializeToolContent(ctx, result) {
+  if (!result || typeof result !== 'object') return result
+  const content = await materializeContentBlocks(ctx, result.content)
+  let additionalContexts = result.additionalContexts
+  if (Array.isArray(additionalContexts)) {
+    additionalContexts = await Promise.all(additionalContexts.map(async (message) => {
+      if (!message || typeof message !== 'object') return message
+      return {
+        ...message,
+        content: await materializeContentBlocks(ctx, message.content),
+      }
+    }))
+  }
+  return { ...result, content, additionalContexts }
 }
 
 async function readJson(req) {

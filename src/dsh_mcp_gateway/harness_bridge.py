@@ -73,8 +73,45 @@ def _tool_result(result: dict[str, Any]):
         structured["value"] = result["value"]
     if "meta" in result:
         structured["meta"] = result["meta"]
-    if "additionalContexts" in result:
-        structured["additionalContexts"] = result["additionalContexts"]
+    additional_contexts = result.get("additionalContexts")
+    if isinstance(additional_contexts, list):
+        for item in additional_contexts:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("source")
+            source_label = "DSH harness context"
+            if isinstance(source, dict):
+                kind = source.get("kind")
+                plugin = source.get("plugin")
+                if isinstance(kind, str) and kind:
+                    source_label += f" from {kind}"
+                if isinstance(plugin, str) and plugin:
+                    source_label += f" {plugin}"
+            blocks = item.get("content")
+            if not isinstance(blocks, list):
+                continue
+            visible_blocks = []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text" and isinstance(block.get("text"), str):
+                    visible_blocks.append(TextContent(type="text", text=block["text"]))
+                    continue
+                if (
+                    block.get("type") == "image"
+                    and isinstance(block.get("data"), str)
+                    and isinstance(block.get("mediaType"), str)
+                ):
+                    visible_blocks.append(
+                        ImageContent(
+                            type="image",
+                            data=block["data"],
+                            mime_type=block["mediaType"],
+                        )
+                    )
+            if visible_blocks:
+                content.append(TextContent(type="text", text=f"[{source_label}]"))
+                content.extend(visible_blocks)
     if is_error and isinstance(result.get("error"), dict):
         structured["error"] = result["error"]
         message = result["error"].get("message")

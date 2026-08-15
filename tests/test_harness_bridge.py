@@ -131,6 +131,43 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.content[1].mime_type, "image/png")
         self.assertEqual(base64.b64decode(result.content[1].data), b"fake-png")
 
+    async def test_dsh_additional_contexts_become_model_visible_mcp_content(self) -> None:
+        class FakeBridge:
+            def tools(self):
+                return [{"name": "run_code", "description": "code", "parameters": {"type": "object"}}]
+
+            def call(self, name, arguments=None):
+                return {
+                    "isError": False,
+                    "value": {"name": name},
+                    "content": [{"type": "text", "text": "outer result"}],
+                    "additionalContexts": [
+                        {
+                            "role": "user",
+                            "source": {"kind": "plugin", "plugin": "image-forwarder"},
+                            "content": [
+                                {"type": "text", "text": "forwarded image"},
+                                {
+                                    "type": "image",
+                                    "data": base64.b64encode(b"forwarded-png").decode("ascii"),
+                                    "mediaType": "image/png",
+                                },
+                            ],
+                        }
+                    ],
+                }
+
+        server = build_mcp_server(None, harness_bridge=FakeBridge())
+        result = await server.call_tool("run_code", {})
+
+        self.assertFalse(result.is_error)
+        self.assertEqual([block.type for block in result.content], ["text", "text", "text", "image"])
+        self.assertEqual(result.content[0].text, "outer result")
+        self.assertEqual(result.content[1].text, "[DSH harness context from plugin image-forwarder]")
+        self.assertEqual(result.content[2].text, "forwarded image")
+        self.assertEqual(base64.b64decode(result.content[3].data), b"forwarded-png")
+        self.assertEqual(result.structured_content, {"value": {"name": "run_code"}})
+
     async def test_projected_catalog_is_dynamic_without_gateway_restart(self) -> None:
         class FakeBridge:
             def __init__(self):

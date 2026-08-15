@@ -265,12 +265,38 @@ so enabling search cannot accidentally remove the required ChatGPT Harness bridg
 Canonical state domains are:
 
 ```text
-/var/lib/dsh-harness/       DSH Harness state
-/srv/dsh-workspace/         files modified through DSH/execution providers
-/var/lib/dsh-mcp-gateway/   OAuth client/token state
-/etc/dsh-mcp-gateway/       private deployment configuration
+/var/lib/dsh-harness/       DSH Harness state, Skills, profile, local plugin artifacts
+/var/lib/dsh-mcp-gateway/   OAuth clients/tokens
+/etc/dsh-mcp-gateway/       private gateway configuration
+/etc/dsh-cloudflared/       named-tunnel config/credentials when used
+<workspace>/                user/project data exposed to the Harness
 ```
 
-For a consistent backup, stop the public gateway first, then the DSH Host; restore ownership/modes before starting DSH and then the gateway. The software trees under `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` are reproducible from the pinned inputs and Git commit.
+The workspace is deployment-specific: the isolated template uses `/srv/dsh-workspace`, while the validated personal-host override uses `/home/ubuntu/workspace`. The gateway does not claim ownership of every project under that workspace, so a DSH release backup must not silently duplicate tens of gigabytes of unrelated repositories. Use each project's Git/storage policy for full project backup and pass explicit representative workspace paths to the DSH state drill.
+
+A consistent offline DSH backup can be created with:
+
+```sh
+sudo ./scripts/backup-host-state.sh \
+  --output /path/to/private/dsh-backup \
+  --output-owner "$USER" \
+  --workspace /home/ubuntu/workspace \
+  --workspace-path dsh-skill-debug-test/CONTEXT.md \
+  --workspace-path dsh-meta-only-hard-test/result.json
+```
+
+The script briefly quiesces only `dsh-cloudflared`, `dsh-mcp-gateway`, and `dsh-web-host`, then restores whichever of those services were active. It archives DSH state, OAuth state, private gateway/tunnel configuration, and only the explicit workspace paths. The output contains OAuth tokens and tunnel credentials; keep it private and encrypt it before off-host storage.
+
+Verify the backup without touching production by restoring it to temporary loopback ports:
+
+```sh
+./scripts/verify-backup-restore.sh \
+  --backup /path/to/private/dsh-backup \
+  --restore-root /path/to/isolated-restore
+```
+
+The verifier checks archive hashes, restores the selected workspace files, rebases all community plugins to the backed-up local artifacts, rebuilds the DSH profile with `pnpm --offline`, starts an isolated Harness/gateway, rotates a cloned real ChatGPT refresh grant, and verifies the fixed four-tool MCP surface plus the restored DSH tool/Skill catalogs. It never mutates the production state database.
+
+For a real disaster restore, extract the archives at their documented absolute paths, restore ownership/modes, install the exact recorded software commit/runtime pins, then start DSH before the gateway and tunnel. The software trees under `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` remain reproducible from the pinned inputs and Git commit.
 
 Before upgrading MCP or DSH: update pins in a branch, run the full tests, rerun the DSH community-tool projection smoke and public OAuth smoke, review projected tool schemas, and deploy only after the primary Harness path remains model-provider-free.

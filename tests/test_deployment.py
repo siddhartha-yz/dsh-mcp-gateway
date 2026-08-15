@@ -19,6 +19,8 @@ DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
 DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
+BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
+VERIFY_BACKUP = ROOT / "scripts" / "verify-backup-restore.sh"
 
 
 def read_unit(name: str) -> configparser.RawConfigParser:
@@ -134,6 +136,32 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("tool catalog changed across promotion", script)
         self.assertIn("SkillRegistry changed across promotion", script)
         self.assertNotIn("DEEPSEEK_API_" + "KEY=", script)
+
+    def test_backup_restore_scripts_scope_out_unrelated_host_projects_and_verify_real_oauth(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertIn("systemctl stop dsh-cloudflared.service", backup)
+        self.assertIn("systemctl stop dsh-mcp-gateway.service", backup)
+        self.assertIn("systemctl stop dsh-web-host.service", backup)
+        self.assertNotIn("shutdown", backup)
+        self.assertNotIn("systemctl stop --all", backup)
+        self.assertIn("workspace path must be non-empty and relative", backup)
+        self.assertIn("workspace-selected.tar.gz", backup)
+        self.assertIn("gateway-state.tar.gz", backup)
+        self.assertIn("config.tar.gz", backup)
+        self.assertIn("SHA256SUMS", backup)
+        self.assertIn("encrypt it before moving it off-host", backup)
+        self.assertNotIn("DEEPSEEK_API_" + "KEY=", backup + restore)
+
+        self.assertIn("--offline", restore)
+        self.assertIn("dependency is not a backed-up local artifact", restore)
+        self.assertIn("restored OAuth state has no ChatGPT refresh grant", restore)
+        self.assertIn("grant_type':'refresh_token'", restore)
+        self.assertIn("dsh_tool_catalog", restore)
+        self.assertIn("dsh_skill_catalog", restore)
+        self.assertIn("tools.listChanged", restore)
+        self.assertIn("Production DSH services were not modified", restore)
 
     def test_optional_session_search_overlay_is_durable_and_lazy(self) -> None:
         overlay = (DSH_DEPLOY / "session-search.cordis.yml").read_text(encoding="utf-8")

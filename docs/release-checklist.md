@@ -1,36 +1,40 @@
 # Release checklist
 
-This checklist defines the boundary between the current development prototype and a self-hosted release that can be relied on for long-running DSH work. A checked item needs executable or recorded integration evidence; documentation alone is not enough.
+This checklist follows the repository contract in [`../AGENTS.md`](../AGENTS.md): the release target is **ChatGPT Web connected to a mature DSH Harness**, not an autonomous second-model runtime. Historical session/goal experiments remain documented in [`legacy-dsh-prototype.md`](legacy-dsh-prototype.md) and are not primary release gates.
 
-## Proven gates
+A checked item requires executable or recorded integration evidence; documentation alone is not enough.
 
-- [x] Core session routing is fail-closed: live -> reuse, persisted -> resume, absent -> create; a failed persisted resume never falls back to create.
-- [x] Same-session mutating control admission is serialized within one gateway process while unrelated sessions remain concurrent.
-- [x] Official DSH `@deepseek-ai/dsh@0.1.0-rc.6` cold-resumes the same durable session after the whole Web Host process restarts with the same `DSH_HOME`; pre/post-restart turns remain in one history.
-- [x] DSH goal restart semantics are explicit: durable phase/revision/history survive, process-local continuation authority does not; `dsh_goal_resume` is required to re-arm work after Host restart.
-- [x] Compact `dsh_messages` reads human/model transcript from a cold session without attaching/resuming the Agent, and its pagination skips filtered plugin-only pages without reordering messages.
-- [x] Session content search can rediscover a durable session after Host restart; the optional derived FTS index can be deleted and rebuilt from canonical session logs.
-- [x] Optional local-shell-mcp composition is tool-filtered and the filtered model-facing surface survives DSH Host restart/cold resume.
-- [x] Embedded OAuth persists DCR clients/tokens, canonicalizes issuer/resource binding, rotates refresh tokens, revokes grant families, bounds DCR/pending state, and prunes expired short-lived state.
-- [x] Public-client HTTP OAuth regression covers DCR -> PKCE -> owner approval -> token -> unauthenticated MCP 401 -> authenticated MCP initialize -> negotiated protocol version -> initialized notification -> tools/list -> protected `dsh_list` tool call.
-- [x] Rebuilding the OAuth/MCP server around the same SQLite state preserves old access-token authentication; a new MCP transport session is negotiated and the pre-restart refresh token rotates once with replay rejected as `invalid_grant`.
-- [x] Anonymous DCR input is bounded before parsing (raw `POST /register` body) and before persistence (normalized client metadata), including streamed bodies without `Content-Length`.
-- [x] Gateway liveness is independent from DSH readiness; a missing/wedged Host leaves `/healthz` live and `/readyz` bounded to the dedicated short probe timeout.
-- [x] Wheel/core CLI smoke, Python 3.11/3.12 tests, all-extras imports, the locked Python server graph, the exact DSH rc6 npm graph (587 transitive entries with sha512 integrity), systemd parser checks, and the repository test suite are verifier/CI-backed; the example DSH service pins its self-contained Node runtime to 24.19.0. The npm graph was also rebuilt from an empty Linux x86_64/glibc directory with Node 24.19.0/npm 11.17.0: DSH Web Host + Agent initialized, a real model-driven Bash tool call succeeded, and node-pty spawned a PTY.
-- [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound. The real MCP SDK DNS-rebinding middleware is also regression-tested: the declared public Host+Origin is accepted, a mismatched Host returns 421, and a mismatched Origin returns 403. The one-shot release client requests MCP `2026-07-28` and then uses the server-negotiated protocol version for the rest of the session.
+## Proven Harness gates
+
+- [x] ChatGPT-facing MCP tools are projected generically from DSH `ToolRuntime.schemas(...)`; compatible DSH community tools do not need bespoke Python wrappers.
+- [x] Projected calls execute through DSH `ToolRuntime.execute(...)`, preserving DSH guards, policy, result normalization, and scoped restrictions.
+- [x] The bridge uses a DSH agent-preset scope identity without submitting prompts or requiring a model-provider API key; ChatGPT remains the only reasoning agent.
+- [x] DSH community skills are discovered and loaded through the native scoped `SkillRegistry` with model-invocation policy preserved.
+- [x] DSH image results and attachment-backed images reach ChatGPT as MCP image content without per-tool wrappers.
+- [x] DSH `additionalContexts` survive the external-model boundary, including policy/guard reminders and nested multimodal contexts.
+- [x] Live DSH `tools/change` invalidations advance a bridge catalog revision; the gateway publishes MCP `tools/list_changed` for modern subscription-capable clients. A real rc6 smoke registered a community tool after the scoped bridge was already live: the revision advanced from 26 to 27 and the tool immediately appeared in the scoped catalog.
+- [x] The modern MCP `2026-07-28` capability surface advertises `tools.listChanged=true` through the SDK subscription seam.
+- [x] Embedded OAuth persists DCR clients/tokens, supports PKCE public clients, rotates refresh tokens, revokes grant families, bounds anonymous registration state, and keeps the DSH Host private behind the OAuth-protected MCP gateway.
+- [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound; Host/Origin rebinding checks are regression-tested.
+- [x] The exact DSH runtime is pinned to `@deepseek-ai/dsh@0.1.0-rc.6`; the checked lock contains 587 integrity-pinned packages and the deployment uses Node 24.19.0.
+- [x] Optional local-shell-mcp composition stays behind DSH and narrows its overlapping tool surface, keeping LSM as an execution/access provider rather than the primary Harness.
 
 ## Release-blocking drills
 
-These are deliberately left unchecked until performed against the intended long-running host rather than a temporary integration environment.
+These remain unchecked until performed against the intended long-running host and real ChatGPT Web UI.
 
-- [ ] Install the pinned DSH runtime and gateway using the checked-in systemd templates on the target host; make `python3 scripts/preflight-deployment.py` pass first, then verify both services start as their dedicated Unix users with the documented state directories and permissions.
-- [ ] Put the real public HTTPS reverse proxy/domain in front of the loopback gateway and make `python3 scripts/smoke-public-oauth.py --base-url https://<exact-origin>` pass; this repeats DCR/PKCE/owner approval/MCP initialization with that exact issuer/resource/Host/Origin configuration and intentionally leaves one smoke client registration behind.
-- [ ] Perform an operating-system reboot drill: verify DSH Host and gateway start automatically, OAuth state remains usable, an existing durable session is cold-readable, and an explicit continuation succeeds.
-- [ ] Perform an offline backup/restore drill for `DSH_HOME`, workspace, OAuth state, and configuration; verify restored session history and OAuth behavior match the documented failure boundaries.
-- [ ] Perform the final ChatGPT UI handoff: ChatGPT conversation A starts a DSH task, the conversation/MCP connection ends, conversation B rediscovers/reads the same DSH session and continues it without relying on A's context.
+- [ ] Install the pinned DSH runtime and gateway using the checked-in deployment templates on the target host; make `python3 scripts/preflight-deployment.py` pass first and verify both services use the documented Unix users, state directories, and loopback boundaries.
+- [ ] Put the real public HTTPS reverse proxy/domain in front of the loopback gateway and make `python3 scripts/smoke-public-oauth.py --base-url https://<exact-origin>` pass with the exact production issuer/resource/Host/Origin configuration.
+- [ ] Connect the production MCP endpoint from a normal ChatGPT Web conversation and verify DSH-native preset tools can be discovered and called with no `DEEPSEEK_API_KEY` or other second-model credential configured.
+- [ ] Perform the product-level acceptance test from `AGENTS.md`: install a representative community DSH extension with little or no modification, verify its tool and/or skill appears through the generic adapter, and successfully use it from ChatGPT Web without writing an extension-specific gateway wrapper.
+- [ ] While ChatGPT remains connected, add/remove a compatible DSH tool and verify the client honors the emitted tool-list change path when its MCP protocol implementation supports subscriptions; if ChatGPT does not currently refresh dynamically, record that as a client boundary rather than reimplementing a catalog in the gateway.
+- [ ] Perform an operating-system reboot drill and verify the DSH Harness, gateway, OAuth state, configured DSH plugins/skills, and projected ChatGPT capability surface recover automatically.
+- [ ] Perform an offline backup/restore drill for DSH configuration/state, workspace data, and OAuth state; verify the restored Harness exposes the same intended capability surface.
 - [ ] Decide the first release version/tag and write release notes from the exact commit that passed the drills above. Keep the package on a development version until these gates pass.
 - [ ] If distributing the project for third-party use, choose and add an explicit license/security-support policy; do not infer a license from repository visibility.
 
-## Known non-blocking upstream boundary
+## Known boundaries
 
-The restart-capable adapter still targets the DSH developer-preview Web Host contract. rc6 `session.list` returns the full persisted-session set and has no implemented cursor or pure exact-id summary RPC, so backend presence checks remain O(N). The network host-event stream is WebSocket-only and requires generation-aware reconnect/rebaseline logic; the gateway intentionally does not add a second connection runtime merely to hide this v1 upstream shape. `dsh_list` bounds what reaches the MCP/model context even though the Host-side lookup remains O(N).
+- Dynamic first-class tool refresh depends on the MCP client honoring the modern tool-list change subscription mechanism. The gateway publishes the standard event but does not maintain a second shadow catalog solely to work around a client that ignores it.
+- The DSH bridge is loopback-internal. Public authentication and transport security terminate at `dsh-mcp-gateway`; exposing the raw bridge is outside the supported security boundary.
+- DSH is still a developer-preview dependency. DSH-specific compatibility code should remain concentrated in the small bridge seam so an upstream contract change does not spread through the public MCP layer.

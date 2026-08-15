@@ -97,6 +97,16 @@ async function readJson(req) {
 
 export function apply(ctx) {
   let capabilityHandlePromise
+  let toolRevision = 1
+  let skillRevision = 1
+
+  ctx.effect(() => ctx.on('tools/change', () => {
+    toolRevision += 1
+  }), 'dsh-chatgpt-bridge.tools-change')
+
+  ctx.effect(() => ctx.on('skills/change', () => {
+    skillRevision += 1
+  }), 'dsh-chatgpt-bridge.skills-change')
 
   // Some native DSH tools gate their output modality through the calling
   // agent's exact model route. The bridge therefore registers a metadata-only
@@ -157,6 +167,14 @@ export function apply(ctx) {
       },
     }
   }
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: `${PREFIX}/revision`,
+    handler: async (_req, res) => {
+      json(res, 200, { toolRevision, skillRevision })
+    },
+  }))
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',

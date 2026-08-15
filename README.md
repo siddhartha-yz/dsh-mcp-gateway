@@ -70,7 +70,7 @@ For native DSH tools whose execution is gated by the routed model's declared mod
 
 DSH `additionalContexts` are also preserved across the external-agent boundary. DSH uses these follow-up user contexts for guard reminders and for nested Code Mode results such as an image returned by `run_code`. The bridge materializes attachment-backed images inside those contexts and the MCP adapter appends their visible text/image blocks to the tool result, so replacing DSH's own model loop with ChatGPT Web does not silently discard policy or nested multimodal context.
 
-This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper or gateway restart; it is available through the same generic bridge. Automatic MCP `tools/list_changed` notification is a later refinement rather than a prerequisite for direct projection.
+This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper or gateway restart; it is available through the same generic bridge. The DSH-side bridge tracks native `tools/change` invalidations, and the gateway publishes MCP `tools/list_changed` through the SDK subscription bus when that revision changes, so already-connected clients that support catalog-change subscriptions can refresh first-class community tools without reconnecting.
 
 The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -130,6 +131,38 @@ def _tool_result(result: dict[str, Any]):
     )
 
 
+async def watch_tool_catalog(
+    bridge: HarnessBridgeClient,
+    publish_changed: Callable[[], Awaitable[None]],
+    *,
+    interval_s: float = 2.0,
+) -> None:
+    """Poll the DSH registry revision and publish MCP tool-list invalidations.
+
+    DSH owns the live tool registry and emits ``tools/change`` when community
+    plugins register, unregister, or alter scoped restrictions. The loopback
+    bridge exposes only the resulting monotonic process-local revision. This
+    watcher keeps MCP's already-connected catalog coherent without copying the
+    DSH registry into the gateway.
+    """
+    if interval_s <= 0:
+        raise ValueError("interval_s must be positive")
+    previous: int | None = None
+    while True:
+        try:
+            current = await asyncio.to_thread(bridge.tool_revision)
+            if previous is not None and current != previous:
+                await publish_changed()
+            previous = current
+        except HarnessBridgeError:
+            # DSH readiness is already exposed separately. A transient bridge
+            # outage must not kill the MCP server lifespan; the next successful
+            # observation re-baselines or publishes if the process-local
+            # revision differs from the last good value.
+            pass
+        await asyncio.sleep(interval_s)
+
+
 class HarnessProjectionMixin:
     """Project DSH ToolRuntime schemas directly into the MCP tool surface.
 
@@ -221,6 +254,13 @@ class HarnessBridgeClient:
         if not isinstance(decoded, dict):
             raise HarnessBridgeError("DSH bridge returned a non-object response")
         return decoded
+
+    def tool_revision(self) -> int:
+        payload = self._request("/api/chatgpt-bridge/revision")
+        revision = payload.get("toolRevision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            raise HarnessBridgeError("DSH bridge returned an invalid tool revision")
+        return revision
 
     def tools(self) -> list[dict[str, Any]]:
         payload = self._request("/api/chatgpt-bridge/tools")

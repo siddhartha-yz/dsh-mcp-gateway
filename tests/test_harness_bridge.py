@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import unittest
 from unittest.mock import patch
 
 from dsh_mcp_gateway import build_mcp_server
-from dsh_mcp_gateway.harness_bridge import HarnessBridgeClient, HarnessBridgeError
+from dsh_mcp_gateway.harness_bridge import (
+    HarnessBridgeClient,
+    HarnessBridgeError,
+    watch_tool_catalog,
+)
 
 
 class _Response:
@@ -58,6 +63,27 @@ class HarnessBridgeClientTests(unittest.TestCase):
         self.assertEqual(seen[3][1], "POST")
         self.assertEqual(json.loads(seen[3][2]), {"name": "community_echo", "arguments": {"text": "hi"}})
 
+    def test_tool_revision_uses_bridge_revision_endpoint(self) -> None:
+        seen = []
+
+        def fake_urlopen(request, timeout):
+            seen.append((request.full_url, request.method, timeout))
+            return _Response({"toolRevision": 7, "skillRevision": 3})
+
+        client = HarnessBridgeClient("http://127.0.0.1:3080", timeout_s=4)
+        with patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=fake_urlopen):
+            self.assertEqual(client.tool_revision(), 7)
+
+        self.assertEqual(seen, [("http://127.0.0.1:3080/api/chatgpt-bridge/revision", "GET", 4)])
+
+    def test_invalid_tool_revision_is_rejected(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=_Response({"toolRevision": "bad"})),
+            self.assertRaises(HarnessBridgeError),
+        ):
+            client.tool_revision()
+
     def test_invalid_catalog_is_rejected(self) -> None:
         client = HarnessBridgeClient("http://127.0.0.1:3080")
         with (
@@ -65,6 +91,38 @@ class HarnessBridgeClientTests(unittest.TestCase):
             self.assertRaises(HarnessBridgeError),
         ):
             client.tools()
+
+
+class HarnessCatalogWatcherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_watcher_publishes_only_after_dsh_tool_revision_changes(self) -> None:
+        class FakeBridge:
+            def __init__(self):
+                self.revisions = [4, 4, 5, 5]
+                self.index = 0
+
+            def tool_revision(self):
+                value = self.revisions[min(self.index, len(self.revisions) - 1)]
+                self.index += 1
+                return value
+
+        changed = asyncio.Event()
+        publishes = 0
+
+        async def publish_changed():
+            nonlocal publishes
+            publishes += 1
+            changed.set()
+
+        task = asyncio.create_task(watch_tool_catalog(FakeBridge(), publish_changed, interval_s=0.001))
+        try:
+            await asyncio.wait_for(changed.wait(), timeout=1)
+            await asyncio.sleep(0.005)
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertEqual(publishes, 1)
 
 
 class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
@@ -83,6 +141,9 @@ class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):
                 return {"isError": False, "value": {"name": name, "arguments": arguments or {}}, "content": []}
 
         server = build_mcp_server(None, harness_bridge=FakeBridge())
+        capabilities = server._lowlevel_server.get_capabilities(protocol_version="2026-07-28")
+        self.assertTrue(capabilities.tools.list_changed)
+
         tools = {tool.name: tool for tool in await server.list_tools()}
         self.assertEqual(
             set(tools),

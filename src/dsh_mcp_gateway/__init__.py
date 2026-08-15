@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from os import PathLike
 from typing import Any
 
 from .backend import PublicSdkBridge, PublicSdkClient, SessionCatalog
-from .harness_bridge import HarnessBridgeClient, HarnessProjectionMixin
+from .harness_bridge import (
+    HarnessBridgeClient,
+    HarnessProjectionMixin,
+    watch_tool_catalog,
+)
 from .routing import GatewayService
 from .session_runtime import DurableSessionRuntime
 
@@ -44,7 +50,29 @@ def build_mcp_server(
     )
 
     server_cls = _server_cls or MCPServer
+    harness_lifespan = None
     if harness_bridge is not None:
+        try:
+            from mcp.shared.subscriptions import ToolsListChanged
+        except ImportError as exc:  # pragma: no cover - server dependency boundary
+            raise RuntimeError("MCP subscription support is unavailable") from exc
+
+        @asynccontextmanager
+        async def harness_lifespan(app: Any):
+            async def publish_changed() -> None:
+                await app._subscriptions.publish(ToolsListChanged())
+
+            watcher = asyncio.create_task(
+                watch_tool_catalog(harness_bridge, publish_changed),
+                name="dsh-harness-tool-catalog-watcher",
+            )
+            try:
+                yield {}
+            finally:
+                watcher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watcher
+
         server_cls = type(
             "HarnessProjectedMCPServer",
             (HarnessProjectionMixin, server_cls),
@@ -85,6 +113,7 @@ def build_mcp_server(
         ),
         auth_server_provider=auth_server_provider,
         auth=auth,
+        lifespan=harness_lifespan,
     )
     if harness_bridge is not None:
         mcp._dsh_harness_bridge = harness_bridge

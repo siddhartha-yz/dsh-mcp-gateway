@@ -30,7 +30,7 @@ A separate execution MCP such as local-shell-mcp can remain available *to the DS
 
 ## Current status
 
-Deployment-oriented development prototype. The Milestone 1 control path is implemented and backed by automated OAuth/MCP regressions plus real DSH rc6 restart evidence; the remaining distinction between this tree and a self-hosted release is a finite set of target-host drills rather than missing core session-control architecture. See [`docs/release-checklist.md`](docs/release-checklist.md) for the evidence-backed release gates.
+Deployment-oriented historical prototype. The Milestone 1 control path is implemented and backed by automated OAuth/MCP regressions plus real DSH rc6 restart evidence, but these autonomous session/goal experiments are no longer the primary product release path. Current release gates live in [`release-checklist.md`](release-checklist.md) and follow the ChatGPT Web -> DSH Harness contract in [`../AGENTS.md`](../AGENTS.md).
 
 The first invariant implemented here is session routing:
 

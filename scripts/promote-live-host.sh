@@ -106,8 +106,17 @@ if command -v ss >/dev/null 2>&1; then
     exit 1
   fi
 fi
-if pgrep -af cloudflared | grep -F -- "$LIVE_CLOUDFLARED_CONFIG" >/dev/null; then
-  echo "temporary Cloudflare tunnel is still running with $LIVE_CLOUDFLARED_CONFIG; stop it first" >&2
+OLD_TUNNEL_PID=""
+while read -r pid; do
+  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  if [[ "$command_line" == *"--config $LIVE_CLOUDFLARED_CONFIG"* ]]; then
+    OLD_TUNNEL_PID="$pid"
+    break
+  fi
+done < <(pgrep -x cloudflared || true)
+if [[ -n "$OLD_TUNNEL_PID" ]]; then
+  echo "temporary Cloudflare tunnel is still running with $LIVE_CLOUDFLARED_CONFIG (pid $OLD_TUNNEL_PID); stop it first" >&2
   exit 1
 fi
 

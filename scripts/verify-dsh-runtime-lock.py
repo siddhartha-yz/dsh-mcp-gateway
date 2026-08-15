@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 EXPECTED_DSH_VERSION = "0.1.0-rc.6"
+EXPECTED_PNPM_VERSION = "10.34.5"
 EXPECTED_LOCKFILE_VERSION = 3
 
 
@@ -23,7 +24,7 @@ def load_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def verify(root: Path, *, expected_dsh_version: str) -> tuple[int, str]:
+def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str) -> tuple[int, str]:
     package_path = root / "package.json"
     lock_path = root / "package-lock.json"
     package = load_object(package_path)
@@ -32,8 +33,12 @@ def verify(root: Path, *, expected_dsh_version: str) -> tuple[int, str]:
     if package.get("private") is not True:
         raise ValueError("DSH runtime package.json must be private")
     dependencies = package.get("dependencies")
-    if not isinstance(dependencies, dict) or dependencies != {"@deepseek-ai/dsh": expected_dsh_version}:
-        raise ValueError("DSH runtime package.json must contain only the exact tested @deepseek-ai/dsh dependency")
+    expected_dependencies = {
+        "@deepseek-ai/dsh": expected_dsh_version,
+        "pnpm": expected_pnpm_version,
+    }
+    if not isinstance(dependencies, dict) or dependencies != expected_dependencies:
+        raise ValueError("DSH runtime package.json must contain the exact tested DSH and pnpm dependencies")
     if lock.get("lockfileVersion") != EXPECTED_LOCKFILE_VERSION:
         raise ValueError(f"package-lock.json must use lockfileVersion {EXPECTED_LOCKFILE_VERSION}")
 
@@ -53,6 +58,10 @@ def verify(root: Path, *, expected_dsh_version: str) -> tuple[int, str]:
     resolved = dsh_entry.get("resolved")
     if not isinstance(resolved, str) or not resolved.endswith(f"/dsh-{expected_dsh_version}.tgz"):
         raise ValueError("package-lock.json DSH tarball does not match the exact tested version")
+
+    pnpm_entry = packages.get("node_modules/pnpm")
+    if not isinstance(pnpm_entry, dict) or pnpm_entry.get("version") != expected_pnpm_version:
+        raise ValueError("package-lock.json does not resolve the exact tested pnpm version")
 
     missing_integrity: list[str] = []
     missing_version: list[str] = []
@@ -81,19 +90,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Verify deploy/dsh-runtime package.json and package-lock.json.")
     parser.add_argument("--root", type=Path, default=Path("deploy/dsh-runtime"))
     parser.add_argument("--expected-dsh-version", default=EXPECTED_DSH_VERSION)
+    parser.add_argument("--expected-pnpm-version", default=EXPECTED_PNPM_VERSION)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        package_count, integrity = verify(args.root, expected_dsh_version=args.expected_dsh_version)
+        package_count, integrity = verify(
+            args.root,
+            expected_dsh_version=args.expected_dsh_version,
+            expected_pnpm_version=args.expected_pnpm_version,
+        )
     except (TypeError, ValueError) as exc:
         print(f"dsh-runtime-lock-error: {exc}", file=sys.stderr)
         return 1
     print(
         "dsh-runtime-lock-ok: "
-        f"dsh={args.expected_dsh_version} packages={package_count} integrity={integrity.split('-', 1)[0]}"
+        f"dsh={args.expected_dsh_version} pnpm={args.expected_pnpm_version} "
+        f"packages={package_count} integrity={integrity.split('-', 1)[0]}"
     )
     return 0
 

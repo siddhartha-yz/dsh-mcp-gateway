@@ -74,7 +74,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["EnvironmentFile"], "/etc/dsh-mcp-gateway/dsh.env")
         self.assertEqual(
             service["Environment"],
-            "PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin",
+            "PATH=/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin",
         )
         self.assertEqual(service["WorkingDirectory"], "/srv/dsh-workspace")
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", command)
@@ -167,6 +167,8 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("useradd --system --user-group --home /var/lib/dsh-mcp-gateway", deployment)
         self.assertIn("/opt/dsh-runtime/node/bin/node", deployment)
         self.assertIn("/opt/dsh-runtime/node/bin/npm ci", deployment)
+        self.assertIn("/opt/dsh-runtime/node_modules/.bin/pnpm", deployment)
+        self.assertIn("dsh plugin --profile web add", deployment)
         self.assertIn("npm_config_registry=https://registry.npmjs.org/", deployment)
         self.assertIn("python3 scripts/verify-dsh-runtime-lock.py", deployment)
         self.assertIn("python3 scripts/preflight-deployment.py", deployment)
@@ -204,7 +206,7 @@ class DeploymentTemplateTests(unittest.TestCase):
                 timeout=10,
             )
         self.assertEqual(rejected.returncode, 1)
-        self.assertIn("exact tested @deepseek-ai/dsh dependency", rejected.stderr)
+        self.assertIn("exact tested DSH and pnpm dependencies", rejected.stderr)
 
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:
         gateway_env = (SYSTEMD / "gateway.env.example").read_text(encoding="utf-8")

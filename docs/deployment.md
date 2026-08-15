@@ -25,7 +25,7 @@ Both HTTP listeners remain loopback-only. Only the OAuth-protected gateway is pl
 
 ## Tested runtime boundary
 
-The deployment lock currently uses `@deepseek-ai/dsh@0.1.0-rc.6` and Node `24.19.0`. The self-contained Node tree lives at `/opt/dsh-runtime/node`; do not silently substitute a distribution-global Node. Upgrade either pin deliberately and rerun the integration tests.
+The deployment lock currently uses `@deepseek-ai/dsh@0.1.0-rc.6`, `pnpm@10.34.5`, and Node `24.19.0`. The self-contained Node tree lives at `/opt/dsh-runtime/node`; do not silently substitute a distribution-global Node. `pnpm` is shipped inside `/opt/dsh-runtime/node_modules/.bin` because DSH's native `dsh plugin` command requires it to manage community extensions. Upgrade these pins deliberately and rerun the integration tests.
 
 ```text
 /opt/dsh-runtime/                  pinned DSH CLI/runtime
@@ -79,6 +79,21 @@ sudo env \
   /opt/dsh-runtime/node/bin/npm ci \
   --prefix /opt/dsh-runtime --omit=dev --no-audit --no-fund
 ```
+
+The resulting runtime also contains `/opt/dsh-runtime/node_modules/.bin/pnpm`. The DSH systemd unit keeps that directory on `PATH`, so operators can install reviewed community extensions with DSH's own plugin manager rather than adding gateway-specific wrappers.
+
+For example, after reviewing and pinning a community plugin, install it as the DSH service account into the same `DSH_HOME` used by the host:
+
+```sh
+sudo -u dsh-agent env \
+  DSH_HOME=/var/lib/dsh-harness \
+  PATH=/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin \
+  /opt/dsh-runtime/node_modules/.bin/dsh plugin --profile web add \
+  'github:OWNER/REPOSITORY#PINNED_COMMIT'
+sudo systemctl restart dsh-web-host.service
+```
+
+Restarting DSH is allowed to load a newly installed bundle; the OAuth gateway and the already-approved ChatGPT connector do not need to restart or refresh. Stable meta-tools discover the new capability from the restarted DSH ToolRuntime.
 
 Install the gateway:
 

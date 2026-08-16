@@ -5,6 +5,7 @@ import ipaddress
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from http.client import HTTPException
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -259,7 +260,7 @@ class HarnessBridgeClient:
         except HTTPError as exc:
             detail = exc.read(2001).decode("utf-8", errors="replace")[:2000]
             raise HarnessBridgeError(f"DSH bridge HTTP {exc.code}: {detail}") from exc
-        except (URLError, TimeoutError, OSError) as exc:
+        except (URLError, TimeoutError, HTTPException, OSError) as exc:
             raise HarnessBridgeError(f"DSH bridge unavailable: {exc}") from exc
         try:
             decoded = json.loads(body)

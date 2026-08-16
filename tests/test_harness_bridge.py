@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import unittest
+from http.client import BadStatusLine
 from unittest.mock import patch
 
 from dsh_mcp_gateway import build_mcp_server
@@ -94,6 +95,14 @@ class HarnessBridgeClientTests(unittest.TestCase):
         with (
             patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=_Response({"tools": "bad"})),
             self.assertRaises(HarnessBridgeError),
+        ):
+            client.tools()
+
+    def test_malformed_http_is_wrapped_as_bridge_error(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=BadStatusLine("garbled status")),
+            self.assertRaisesRegex(HarnessBridgeError, "unavailable"),
         ):
             client.tools()
 

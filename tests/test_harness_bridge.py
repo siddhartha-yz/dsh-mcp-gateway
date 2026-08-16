@@ -24,8 +24,8 @@ class _Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
-        return self.body
+    def read(self, size: int = -1) -> bytes:
+        return self.body if size < 0 else self.body[:size]
 
 
 class HarnessBridgeClientTests(unittest.TestCase):
@@ -91,6 +91,28 @@ class HarnessBridgeClientTests(unittest.TestCase):
             self.assertRaises(HarnessBridgeError),
         ):
             client.tools()
+
+    def test_oversized_bridge_response_is_rejected_before_full_read(self) -> None:
+        class OversizedResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size: int = -1) -> bytes:
+                self.requested_size = size
+                return b"x" * size
+
+        response = OversizedResponse()
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=response),
+            self.assertRaisesRegex(HarnessBridgeError, "response exceeds"),
+        ):
+            client.tools()
+
+        self.assertEqual(response.requested_size, 16 * 1024 * 1024 + 1)
 
 
 class HarnessCatalogWatcherTests(unittest.IsolatedAsyncioTestCase):

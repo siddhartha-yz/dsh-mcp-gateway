@@ -14,6 +14,7 @@ from dsh_mcp_gateway import __version__, build_mcp_server, build_public_sdk_gate
 from dsh_mcp_gateway.backend import (
     ColdResumeUnavailable,
     ExperimentalWebHostBackend,
+    ExperimentalWebHostError,
     GoalControlUnavailable,
     HistoryPaginationUnavailable,
     MessageHistoryUnavailable,
@@ -879,8 +880,8 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
             def __exit__(self, *_args) -> None:
                 return None
 
-            def read(self) -> bytes:
-                return self.payload
+            def read(self, size: int = -1) -> bytes:
+                return self.payload if size < 0 else self.payload[:size]
 
         def fake_urlopen(request, *, timeout: float):
             observed_timeouts.append(timeout)
@@ -901,6 +902,27 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         self.assertEqual(observed_timeouts, [0.25])
         with self.assertRaisesRegex(ValueError, "timeout_s"):
             self.backend.describe_host(timeout_s=0)
+
+    def test_web_host_rejects_oversized_response_before_full_read(self) -> None:
+        class OversizedResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                self.requested_size = size
+                return b"x" * size
+
+        response = OversizedResponse()
+        with (
+            patch("dsh_mcp_gateway.backend.urlopen", return_value=response),
+            self.assertRaisesRegex(ExperimentalWebHostError, "response exceeds"),
+        ):
+            self.backend.describe_host()
+
+        self.assertEqual(response.requested_size, 16 * 1024 * 1024 + 1)
 
     def test_cold_session_resumes_before_prompt_without_opening_a_turn(self) -> None:
         receipt = GatewayService(self.backend).continue_session("cold-1", "continue")

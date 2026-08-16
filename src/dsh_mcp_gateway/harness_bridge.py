@@ -15,6 +15,16 @@ class HarnessBridgeError(RuntimeError):
     """The local DSH ChatGPT bridge could not serve a capability request."""
 
 
+MAX_BRIDGE_RESPONSE_BYTES = 16 * 1024 * 1024
+
+
+def _read_bounded(response, *, limit: int = MAX_BRIDGE_RESPONSE_BYTES) -> bytes:
+    body = response.read(limit + 1)
+    if len(body) > limit:
+        raise HarnessBridgeError(f"DSH bridge response exceeds {limit} bytes")
+    return body
+
+
 def _projected_tool(schema: dict[str, Any]):
     """Convert one DSH ToolRuntime schema into an MCP first-class tool schema."""
     try:
@@ -241,9 +251,9 @@ class HarnessBridgeClient:
         )
         try:
             with urlopen(request, timeout=self.timeout_s) as response:
-                body = response.read()
+                body = _read_bounded(response)
         except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:2000]
+            detail = exc.read(2001).decode("utf-8", errors="replace")[:2000]
             raise HarnessBridgeError(f"DSH bridge HTTP {exc.code}: {detail}") from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise HarnessBridgeError(f"DSH bridge unavailable: {exc}") from exc

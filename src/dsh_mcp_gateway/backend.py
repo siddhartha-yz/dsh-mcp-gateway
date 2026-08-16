@@ -169,6 +169,9 @@ class ExperimentalWebHostError(RuntimeError):
     """DSH developer-preview Web Host API transport or business failure."""
 
 
+MAX_WEB_HOST_RESPONSE_BYTES = 16 * 1024 * 1024
+
+
 class ExperimentalWebHostBackend:
     """Cold-resumable adapter over DSH's developer-preview Web Host API.
 
@@ -768,9 +771,13 @@ class ExperimentalWebHostBackend:
         )
         try:
             with urlopen(request, timeout=effective_timeout) as response:
-                raw = response.read()
+                raw = response.read(MAX_WEB_HOST_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_WEB_HOST_RESPONSE_BYTES:
+                    raise ExperimentalWebHostError(
+                        f"{method} response exceeds {MAX_WEB_HOST_RESPONSE_BYTES} bytes"
+                    )
         except HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")
+            detail = exc.read(501).decode("utf-8", "replace")
             raise ExperimentalWebHostError(
                 f"{method} transport failed with HTTP {exc.code}: {detail[:500]}"
             ) from exc

@@ -25,6 +25,18 @@ class CliTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "must not contain user info"):
             main(["--public-base-url", "https://user:pass@gateway.example.com"])
 
+    def test_rejects_public_origin_with_invalid_port_as_operator_error(self) -> None:
+        for public_base in ("https://gateway.example.com:notaport", "https://gateway.example.com:99999"):
+            with self.subTest(public_base=public_base), self.assertRaisesRegex(
+                SystemExit,
+                "must contain a valid port",
+            ):
+                main(["--public-base-url", public_base])
+
+    def test_transport_security_rejects_invalid_port_cleanly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "public_base must contain a valid port"):
+            build_transport_security("https://gateway.example.com:notaport")
+
     def test_non_loopback_bind_requires_explicit_opt_in(self) -> None:
         with self.assertRaisesRegex(SystemExit, "must be loopback"):
             main(

@@ -22,9 +22,13 @@ def build_transport_security(public_base: str):
     parsed_public = urlparse(public_base)
     if not parsed_public.hostname:
         raise ValueError("public_base must contain a hostname")
+    try:
+        public_port = parsed_public.port
+    except ValueError as exc:
+        raise ValueError("public_base must contain a valid port") from exc
     public_host = parsed_public.netloc
     allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
-    if parsed_public.port is None:
+    if public_port is None:
         host_for_port = f"[{parsed_public.hostname}]" if ":" in parsed_public.hostname else parsed_public.hostname
         allowed_hosts.append(f"{host_for_port}:443")
     return TransportSecuritySettings(
@@ -182,6 +186,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parsed_public = urlparse(public_base)
     if parsed_public.scheme != "https" or not parsed_public.hostname:
         raise SystemExit("--public-base-url must be an absolute https:// origin")
+    try:
+        _ = parsed_public.port
+    except ValueError as exc:
+        raise SystemExit("--public-base-url must contain a valid port") from exc
     if parsed_public.username is not None or parsed_public.password is not None:
         raise SystemExit("--public-base-url must not contain user info")
     if parsed_public.path not in {"", "/"} or parsed_public.query or parsed_public.fragment:

@@ -22,6 +22,7 @@ PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
 BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
 VERIFY_BACKUP = ROOT / "scripts" / "verify-backup-restore.sh"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 GATEWAY_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
@@ -34,6 +35,12 @@ def read_unit(name: str) -> configparser.RawConfigParser:
 
 
 class DeploymentTemplateTests(unittest.TestCase):
+    def test_ci_syntax_checks_all_shipped_shell_scripts(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("run: bash -n scripts/*.sh", workflow)
+        self.assertNotIn("run: bash -n scripts/bootstrap-target-host.sh", workflow)
+
     def test_gateway_stays_loopback_and_does_not_require_host_lifetime(self) -> None:
         unit = read_unit("dsh-mcp-gateway.service")
         unit_section = unit["Unit"]

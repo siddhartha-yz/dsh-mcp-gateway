@@ -226,6 +226,10 @@ class HarnessBridgeClient:
             raise ValueError("base_url must not contain user info")
         if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
             raise ValueError("base_url must be an origin without path, query, or fragment")
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("base_url contains an invalid port") from exc
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         if not self.allow_non_loopback and not self._is_loopback(parsed.hostname):

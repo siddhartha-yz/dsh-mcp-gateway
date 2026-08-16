@@ -33,6 +33,11 @@ class HarnessBridgeClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "loopback"):
             HarnessBridgeClient("http://example.com:3080")
 
+    def test_invalid_port_is_rejected_during_construction(self) -> None:
+        for base_url in ("http://127.0.0.1:notaport", "http://127.0.0.1:99999"):
+            with self.subTest(base_url=base_url), self.assertRaisesRegex(ValueError, "invalid port"):
+                HarnessBridgeClient(base_url)
+
     def test_catalog_and_call_use_generic_bridge_endpoints(self) -> None:
         seen = []
 

@@ -41,6 +41,14 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("run: bash -n scripts/*.sh", workflow)
         self.assertNotIn("run: bash -n scripts/bootstrap-target-host.sh", workflow)
 
+    def test_ci_syntax_checks_production_javascript_with_pinned_node(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("actions/setup-node@v6", workflow)
+        self.assertIn('node-version: "24.19.0"', workflow)
+        self.assertIn("node --check dsh-bridge-plugin/index.js", workflow)
+        self.assertIn("node --check deploy/dsh/plugins/lsm-tool-filter.mjs", workflow)
+
     def test_gateway_stays_loopback_and_does_not_require_host_lifetime(self) -> None:
         unit = read_unit("dsh-mcp-gateway.service")
         unit_section = unit["Unit"]

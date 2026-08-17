@@ -19,14 +19,35 @@ export function apply(ctx, config = {}) {
   const configured = new Set(rawNames.map(rawName => `${prefix}${rawName}`))
 
   ctx.on('agent/created', ({ agent }) => {
-    // Read the agent's pre-filter inherited surface. The standard Web preset is
-    // an ancestor scope, so an allow-list at the agent scope would also hide
-    // DSH's preset tools. Instead dynamically deny only this MCP provider's
-    // currently registered names that were not selected. New LSM tools are
-    // therefore hidden by default without naming or filtering DSH tools.
-    const visibleNames = ctx.tools.schemas(agent).map(schema => schema.name)
-    const lsmNames = visibleNames.filter(toolName => toolName.startsWith(prefix))
-    const known = new Set(lsmNames)
+    // The standard Web preset is an ancestor scope, so an allow-list at the
+    // agent scope would also hide DSH's preset tools. Use deny snapshots only
+    // for this MCP namespace, and extend them when dsh-mcp-client re-syncs a
+    // changed tools/list generation. DSH deny masks admit later unnamed globals,
+    // so a one-time snapshot is insufficient for a long-lived agent.
+    const denied = new Set()
+    const refreshDeny = () => {
+      const visibleNames = ctx.tools.schemas(agent).map(schema => schema.name)
+      const deny = visibleNames.filter(toolName => (
+        toolName.startsWith(prefix)
+        && !configured.has(toolName)
+        && !denied.has(toolName)
+      ))
+      if (deny.length === 0) return visibleNames
+
+      // Mark before restrict(): ToolRuntime publishes tools/change when the new
+      // restriction is installed, and the listener below may run synchronously.
+      for (const toolName of deny) denied.add(toolName)
+      try {
+        agent.ctx.tools.restrict({ deny })
+      } catch (error) {
+        for (const toolName of deny) denied.delete(toolName)
+        throw error
+      }
+      return visibleNames
+    }
+
+    const initialVisibleNames = refreshDeny()
+    const known = new Set(initialVisibleNames.filter(toolName => toolName.startsWith(prefix)))
     const missing = [...configured].filter(toolName => !known.has(toolName))
     if (missing.length > 0) {
       ctx.logger.warn(
@@ -34,7 +55,9 @@ export function apply(ctx, config = {}) {
       )
     }
 
-    const deny = lsmNames.filter(toolName => !configured.has(toolName))
-    if (deny.length > 0) agent.ctx.tools.restrict({ deny })
+    agent.ctx.effect(
+      () => ctx.on('tools/change', refreshDeny),
+      'dsh-lsm-tool-filter.tools-change',
+    )
   })
 }

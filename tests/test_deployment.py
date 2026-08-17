@@ -48,6 +48,8 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('node-version: "24.19.0"', workflow)
         self.assertIn("node --check dsh-bridge-plugin/index.js", workflow)
         self.assertIn("node --check deploy/dsh/plugins/lsm-tool-filter.mjs", workflow)
+        self.assertIn("node --check tests/test_lsm_tool_filter.mjs", workflow)
+        self.assertIn("run: node tests/test_lsm_tool_filter.mjs", workflow)
 
     def test_gateway_stays_loopback_and_does_not_require_host_lifetime(self) -> None:
         unit = read_unit("dsh-mcp-gateway.service")

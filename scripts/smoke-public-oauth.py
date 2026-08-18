@@ -13,6 +13,7 @@ import secrets
 import stat
 import sys
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -79,7 +80,12 @@ class HttpClient:
         except URLError as exc:
             raise SmokeError(f"transport failed for {urlparse(url).path or '/'}: {type(exc.reason).__name__}") from exc
         try:
-            payload = raw.read(MAX_RESPONSE_BYTES + 1)
+            try:
+                payload = raw.read(MAX_RESPONSE_BYTES + 1)
+            except (OSError, HTTPException, ValueError) as exc:
+                raise SmokeError(
+                    f"transport failed while reading response for {urlparse(url).path or '/'}: {type(exc).__name__}"
+                ) from exc
             if len(payload) > MAX_RESPONSE_BYTES:
                 raise SmokeError(f"response too large for {urlparse(url).path or '/'}")
             return HttpResponse(

@@ -172,6 +172,19 @@ class ExperimentalWebHostError(RuntimeError):
 MAX_WEB_HOST_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
+def _http_error_detail(error: HTTPError, *, limit: int) -> str:
+    try:
+        try:
+            return error.read(limit + 1).decode("utf-8", "replace")[:limit]
+        except (OSError, HTTPException, ValueError) as exc:
+            return f"<error body unavailable: {type(exc).__name__}>"
+    finally:
+        try:
+            error.close()
+        except (OSError, HTTPException, ValueError):
+            pass
+
+
 class ExperimentalWebHostBackend:
     """Cold-resumable adapter over DSH's developer-preview Web Host API.
 
@@ -777,9 +790,9 @@ class ExperimentalWebHostBackend:
                         f"{method} response exceeds {MAX_WEB_HOST_RESPONSE_BYTES} bytes"
                     )
         except HTTPError as exc:
-            detail = exc.read(501).decode("utf-8", "replace")
+            detail = _http_error_detail(exc, limit=500)
             raise ExperimentalWebHostError(
-                f"{method} transport failed with HTTP {exc.code}: {detail[:500]}"
+                f"{method} transport failed with HTTP {exc.code}: {detail}"
             ) from exc
         except URLError as exc:
             raise ExperimentalWebHostError(f"{method} transport failed: {exc.reason}") from exc

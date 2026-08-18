@@ -6,6 +6,7 @@ import json
 import unittest
 from http.client import BadStatusLine
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from dsh_mcp_gateway import build_mcp_server
 from dsh_mcp_gateway.harness_bridge import (
@@ -105,6 +106,33 @@ class HarnessBridgeClientTests(unittest.TestCase):
             self.assertRaisesRegex(HarnessBridgeError, "unavailable"),
         ):
             client.tools()
+
+    def test_http_error_body_read_failure_stays_wrapped_as_bridge_error(self) -> None:
+        class BrokenErrorBody:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def read(self, *_args, **_kwargs):
+                raise TimeoutError("timed out while reading HTTP error body")
+
+            def close(self) -> None:
+                self.closed = True
+
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        body = BrokenErrorBody()
+        error = HTTPError(
+            "http://127.0.0.1:3080/api/chatgpt-bridge/tools",
+            502,
+            "Bad Gateway",
+            {},
+            body,
+        )
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=error),
+            self.assertRaisesRegex(HarnessBridgeError, "HTTP 502"),
+        ):
+            client.tools()
+        self.assertTrue(body.closed)
 
     def test_oversized_bridge_response_is_rejected_before_full_read(self) -> None:
         class OversizedResponse:

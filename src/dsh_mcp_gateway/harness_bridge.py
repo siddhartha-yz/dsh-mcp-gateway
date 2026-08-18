@@ -19,6 +19,19 @@ class HarnessBridgeError(RuntimeError):
 MAX_BRIDGE_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
+def _http_error_detail(error: HTTPError, *, limit: int) -> str:
+    try:
+        try:
+            return error.read(limit + 1).decode("utf-8", errors="replace")[:limit]
+        except (OSError, HTTPException, ValueError) as exc:
+            return f"<error body unavailable: {type(exc).__name__}>"
+    finally:
+        try:
+            error.close()
+        except (OSError, HTTPException, ValueError):
+            pass
+
+
 def _read_bounded(response, *, limit: int = MAX_BRIDGE_RESPONSE_BYTES) -> bytes:
     body = response.read(limit + 1)
     if len(body) > limit:
@@ -258,7 +271,7 @@ class HarnessBridgeClient:
             with urlopen(request, timeout=self.timeout_s) as response:
                 body = _read_bounded(response)
         except HTTPError as exc:
-            detail = exc.read(2001).decode("utf-8", errors="replace")[:2000]
+            detail = _http_error_detail(exc, limit=2000)
             raise HarnessBridgeError(f"DSH bridge HTTP {exc.code}: {detail}") from exc
         except (URLError, TimeoutError, HTTPException, OSError) as exc:
             raise HarnessBridgeError(f"DSH bridge unavailable: {exc}") from exc

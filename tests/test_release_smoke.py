@@ -11,6 +11,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -316,6 +318,22 @@ class PublicReleaseSmokeTests(unittest.TestCase):
             ):
                 self.assertTrue(self.server.state.get(key), key)
             self.assertEqual(self.server.state["requested_protocol"], "2026-07-28")
+
+    def test_http_error_body_read_failure_stays_wrapped_as_smoke_error(self) -> None:
+        class BrokenErrorBody:
+            def read(self, *_args, **_kwargs):
+                raise TimeoutError("timed out while reading HTTP error body")
+
+            def close(self) -> None:
+                pass
+
+        client = smoke_module.HttpClient(timeout_s=1)
+        error = HTTPError("https://gateway.example.com/readyz", 502, "Bad Gateway", {}, BrokenErrorBody())
+        with (
+            patch.object(client.opener, "open", side_effect=error),
+            self.assertRaisesRegex(smoke_module.SmokeError, "transport failed"),
+        ):
+            client.get("https://gateway.example.com/readyz")
 
     def test_public_smoke_rejects_non_https_non_loopback_before_reading_pin(self) -> None:
         result = subprocess.run(

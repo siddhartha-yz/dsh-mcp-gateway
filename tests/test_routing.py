@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from dsh_mcp_gateway import __version__, build_mcp_server, build_public_sdk_gateway
 from dsh_mcp_gateway.backend import (
@@ -923,6 +924,32 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
             self.backend.describe_host()
 
         self.assertEqual(response.requested_size, 16 * 1024 * 1024 + 1)
+
+    def test_web_host_http_error_body_read_failure_stays_wrapped(self) -> None:
+        class BrokenErrorBody:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def read(self, *_args, **_kwargs):
+                raise TimeoutError("timed out while reading HTTP error body")
+
+            def close(self) -> None:
+                self.closed = True
+
+        body = BrokenErrorBody()
+        error = HTTPError(
+            "http://127.0.0.1:3080/api/host.describe",
+            502,
+            "Bad Gateway",
+            {},
+            body,
+        )
+        with (
+            patch("dsh_mcp_gateway.backend.urlopen", side_effect=error),
+            self.assertRaisesRegex(ExperimentalWebHostError, "HTTP 502"),
+        ):
+            self.backend.describe_host()
+        self.assertTrue(body.closed)
 
     def test_cold_session_resumes_before_prompt_without_opening_a_turn(self) -> None:
         receipt = GatewayService(self.backend).continue_session("cold-1", "continue")

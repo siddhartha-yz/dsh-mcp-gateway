@@ -88,8 +88,8 @@ for raw in sys.argv[3:]:
 PY
 
 # Snapshot the live capability surface before making the backup offline.
-curl -fsS http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT/tools-before.json"
-curl -fsS http://127.0.0.1:3080/api/chatgpt-bridge/skills > "$OUTPUT/skills-before.json"
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT/tools-before.json"
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills > "$OUTPUT/skills-before.json"
 chmod 0600 "$OUTPUT/tools-before.json" "$OUTPUT/skills-before.json"
 
 HOST_WAS_ACTIVE=0
@@ -106,18 +106,18 @@ restore_services() {
   if ((HOST_WAS_ACTIVE)); then
     systemctl start dsh-web-host.service || restart_rc=1
     for _ in $(seq 1 80); do
-      curl -fsS http://127.0.0.1:3080/api/chatgpt-bridge/tools >/dev/null 2>&1 && break
+      curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools >/dev/null 2>&1 && break
       sleep .25
     done
-    curl -fsS http://127.0.0.1:3080/api/chatgpt-bridge/tools >/dev/null 2>&1 || restart_rc=1
+    curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools >/dev/null 2>&1 || restart_rc=1
   fi
   if ((GATEWAY_WAS_ACTIVE)); then
     systemctl start dsh-mcp-gateway.service || restart_rc=1
     for _ in $(seq 1 80); do
-      curl -fsS http://127.0.0.1:18766/readyz >/dev/null 2>&1 && break
+      curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >/dev/null 2>&1 && break
       sleep .25
     done
-    curl -fsS http://127.0.0.1:18766/readyz >/dev/null 2>&1 || restart_rc=1
+    curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >/dev/null 2>&1 || restart_rc=1
   fi
   if ((TUNNEL_WAS_ACTIVE)); then
     systemctl start dsh-cloudflared.service || restart_rc=1

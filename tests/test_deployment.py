@@ -197,6 +197,14 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("gateway-state.tar.gz", backup)
         self.assertIn("config.tar.gz", backup)
         self.assertIn("SHA256SUMS", backup)
+        self.assertIn(
+            "curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools",
+            backup,
+        )
+        self.assertIn(
+            "curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz",
+            backup,
+        )
         self.assertIn("encrypt it before moving it off-host", backup)
         self.assertNotIn("DEEPSEEK_API_" + "KEY=", backup + restore)
 

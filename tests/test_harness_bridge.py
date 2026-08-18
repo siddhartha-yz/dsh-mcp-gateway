@@ -134,6 +134,24 @@ class HarnessBridgeClientTests(unittest.TestCase):
             client.tools()
         self.assertTrue(body.closed)
 
+    def test_non_utf8_bridge_response_is_wrapped_as_bridge_error(self) -> None:
+        class NonUtf8Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size: int = -1) -> bytes:
+                return b"\xff"
+
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=NonUtf8Response()),
+            self.assertRaisesRegex(HarnessBridgeError, "non-JSON"),
+        ):
+            client.tools()
+
     def test_oversized_bridge_response_is_rejected_before_full_read(self) -> None:
         class OversizedResponse:
             def __enter__(self):

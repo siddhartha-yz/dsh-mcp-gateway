@@ -800,7 +800,7 @@ class ExperimentalWebHostBackend:
             raise ExperimentalWebHostError(f"{method} transport failed: {exc}") from exc
         try:
             envelope = json.loads(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ExperimentalWebHostError(f"{method} returned invalid JSON") from exc
         if not isinstance(envelope, dict) or envelope.get("type") != "server-response":
             raise ExperimentalWebHostError(f"{method} returned invalid response envelope")

@@ -277,7 +277,7 @@ class HarnessBridgeClient:
             raise HarnessBridgeError(f"DSH bridge unavailable: {exc}") from exc
         try:
             decoded = json.loads(body)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise HarnessBridgeError("DSH bridge returned non-JSON data") from exc
         if not isinstance(decoded, dict):
             raise HarnessBridgeError("DSH bridge returned a non-object response")

@@ -904,6 +904,23 @@ class ExperimentalWebHostBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "timeout_s"):
             self.backend.describe_host(timeout_s=0)
 
+    def test_web_host_non_utf8_response_is_wrapped(self) -> None:
+        class NonUtf8Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                return b"\xff"
+
+        with (
+            patch("dsh_mcp_gateway.backend.urlopen", return_value=NonUtf8Response()),
+            self.assertRaisesRegex(ExperimentalWebHostError, "invalid JSON"),
+        ):
+            self.backend.describe_host()
+
     def test_web_host_rejects_oversized_response_before_full_read(self) -> None:
         class OversizedResponse:
             def __enter__(self):

@@ -141,9 +141,17 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["ProtectSystem"], "strict")
         self.assertEqual(service["ProtectHome"], "true")
 
-    def test_bootstrap_bounds_post_start_readiness_probes(self) -> None:
+    def test_bootstrap_bounds_network_downloads_and_post_start_readiness_probes(self) -> None:
         script = BOOTSTRAP_HOST.read_text(encoding="utf-8")
 
+        self.assertIn(
+            'curl --fail --silent --show-error --location --connect-timeout 10 --max-time 600 "$base/$filename"',
+            script,
+        )
+        self.assertIn(
+            'curl --fail --silent --show-error --location --connect-timeout 10 --max-time 600 "$base/SHASUMS256.txt"',
+            script,
+        )
         self.assertIn(
             "curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/healthz",
             script,

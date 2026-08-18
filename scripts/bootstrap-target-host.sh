@@ -167,8 +167,8 @@ install_node() {
   trap 'rm -rf "$tmp"' RETURN
   filename="node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
   base="https://nodejs.org/dist/v${NODE_VERSION}"
-  curl --fail --silent --show-error --location "$base/$filename" -o "$tmp/$filename"
-  curl --fail --silent --show-error --location "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
+  curl --fail --silent --show-error --location --connect-timeout 10 --max-time 600 "$base/$filename" -o "$tmp/$filename"
+  curl --fail --silent --show-error --location --connect-timeout 10 --max-time 600 "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
   checksum="$(awk -v f="$filename" '$2 == f {print $1}' "$tmp/SHASUMS256.txt")"
   [[ -n "$checksum" ]] || { echo "Node checksum entry not found for $filename" >&2; exit 1; }
   printf '%s  %s\n' "$checksum" "$tmp/$filename" | sha256sum --check --status

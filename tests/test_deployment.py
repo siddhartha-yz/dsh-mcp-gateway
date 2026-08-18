@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 import grp
+import hashlib
 import json
 import os
 import pwd
@@ -32,6 +33,14 @@ def read_unit(name: str) -> configparser.RawConfigParser:
     if not loaded:
         raise AssertionError(f"missing systemd unit: {name}")
     return parser
+
+
+def extract_python_heredoc(path: Path, invocation: str) -> str:
+    script = path.read_text(encoding="utf-8")
+    marker = f"{invocation}\n"
+    start = script.index(marker) + len(marker)
+    end = script.index("\nPY\n", start)
+    return script[start:end]
 
 
 class DeploymentTemplateTests(unittest.TestCase):
@@ -199,6 +208,68 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("dsh_skill_catalog", restore)
         self.assertIn("tools.listChanged", restore)
         self.assertIn("Production DSH services were not modified", restore)
+
+    def test_workspace_backup_and_restore_reject_selected_symlinks(self) -> None:
+        backup_validation = extract_python_heredoc(
+            BACKUP_HOST,
+            'python3 - "$WORKSPACE" "$OUTPUT" "${WORKSPACE_PATHS[@]}" <<\'PY\'',
+        )
+        restore_validation = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<\'PY\'',
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "live-workspace"
+            restore = root / "restored-workspace"
+            output = root / "backup-output"
+            workspace.mkdir()
+            restore.mkdir()
+            target = workspace / "target.txt"
+            target.write_text("sentinel\n", encoding="utf-8")
+            selected = workspace / "selected-link"
+            selected.symlink_to(target)
+
+            backup_check = subprocess.run(
+                [sys.executable, "-", str(workspace), str(output), selected.name],
+                input=backup_validation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(backup_check.returncode, 0)
+            self.assertIn("symlink", backup_check.stdout + backup_check.stderr)
+
+            restored_link = restore / selected.name
+            restored_link.symlink_to(target)
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            manifest = root / "MANIFEST.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "workspace_files": [
+                            {
+                                "path": selected.name,
+                                "sha256": digest,
+                                "size": target.stat().st_size,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            restore_check = subprocess.run(
+                [sys.executable, "-", str(manifest), str(restore)],
+                input=restore_validation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(restore_check.returncode, 0)
+            self.assertIn("symlink", restore_check.stdout + restore_check.stderr)
 
     def test_optional_session_search_overlay_is_durable_and_lazy(self) -> None:
         overlay = (DSH_DEPLOY / "session-search.cordis.yml").read_text(encoding="utf-8")

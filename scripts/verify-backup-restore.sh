@@ -96,10 +96,17 @@ python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<'PY'
 import hashlib, json, pathlib, sys
 manifest=json.load(open(sys.argv[1]))
 root=pathlib.Path(sys.argv[2])
+resolved_root=root.resolve()
 for row in manifest.get('workspace_files', []):
     p=root/row['path']
-    if not p.is_file(): raise SystemExit(f"restored workspace file missing: {row['path']}")
-    digest=hashlib.sha256(p.read_bytes()).hexdigest()
+    try:
+        resolved=p.resolve(strict=True)
+    except OSError:
+        raise SystemExit(f"restored workspace file missing: {row['path']}")
+    if not resolved.is_relative_to(resolved_root):
+        raise SystemExit(f"restored workspace path escapes restore root through symlink: {row['path']}")
+    if not resolved.is_file(): raise SystemExit(f"restored workspace file missing: {row['path']}")
+    digest=hashlib.sha256(resolved.read_bytes()).hexdigest()
     if digest != row['sha256']: raise SystemExit(f"restored workspace hash mismatch: {row['path']}")
 print(f"workspace_restore=PASS files={len(manifest.get('workspace_files', []))}")
 PY

@@ -73,7 +73,10 @@ root=os.path.realpath(sys.argv[1]); output=os.path.realpath(sys.argv[2])
 for raw in sys.argv[3:]:
     if not raw or os.path.isabs(raw):
         raise SystemExit(f"workspace path must be non-empty and relative: {raw!r}")
-    target=os.path.realpath(os.path.join(root, raw))
+    candidate=os.path.join(root, raw)
+    if os.path.islink(candidate):
+        raise SystemExit(f"workspace path must not be a symlink: {raw}")
+    target=os.path.realpath(candidate)
     if os.path.commonpath([root, target]) != root:
         raise SystemExit(f"workspace path escapes root: {raw}")
     if target == root:
@@ -162,7 +165,10 @@ tools=json.loads((out/'tools-before.json').read_text())['tools']
 skills=json.loads((out/'skills-before.json').read_text())['skills']
 
 def hash_path(rel: str):
-    target=(workspace/rel).resolve()
+    target=workspace/rel
+    if target.is_symlink():
+        raise SystemExit(f'workspace path became a symlink during backup: {rel}')
+    target=target.resolve()
     rows=[]
     if target.is_file():
         rows.append({'path': rel, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'size': target.stat().st_size})

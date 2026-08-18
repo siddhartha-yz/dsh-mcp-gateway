@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,6 +121,28 @@ class DurableSessionRuntimeTests(unittest.TestCase):
             started = runtime.manage(action="start")
             with self.assertRaisesRegex(SessionRuntimeError, "run_id is required"):
                 runtime.manage(action="report", session_id=started["session_id"], summary="missing lease")
+
+    def test_sqlite_state_files_are_private_under_permissive_umask(self) -> None:
+        previous_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                runtime = self.make_runtime(tmp)
+                started = runtime.manage(action="start", objective="private task text")
+                runtime.manage(
+                    action="report",
+                    session_id=started["session_id"],
+                    run_id=started["active_run"]["run_id"],
+                    summary="private checkpoint",
+                )
+
+                state_files = sorted(Path(tmp).glob("sessions.sqlite3*"))
+                self.assertGreaterEqual(len(state_files), 1)
+                self.assertEqual(
+                    {path.name: stat.S_IMODE(path.stat().st_mode) for path in state_files},
+                    {path.name: 0o600 for path in state_files},
+                )
+        finally:
+            os.umask(previous_umask)
 
 
 class SessionManageMcpTests(unittest.IsolatedAsyncioTestCase):

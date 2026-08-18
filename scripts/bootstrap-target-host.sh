@@ -251,9 +251,9 @@ python3 /srv/dsh-mcp-gateway/scripts/preflight-deployment.py
 if ((START_SERVICES)); then
   systemctl daemon-reload
   systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
-  curl --fail --silent --show-error http://127.0.0.1:18766/healthz
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/healthz
   echo
-  curl --fail --silent --show-error http://127.0.0.1:18766/readyz
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz
   echo
 fi
 

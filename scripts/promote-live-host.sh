@@ -362,10 +362,10 @@ echo "Enabling and starting DSH -> gateway -> tunnel..."
 systemctl enable dsh-web-host.service dsh-mcp-gateway.service dsh-cloudflared.service
 systemctl start dsh-web-host.service
 for _ in $(seq 1 120); do
-  curl -fsS http://127.0.0.1:3080/api/chatgpt-bridge/tools >/tmp/dsh-promote-tools.json 2>/dev/null && break
+  curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools >/tmp/dsh-promote-tools.json 2>/dev/null && break
   sleep .25
 done
-curl -fsS http://127.0.0.1:3080/api/chatgpt-bridge/skills >/tmp/dsh-promote-skills.json
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills >/tmp/dsh-promote-skills.json
 
 if [[ -n "$TOOLS_SNAPSHOT" ]]; then
   python3 - "$TOOLS_SNAPSHOT" /tmp/dsh-promote-tools.json <<'PY'
@@ -390,10 +390,10 @@ fi
 
 systemctl start dsh-mcp-gateway.service
 for _ in $(seq 1 120); do
-  curl -fsS http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json 2>/dev/null && break
+  curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json 2>/dev/null && break
   sleep .25
 done
-curl -fsS http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json
 cat /tmp/dsh-promote-ready.json
 echo
 

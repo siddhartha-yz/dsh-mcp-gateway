@@ -21,6 +21,7 @@ DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
 DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
+BOOTSTRAP_HOST = ROOT / "scripts" / "bootstrap-target-host.sh"
 BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
 VERIFY_BACKUP = ROOT / "scripts" / "verify-backup-restore.sh"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -140,6 +141,18 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["ProtectSystem"], "strict")
         self.assertEqual(service["ProtectHome"], "true")
 
+    def test_bootstrap_bounds_post_start_readiness_probes(self) -> None:
+        script = BOOTSTRAP_HOST.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/healthz",
+            script,
+        )
+        self.assertIn(
+            "curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz",
+            script,
+        )
+
     def test_live_promotion_preserves_real_workspace_and_migrates_state(self) -> None:
         script = PROMOTE_LIVE.read_text(encoding="utf-8")
 
@@ -168,8 +181,14 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_live_promotion_fails_closed_when_readiness_poll_never_succeeds(self) -> None:
         script = PROMOTE_LIVE.read_text(encoding="utf-8")
 
+        host_probe = (
+            'curl -fsS --connect-timeout 2 --max-time 5 '
+            'http://127.0.0.1:3080/api/chatgpt-bridge/tools '
+            '>/tmp/dsh-promote-tools.json'
+        )
         gateway_probe = (
-            'curl -fsS http://127.0.0.1:18766/readyz '
+            'curl -fsS --connect-timeout 2 --max-time 5 '
+            'http://127.0.0.1:18766/readyz '
             '>/tmp/dsh-promote-ready.json'
         )
         public_probe = (
@@ -180,6 +199,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         # Each endpoint is polled in a retry loop and then probed once more
         # under `set -e` so exhausting every retry cannot fall through merely
         # because `cat` of a truncated temporary file succeeds.
+        self.assertGreaterEqual(script.count(host_probe), 1)
         self.assertGreaterEqual(script.count(gateway_probe), 2)
         self.assertGreaterEqual(script.count(public_probe), 2)
 
@@ -216,6 +236,14 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("dsh_skill_catalog", restore)
         self.assertIn("tools.listChanged", restore)
         self.assertIn("Production DSH services were not modified", restore)
+        self.assertIn(
+            'curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/tools"',
+            restore,
+        )
+        self.assertIn(
+            'curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/readyz"',
+            restore,
+        )
 
     def test_workspace_backup_and_restore_reject_selected_symlinks(self) -> None:
         backup_validation = extract_python_heredoc(

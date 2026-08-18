@@ -171,10 +171,10 @@ trap cleanup EXIT
 DSH_PID=$!
 
 for _ in $(seq 1 120); do
-  curl -fsS "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/tools" > "$RESTORE_ROOT/tools-restored.json" 2>/dev/null && break
+  curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/tools" > "$RESTORE_ROOT/tools-restored.json" 2>/dev/null && break
   sleep .25
 done
-curl -fsS "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/skills" > "$RESTORE_ROOT/skills-restored.json"
+curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/skills" > "$RESTORE_ROOT/skills-restored.json"
 
 python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/tools-restored.json" "$RESTORE_ROOT/skills-restored.json" <<'PY'
 import json, sys
@@ -208,10 +208,10 @@ PY
 GATEWAY_PID=$!
 
 for _ in $(seq 1 120); do
-  curl -fsS "http://127.0.0.1:$GATEWAY_PORT/readyz" >/dev/null 2>&1 && break
+  curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/readyz" >/dev/null 2>&1 && break
   sleep .25
 done
-curl -fsS "http://127.0.0.1:$GATEWAY_PORT/readyz" >/dev/null
+curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/readyz" >/dev/null
 
 # Exercise a cloned real ChatGPT refresh grant against the isolated restored
 # gateway. Token values never leave this Python process or appear in output.

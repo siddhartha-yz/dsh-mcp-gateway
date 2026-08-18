@@ -66,7 +66,7 @@ def install_health_routes(server, backend=None, harness_bridge=None) -> None:
     async def readyz(_request):
         if harness_bridge is not None:
             try:
-                await asyncio.to_thread(harness_bridge.tools)
+                await asyncio.to_thread(harness_bridge.tools, timeout_s=1.0)
             except Exception:  # noqa: BLE001 - dependency failures collapse to a non-sensitive readiness result.
                 return JSONResponse(
                     {"ok": False, "dependency": "dsh-harness-bridge"},

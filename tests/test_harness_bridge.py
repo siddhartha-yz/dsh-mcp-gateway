@@ -70,6 +70,21 @@ class HarnessBridgeClientTests(unittest.TestCase):
         self.assertEqual(seen[3][1], "POST")
         self.assertEqual(json.loads(seen[3][2]), {"name": "community_echo", "arguments": {"text": "hi"}})
 
+    def test_tools_can_override_transport_timeout_for_readiness(self) -> None:
+        seen = []
+
+        def fake_urlopen(request, timeout):
+            seen.append(timeout)
+            return _Response({"tools": []})
+
+        client = HarnessBridgeClient("http://127.0.0.1:3080", timeout_s=30)
+        with patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=fake_urlopen):
+            self.assertEqual(client.tools(timeout_s=1.0), [])
+
+        self.assertEqual(seen, [1.0])
+        with self.assertRaisesRegex(ValueError, "timeout_s"):
+            client.tools(timeout_s=0)
+
     def test_tool_revision_uses_bridge_revision_endpoint(self) -> None:
         seen = []
 

@@ -305,7 +305,7 @@ class HealthRouteTests(unittest.IsolatedAsyncioTestCase):
         install_health_routes(server, harness_bridge=bridge)
         routes = {route.path: route for route in server._custom_starlette_routes}
         ready = await routes["/readyz"].endpoint(Mock())
-        bridge.tools.assert_called_once_with()
+        bridge.tools.assert_called_once_with(timeout_s=1.0)
         self.assertEqual(ready.status_code, 200)
         self.assertEqual(json.loads(ready.body), {"ok": True, "dependency": "dsh-harness-bridge"})
 

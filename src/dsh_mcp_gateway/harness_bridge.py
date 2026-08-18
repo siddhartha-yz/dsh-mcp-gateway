@@ -259,7 +259,13 @@ class HarnessBridgeClient:
         except ValueError:
             return False
 
-    def _request(self, path: str, *, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(
+        self,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
         request = Request(
             f"{self.base_url}{path}",
@@ -267,8 +273,11 @@ class HarnessBridgeClient:
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             method="GET" if payload is None else "POST",
         )
+        if timeout_s is not None and timeout_s <= 0:
+            raise ValueError("timeout_s must be positive when supplied")
+        effective_timeout = self.timeout_s if timeout_s is None else timeout_s
         try:
-            with urlopen(request, timeout=self.timeout_s) as response:
+            with urlopen(request, timeout=effective_timeout) as response:
                 body = _read_bounded(response)
         except HTTPError as exc:
             detail = _http_error_detail(exc, limit=2000)
@@ -290,8 +299,8 @@ class HarnessBridgeClient:
             raise HarnessBridgeError("DSH bridge returned an invalid tool revision")
         return revision
 
-    def tools(self) -> list[dict[str, Any]]:
-        payload = self._request("/api/chatgpt-bridge/tools")
+    def tools(self, *, timeout_s: float | None = None) -> list[dict[str, Any]]:
+        payload = self._request("/api/chatgpt-bridge/tools", timeout_s=timeout_s)
         tools = payload.get("tools")
         if not isinstance(tools, list) or not all(isinstance(item, dict) for item in tools):
             raise HarnessBridgeError("DSH bridge returned an invalid tool catalog")

@@ -393,6 +393,7 @@ for _ in $(seq 1 120); do
   curl -fsS http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json 2>/dev/null && break
   sleep .25
 done
+curl -fsS http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json
 cat /tmp/dsh-promote-ready.json
 echo
 
@@ -401,6 +402,7 @@ for _ in $(seq 1 120); do
   curl -fsS --connect-timeout 5 --max-time 10 "$PUBLIC_BASE_URL/readyz" >/tmp/dsh-promote-public.json 2>/dev/null && break
   sleep .5
 done
+curl -fsS --connect-timeout 5 --max-time 10 "$PUBLIC_BASE_URL/readyz" >/tmp/dsh-promote-public.json
 cat /tmp/dsh-promote-public.json
 echo
 

@@ -156,6 +156,24 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("SkillRegistry changed across promotion", script)
         self.assertNotIn("DEEPSEEK_API_" + "KEY=", script)
 
+    def test_live_promotion_fails_closed_when_readiness_poll_never_succeeds(self) -> None:
+        script = PROMOTE_LIVE.read_text(encoding="utf-8")
+
+        gateway_probe = (
+            'curl -fsS http://127.0.0.1:18766/readyz '
+            '>/tmp/dsh-promote-ready.json'
+        )
+        public_probe = (
+            'curl -fsS --connect-timeout 5 --max-time 10 '
+            '"$PUBLIC_BASE_URL/readyz" >/tmp/dsh-promote-public.json'
+        )
+
+        # Each endpoint is polled in a retry loop and then probed once more
+        # under `set -e` so exhausting every retry cannot fall through merely
+        # because `cat` of a truncated temporary file succeeds.
+        self.assertGreaterEqual(script.count(gateway_probe), 2)
+        self.assertGreaterEqual(script.count(public_probe), 2)
+
     def test_backup_restore_scripts_scope_out_unrelated_host_projects_and_verify_real_oauth(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")

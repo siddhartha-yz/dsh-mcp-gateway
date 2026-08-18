@@ -315,6 +315,26 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertNotEqual(restore_check.returncode, 0)
             self.assertIn("symlink", restore_check.stdout + restore_check.stderr)
 
+            # An unmanifested nested symlink must also not escape the isolated
+            # restore workspace. Directory selections can legitimately contain
+            # symlinks that were omitted from workspace_files hashing.
+            nested_dir = restore / "selected-dir"
+            nested_dir.mkdir()
+            escaping_link = nested_dir / "outside-link"
+            escaping_link.symlink_to(target)
+            empty_manifest = root / "EMPTY-MANIFEST.json"
+            empty_manifest.write_text(json.dumps({"workspace_files": []}), encoding="utf-8")
+            nested_restore_check = subprocess.run(
+                [sys.executable, "-", str(empty_manifest), str(restore)],
+                input=restore_validation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(nested_restore_check.returncode, 0)
+            self.assertIn("escapes restore root through symlink", nested_restore_check.stdout + nested_restore_check.stderr)
+
     def test_optional_session_search_overlay_is_durable_and_lazy(self) -> None:
         overlay = (DSH_DEPLOY / "session-search.cordis.yml").read_text(encoding="utf-8")
         drop_in = (SYSTEMD / "dsh-web-host-search.conf.example").read_text(encoding="utf-8")

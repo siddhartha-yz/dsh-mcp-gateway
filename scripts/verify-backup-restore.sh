@@ -93,10 +93,18 @@ GATEWAY_STATE_RESTORED="$RESTORE_ROOT/system/var/lib/dsh-mcp-gateway"
 
 # Verify the explicitly selected workspace data before starting any process.
 python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 manifest=json.load(open(sys.argv[1]))
 root=pathlib.Path(sys.argv[2])
 resolved_root=root.resolve()
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for name in (*dirnames, *filenames):
+        p=pathlib.Path(dirpath)/name
+        if not p.is_symlink():
+            continue
+        resolved=p.resolve(strict=False)
+        if not resolved.is_relative_to(resolved_root):
+            raise SystemExit(f"restored workspace path escapes restore root through symlink: {p.relative_to(root)}")
 for row in manifest.get('workspace_files', []):
     p=root/row['path']
     try:

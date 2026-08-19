@@ -605,6 +605,17 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(db.execute("SELECT count(*) FROM access_tokens").fetchone()[0], 1)
                 self.assertEqual(db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0], 1)
 
+    async def test_access_and_refresh_tokens_expire_at_exact_expiry_second(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config, provider, client, tokens = await self.issue_tokens(Path(tmp))
+            with sqlite3.connect(config.state_db) as db:
+                db.execute("UPDATE access_tokens SET expires_at = 1000 WHERE token = ?", (tokens.access_token,))
+                db.execute("UPDATE refresh_tokens SET expires_at = 1000 WHERE token = ?", (tokens.refresh_token,))
+
+            with patch("dsh_mcp_gateway.oauth.time.time", return_value=1000.0):
+                self.assertIsNone(await provider.load_access_token(tokens.access_token))
+                self.assertIsNone(await provider.load_refresh_token(client, tokens.refresh_token))
+
     async def test_refresh_token_is_single_use_under_concurrent_rotation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config, provider, client, tokens = await self.issue_tokens(Path(tmp))

@@ -340,8 +340,8 @@ class OAuthStore:
     def _prune_expired(db: sqlite3.Connection, *, now: float) -> None:
         db.execute("DELETE FROM pending_authorizations WHERE expires_at < ?", (now,))
         db.execute("DELETE FROM authorization_codes WHERE expires_at < ?", (now,))
-        db.execute("DELETE FROM access_tokens WHERE expires_at < ?", (int(now),))
-        db.execute("DELETE FROM refresh_tokens WHERE expires_at < ?", (int(now),))
+        db.execute("DELETE FROM access_tokens WHERE expires_at <= ?", (int(now),))
+        db.execute("DELETE FROM refresh_tokens WHERE expires_at <= ?", (int(now),))
 
     def save_client(self, client: OAuthClientInformationFull) -> None:
         with self.connection() as db:
@@ -642,14 +642,14 @@ class OAuthStore:
     def load_access(self, token: str) -> sqlite3.Row | None:
         with self.connection() as db:
             return db.execute(
-                "SELECT * FROM access_tokens WHERE token = ? AND expires_at >= ?",
+                "SELECT * FROM access_tokens WHERE token = ? AND expires_at > ?",
                 (token, int(time.time())),
             ).fetchone()
 
     def load_refresh(self, token: str, client_id: str) -> sqlite3.Row | None:
         with self.connection() as db:
             return db.execute(
-                "SELECT * FROM refresh_tokens WHERE token = ? AND client_id = ? AND expires_at >= ?",
+                "SELECT * FROM refresh_tokens WHERE token = ? AND client_id = ? AND expires_at > ?",
                 (token, client_id, int(time.time())),
             ).fetchone()
 
@@ -668,7 +668,7 @@ class OAuthStore:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT * FROM refresh_tokens WHERE token = ? AND client_id = ? AND expires_at >= ?",
+                "SELECT * FROM refresh_tokens WHERE token = ? AND client_id = ? AND expires_at > ?",
                 (token, client_id, now),
             ).fetchone()
             if row is None:

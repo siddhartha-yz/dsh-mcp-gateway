@@ -484,6 +484,46 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
         assert tokens.refresh_token is not None
         return config, provider, client, tokens
 
+    async def test_authorization_code_rejects_fractionally_expired_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            provider = EmbeddedOAuthProvider(config)
+            client = OAuthClientInformationFull(
+                client_id="client-1",
+                redirect_uris=["http://127.0.0.1:9999/callback"],
+                response_types=["code"],
+                grant_types=["authorization_code", "refresh_token"],
+                token_endpoint_auth_method="none",
+                scope="dsh:control",
+            )
+            await provider.register_client(client)
+            with patch("dsh_mcp_gateway.oauth.time.time", return_value=1000.25):
+                target = await provider.authorize(
+                    client,
+                    AuthorizationParams(
+                        state=None,
+                        scopes=["dsh:control"],
+                        code_challenge="challenge",
+                        redirect_uri="http://127.0.0.1:9999/callback",
+                        redirect_uri_provided_explicitly=True,
+                        resource=config.resource_url,
+                    ),
+                )
+                request_id = parse_qs(urlparse(target).query)["request"][0]
+                redirect = await provider.approve(request_id)
+            assert redirect is not None
+            code = parse_qs(urlparse(redirect).query)["code"][0]
+            auth_code = await provider.load_authorization_code(client, code)
+            assert auth_code is not None
+
+            with patch("dsh_mcp_gateway.oauth.time.time", return_value=1300.5):
+                try:
+                    await provider.exchange_authorization_code(client, auth_code)
+                except TokenError as exc:
+                    self.assertEqual(exc.error, "invalid_grant")
+                else:
+                    self.fail("fractionally expired authorization code was accepted")
+
     async def test_retried_approval_reuses_same_unexpired_authorization_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))

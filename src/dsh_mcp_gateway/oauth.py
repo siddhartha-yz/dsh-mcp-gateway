@@ -583,7 +583,8 @@ class OAuthStore:
         access_ttl_s: int,
         refresh_ttl_s: int,
     ) -> tuple[str, str, list[str], int, int, str, str] | None:
-        now = int(time.time())
+        now = time.time()
+        token_now = int(now)
         access = secrets.token_urlsafe(32)
         refresh = secrets.token_urlsafe(32)
         grant_id = secrets.token_urlsafe(24)
@@ -599,8 +600,8 @@ class OAuthStore:
             self._prune_expired(db, now=now)
             db.execute("DELETE FROM authorization_codes WHERE code = ?", (code,))
             scopes = list(json.loads(row["scopes_json"]))
-            access_exp = now + access_ttl_s
-            refresh_exp = now + refresh_ttl_s
+            access_exp = token_now + access_ttl_s
+            refresh_exp = token_now + refresh_ttl_s
             db.execute(
                 """
                 INSERT INTO access_tokens(

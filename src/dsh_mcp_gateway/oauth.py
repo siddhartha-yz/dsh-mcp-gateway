@@ -338,8 +338,8 @@ class OAuthStore:
 
     @staticmethod
     def _prune_expired(db: sqlite3.Connection, *, now: float) -> None:
-        db.execute("DELETE FROM pending_authorizations WHERE expires_at < ?", (now,))
-        db.execute("DELETE FROM authorization_codes WHERE expires_at < ?", (now,))
+        db.execute("DELETE FROM pending_authorizations WHERE expires_at <= ?", (now,))
+        db.execute("DELETE FROM authorization_codes WHERE expires_at <= ?", (now,))
         db.execute("DELETE FROM access_tokens WHERE expires_at <= ?", (int(now),))
         db.execute("DELETE FROM refresh_tokens WHERE expires_at <= ?", (int(now),))
 
@@ -444,7 +444,7 @@ class OAuthStore:
     def load_pending(self, request_id: str) -> PendingAuthorization | None:
         now = time.time()
         with self.connection() as db:
-            db.execute("DELETE FROM pending_authorizations WHERE expires_at < ?", (now,))
+            db.execute("DELETE FROM pending_authorizations WHERE expires_at <= ?", (now,))
             row = db.execute(
                 "SELECT * FROM pending_authorizations WHERE request_id = ?",
                 (request_id,),
@@ -591,7 +591,7 @@ class OAuthStore:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT * FROM authorization_codes WHERE code = ? AND client_id = ? AND expires_at >= ?",
+                "SELECT * FROM authorization_codes WHERE code = ? AND client_id = ? AND expires_at > ?",
                 (code, client_id, now),
             ).fetchone()
             if row is None:

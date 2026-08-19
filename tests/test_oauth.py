@@ -4,7 +4,9 @@ import asyncio
 import base64
 import hashlib
 import importlib.util
+import os
 import sqlite3
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +33,7 @@ if MCP_AVAILABLE:
     from dsh_mcp_gateway.oauth import (
         EmbeddedOAuthConfig,
         EmbeddedOAuthProvider,
+        OAuthStore,
         PinAttemptLimiter,
         RegistrationBodyLimitMiddleware,
     )
@@ -74,6 +77,28 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             state_db=root / "oauth.sqlite3",
             admin_pin="test-admin-pin",
         )
+
+    def test_sqlite_database_is_private_before_connect_returns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "oauth.sqlite3"
+            real_connect = sqlite3.connect
+            observed_modes: list[int] = []
+
+            def inspect_connect(database, *args, **kwargs):
+                connection = real_connect(database, *args, **kwargs)
+                observed_modes.append(stat.S_IMODE(path.stat().st_mode))
+                return connection
+
+            previous_umask = os.umask(0o022)
+            try:
+                with patch("dsh_mcp_gateway.oauth.sqlite3.connect", side_effect=inspect_connect):
+                    connection = OAuthStore(path)._connect()
+                    connection.close()
+            finally:
+                os.umask(previous_umask)
+
+            self.assertTrue(observed_modes)
+            self.assertEqual(observed_modes[0], 0o600)
 
     def test_issuer_is_canonicalized_once_for_metadata_and_callbacks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

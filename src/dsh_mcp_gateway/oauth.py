@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import html
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -179,11 +180,10 @@ class OAuthStore:
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+        self.path.chmod(0o600)
         connection = sqlite3.connect(self.path, timeout=5)
-        try:
-            self.path.chmod(0o600)
-        except OSError:
-            pass
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         self._ensure_schema(connection)

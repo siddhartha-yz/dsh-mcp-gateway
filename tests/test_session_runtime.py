@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from dsh_mcp_gateway import build_mcp_server
 from dsh_mcp_gateway.routing import GatewayService
@@ -121,6 +122,27 @@ class DurableSessionRuntimeTests(unittest.TestCase):
             started = runtime.manage(action="start")
             with self.assertRaisesRegex(SessionRuntimeError, "run_id is required"):
                 runtime.manage(action="report", session_id=started["session_id"], summary="missing lease")
+
+    def test_sqlite_database_is_private_before_connect_returns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.sqlite3"
+            real_connect = sqlite3.connect
+            observed_modes: list[int] = []
+
+            def inspect_connect(database, *args, **kwargs):
+                connection = real_connect(database, *args, **kwargs)
+                observed_modes.append(stat.S_IMODE(path.stat().st_mode))
+                return connection
+
+            previous_umask = os.umask(0o022)
+            try:
+                with patch("dsh_mcp_gateway.session_runtime.sqlite3.connect", side_effect=inspect_connect):
+                    DurableSessionRuntime(path)
+            finally:
+                os.umask(previous_umask)
+
+            self.assertTrue(observed_modes)
+            self.assertEqual(observed_modes[0], 0o600)
 
     def test_sqlite_state_files_are_private_under_permissive_umask(self) -> None:
         previous_umask = os.umask(0o022)

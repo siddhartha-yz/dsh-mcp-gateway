@@ -8,6 +8,7 @@ which ChatGPT run currently owns mutation authority for a logical session.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -35,9 +36,11 @@ class DurableSessionRuntime:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
+        fd = os.open(self.database, os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+        self.database.chmod(0o600)
         connection = sqlite3.connect(self.database, timeout=10.0)
         for path in (
-            self.database,
             Path(f"{self.database}-wal"),
             Path(f"{self.database}-shm"),
         ):

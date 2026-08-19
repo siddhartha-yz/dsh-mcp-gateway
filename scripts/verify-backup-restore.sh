@@ -102,7 +102,10 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         p=pathlib.Path(dirpath)/name
         if not p.is_symlink():
             continue
-        resolved=p.resolve(strict=False)
+        try:
+            resolved=p.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise SystemExit(f"broken restored workspace symlink: {p.relative_to(root)}")
         if not resolved.is_relative_to(resolved_root):
             raise SystemExit(f"restored workspace path escapes restore root through symlink: {p.relative_to(root)}")
 for row in manifest.get('workspace_files', []):

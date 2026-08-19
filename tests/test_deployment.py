@@ -335,6 +335,34 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertNotEqual(nested_restore_check.returncode, 0)
             self.assertIn("escapes restore root through symlink", nested_restore_check.stdout + nested_restore_check.stderr)
 
+    def test_workspace_restore_rejects_broken_nested_symlinks(self) -> None:
+        restore_validation = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<\'PY\'',
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            restore = root / "restored-workspace"
+            restore.mkdir()
+            nested_dir = restore / "selected-dir"
+            nested_dir.mkdir()
+            broken_link = nested_dir / "missing-link"
+            broken_link.symlink_to("../shared/missing.txt")
+            manifest = root / "MANIFEST.json"
+            manifest.write_text(json.dumps({"workspace_files": []}), encoding="utf-8")
+
+            restore_check = subprocess.run(
+                [sys.executable, "-", str(manifest), str(restore)],
+                input=restore_validation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(restore_check.returncode, 0)
+            self.assertIn("broken restored workspace symlink", restore_check.stdout + restore_check.stderr)
+
     def test_optional_session_search_overlay_is_durable_and_lazy(self) -> None:
         overlay = (DSH_DEPLOY / "session-search.cordis.yml").read_text(encoding="utf-8")
         drop_in = (SYSTEMD / "dsh-web-host-search.conf.example").read_text(encoding="utf-8")

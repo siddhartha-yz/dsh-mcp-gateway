@@ -64,9 +64,8 @@ print(os.path.abspath(sys.argv[1]))
 PY
 )"
 [[ ! -e "$OUTPUT" ]] || { echo "backup output already exists: $OUTPUT" >&2; exit 1; }
-install -d -m 0700 "$OUTPUT"
 
-# Validate explicitly selected workspace paths before service interruption.
+# Validate explicitly selected workspace paths before creating backup output or interrupting services.
 python3 - "$WORKSPACE" "$OUTPUT" "${WORKSPACE_PATHS[@]}" <<'PY'
 import os, sys
 root=os.path.realpath(sys.argv[1]); output=os.path.realpath(sys.argv[2])
@@ -86,6 +85,8 @@ for raw in sys.argv[3:]:
     if not os.path.exists(target):
         raise SystemExit(f"workspace path does not exist: {raw}")
 PY
+
+install -d -m 0700 "$OUTPUT"
 
 # Snapshot the live capability surface before making the backup offline.
 curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT/tools-before.json"

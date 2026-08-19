@@ -253,6 +253,16 @@ class DeploymentTemplateTests(unittest.TestCase):
             restore,
         )
 
+    def test_backup_validates_workspace_selection_before_creating_output(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+        validation = 'python3 - "$WORKSPACE" "$OUTPUT" "${WORKSPACE_PATHS[@]}" <<\'PY\''
+        create_output = 'install -d -m 0700 "$OUTPUT"'
+        self.assertLess(
+            backup.index(validation),
+            backup.index(create_output),
+            "invalid workspace selections must fail before leaving a partial backup output directory",
+        )
+
     def test_workspace_backup_and_restore_reject_selected_symlinks(self) -> None:
         backup_validation = extract_python_heredoc(
             BACKUP_HOST,

@@ -1530,6 +1530,27 @@ class PublicSdkBackendTests(unittest.TestCase):
             SessionCatalog(path)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_catalog_temp_file_is_private_before_sensitive_write_completes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            observed_modes: list[int] = []
+            original_write_text = Path.write_text
+
+            def recording_write_text(target: Path, *args: Any, **kwargs: Any) -> int:
+                written = original_write_text(target, *args, **kwargs)
+                if target.name.startswith(".sessions.json.") and target.name.endswith(".tmp"):
+                    observed_modes.append(target.stat().st_mode & 0o777)
+                return written
+
+            previous_umask = os.umask(0o022)
+            try:
+                with patch.object(Path, "write_text", recording_write_text):
+                    SessionCatalog(path).add("s1")
+            finally:
+                os.umask(previous_umask)
+
+            self.assertEqual(observed_modes, [0o600])
+
     def test_live_prompt_then_notifications_project_status_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()

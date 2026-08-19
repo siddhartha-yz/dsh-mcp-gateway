@@ -159,12 +159,16 @@ class SessionCatalog:
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        tmp.write_text(
-            json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        tmp.chmod(0o600)
-        tmp.replace(self.path)
+        tmp.touch(mode=0o600, exist_ok=False)
+        try:
+            tmp.write_text(
+                json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            tmp.replace(self.path)
+        except (OSError, UnicodeError):
+            tmp.unlink(missing_ok=True)
+            raise
 
 
 class ExperimentalWebHostError(RuntimeError):

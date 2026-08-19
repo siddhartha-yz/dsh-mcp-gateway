@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pwd
+import shlex
 import shutil
 import subprocess
 import sys
@@ -262,6 +263,47 @@ class DeploymentTemplateTests(unittest.TestCase):
             backup.index(create_output),
             "invalid workspace selections must fail before leaving a partial backup output directory",
         )
+
+    def test_failed_backup_snapshot_removes_partial_output(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+        start = backup.index('OUTPUT="$(python3 - "$OUTPUT"')
+        end = backup.index("# Make the state quiescent")
+        pre_quiesce = backup[start:end]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            output = root / "backup-output"
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_curl = fake_bin / "curl"
+            fake_curl.write_text("#!/bin/sh\nexit 22\n", encoding="utf-8")
+            fake_curl.chmod(0o755)
+            fake_systemctl = fake_bin / "systemctl"
+            fake_systemctl.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake_systemctl.chmod(0o755)
+
+            script = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"OUTPUT={shlex.quote(str(output))}",
+                    f"WORKSPACE={shlex.quote(str(workspace))}",
+                    "WORKSPACE_PATHS=()",
+                    pre_quiesce,
+                ]
+            )
+            env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+            result = subprocess.run(
+                ["bash", "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists(), "failed backup snapshot must not leave an unusable output directory")
 
     def test_workspace_backup_and_restore_reject_selected_symlinks(self) -> None:
         backup_validation = extract_python_heredoc(

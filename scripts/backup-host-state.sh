@@ -87,6 +87,15 @@ for raw in sys.argv[3:]:
 PY
 
 install -d -m 0700 "$OUTPUT"
+BACKUP_COMPLETE=0
+cleanup_partial_output() {
+  local original_rc=$?
+  if ((original_rc != 0 && BACKUP_COMPLETE == 0)); then
+    rm -rf -- "$OUTPUT"
+  fi
+  return "$original_rc"
+}
+trap cleanup_partial_output EXIT
 
 # Snapshot the live capability surface before making the backup offline.
 curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT/tools-before.json"
@@ -122,6 +131,9 @@ restore_services() {
   fi
   if ((TUNNEL_WAS_ACTIVE)); then
     systemctl start dsh-cloudflared.service || restart_rc=1
+  fi
+  if ((original_rc != 0 || restart_rc != 0)) && ((BACKUP_COMPLETE == 0)); then
+    rm -rf -- "$OUTPUT"
   fi
   set -e
   if ((original_rc != 0)); then
@@ -214,10 +226,13 @@ PY
 # Restart exactly the DSH services that were active before this backup.
 trap - EXIT
 restore_services
+trap cleanup_partial_output EXIT
 
 chown -R "$OUTPUT_OWNER:$(id -gn "$OUTPUT_OWNER")" "$OUTPUT"
 chmod 0700 "$OUTPUT"
 find "$OUTPUT" -type f -exec chmod 0600 {} +
+BACKUP_COMPLETE=1
+trap - EXIT
 
 echo "BACKUP PASS: $OUTPUT"
 echo "Only DSH services were briefly quiesced; unrelated host services were not touched."

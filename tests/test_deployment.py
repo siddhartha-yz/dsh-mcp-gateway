@@ -185,6 +185,9 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("/proc/$pid/cmdline", script)
         self.assertIn("tool catalog changed across promotion", script)
         self.assertIn("SkillRegistry changed across promotion", script)
+        self.assertIn('PROMOTE_TMP="$(mktemp -d)"', script)
+        self.assertIn("trap 'rm -rf \"$PROMOTE_TMP\"' EXIT", script)
+        self.assertNotIn(">/tmp/dsh-promote-", script)
         self.assertNotIn("DEEPSEEK_API_" + "KEY=", script)
 
     def test_live_promotion_fails_closed_when_readiness_poll_never_succeeds(self) -> None:
@@ -193,16 +196,16 @@ class DeploymentTemplateTests(unittest.TestCase):
         host_probe = (
             'curl -fsS --connect-timeout 2 --max-time 5 '
             'http://127.0.0.1:3080/api/chatgpt-bridge/tools '
-            '>/tmp/dsh-promote-tools.json'
+            '>"$PROMOTE_TMP/tools.json"'
         )
         gateway_probe = (
             'curl -fsS --connect-timeout 2 --max-time 5 '
             'http://127.0.0.1:18766/readyz '
-            '>/tmp/dsh-promote-ready.json'
+            '>"$PROMOTE_TMP/ready.json"'
         )
         public_probe = (
             'curl -fsS --connect-timeout 5 --max-time 10 '
-            '"$PUBLIC_BASE_URL/readyz" >/tmp/dsh-promote-public.json'
+            '"$PUBLIC_BASE_URL/readyz" >"$PROMOTE_TMP/public.json"'
         )
 
         # Each endpoint is polled in a retry loop and then probed once more

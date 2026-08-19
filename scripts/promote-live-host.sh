@@ -76,9 +76,12 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-for command in python3 git curl runuser systemctl systemd-analyze sha256sum; do
+for command in python3 git curl runuser systemctl systemd-analyze sha256sum mktemp; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
+PROMOTE_TMP="$(mktemp -d)"
+chmod 0700 "$PROMOTE_TMP"
+trap 'rm -rf "$PROMOTE_TMP"' EXIT
 [[ -x /usr/local/bin/cloudflared ]] || { echo "/usr/local/bin/cloudflared is missing" >&2; exit 1; }
 getent passwd "$WORKSPACE_USER" >/dev/null || { echo "workspace user does not exist: $WORKSPACE_USER" >&2; exit 1; }
 getent group "$WORKSPACE_GROUP" >/dev/null || { echo "workspace group does not exist: $WORKSPACE_GROUP" >&2; exit 1; }
@@ -362,13 +365,13 @@ echo "Enabling and starting DSH -> gateway -> tunnel..."
 systemctl enable dsh-web-host.service dsh-mcp-gateway.service dsh-cloudflared.service
 systemctl start dsh-web-host.service
 for _ in $(seq 1 120); do
-  curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools >/tmp/dsh-promote-tools.json 2>/dev/null && break
+  curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools >"$PROMOTE_TMP/tools.json" 2>/dev/null && break
   sleep .25
 done
-curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills >/tmp/dsh-promote-skills.json
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills >"$PROMOTE_TMP/skills.json"
 
 if [[ -n "$TOOLS_SNAPSHOT" ]]; then
-  python3 - "$TOOLS_SNAPSHOT" /tmp/dsh-promote-tools.json <<'PY'
+  python3 - "$TOOLS_SNAPSHOT" "$PROMOTE_TMP/tools.json" <<'PY'
 import json, sys
 before = {x['name'] for x in json.load(open(sys.argv[1]))['tools']}
 after = {x['name'] for x in json.load(open(sys.argv[2]))['tools']}
@@ -378,7 +381,7 @@ print(f'tool catalog preserved: {len(after)} tools')
 PY
 fi
 if [[ -n "$SKILLS_SNAPSHOT" ]]; then
-  python3 - "$SKILLS_SNAPSHOT" /tmp/dsh-promote-skills.json <<'PY'
+  python3 - "$SKILLS_SNAPSHOT" "$PROMOTE_TMP/skills.json" <<'PY'
 import json, sys
 before = {x['name'] for x in json.load(open(sys.argv[1]))['skills']}
 after = {x['name'] for x in json.load(open(sys.argv[2]))['skills']}
@@ -390,20 +393,20 @@ fi
 
 systemctl start dsh-mcp-gateway.service
 for _ in $(seq 1 120); do
-  curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json 2>/dev/null && break
+  curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >"$PROMOTE_TMP/ready.json" 2>/dev/null && break
   sleep .25
 done
-curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >/tmp/dsh-promote-ready.json
-cat /tmp/dsh-promote-ready.json
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz >"$PROMOTE_TMP/ready.json"
+cat "$PROMOTE_TMP/ready.json"
 echo
 
 systemctl start dsh-cloudflared.service
 for _ in $(seq 1 120); do
-  curl -fsS --connect-timeout 5 --max-time 10 "$PUBLIC_BASE_URL/readyz" >/tmp/dsh-promote-public.json 2>/dev/null && break
+  curl -fsS --connect-timeout 5 --max-time 10 "$PUBLIC_BASE_URL/readyz" >"$PROMOTE_TMP/public.json" 2>/dev/null && break
   sleep .5
 done
-curl -fsS --connect-timeout 5 --max-time 10 "$PUBLIC_BASE_URL/readyz" >/tmp/dsh-promote-public.json
-cat /tmp/dsh-promote-public.json
+curl -fsS --connect-timeout 5 --max-time 10 "$PUBLIC_BASE_URL/readyz" >"$PROMOTE_TMP/public.json"
+cat "$PROMOTE_TMP/public.json"
 echo
 
 echo "Promotion complete at commit $SOURCE_COMMIT."

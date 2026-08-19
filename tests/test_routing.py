@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -1514,6 +1515,20 @@ class PublicSdkBackendTests(unittest.TestCase):
             second = SessionCatalog(path)
             self.assertTrue(second.contains("s1"))
             self.assertEqual(second.ids(), ["s1"])
+
+    def test_catalog_file_is_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            previous_umask = os.umask(0o022)
+            try:
+                SessionCatalog(path).add("s1")
+            finally:
+                os.umask(previous_umask)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+            path.chmod(0o644)
+            SessionCatalog(path)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_live_prompt_then_notifications_project_status_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -147,6 +147,7 @@ class SessionCatalog:
     def _load(self) -> set[str]:
         if not self.path.exists():
             return set()
+        self.path.chmod(0o600)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("sessions"), list):
             raise ValueError(f"invalid session catalog: {self.path}")
@@ -162,6 +163,7 @@ class SessionCatalog:
             json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n",
             encoding="utf-8",
         )
+        tmp.chmod(0o600)
         tmp.replace(self.path)
 
 

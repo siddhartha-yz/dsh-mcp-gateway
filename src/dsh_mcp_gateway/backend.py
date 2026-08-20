@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import ipaddress
 import json
 import os
 import threading
 import uuid
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from http.client import HTTPException
 from pathlib import Path
 from typing import Any, Protocol
@@ -134,7 +137,7 @@ class SessionCatalog:
             return sorted(self._ids)
 
     def add(self, session_id: str) -> None:
-        with self._lock, _SESSION_CATALOG_DISK_LOCK:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
             persisted = self._load()
             if session_id in persisted:
                 self._ids = persisted
@@ -147,7 +150,7 @@ class SessionCatalog:
                 raise
 
     def remove(self, session_id: str) -> None:
-        with self._lock, _SESSION_CATALOG_DISK_LOCK:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
             persisted = self._load()
             if session_id not in persisted:
                 self._ids = persisted
@@ -158,6 +161,21 @@ class SessionCatalog:
             except (OSError, UnicodeError):
                 self._ids = persisted
                 raise
+
+    @contextmanager
+    def _process_disk_lock(self) -> Iterator[None]:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
     def _load(self) -> set[str]:
         if not self.path.exists():

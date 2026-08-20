@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
+import multiprocessing
 import os
 import tempfile
 import threading
@@ -1526,6 +1528,34 @@ class PublicSdkBackendTests(unittest.TestCase):
             second.add("s2")
 
             self.assertEqual(SessionCatalog(path).ids(), ["s1", "s2"])
+
+    def test_catalog_updates_wait_for_cross_process_disk_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            lock_path = path.with_name(f".{path.name}.lock")
+            lock_path.touch(mode=0o600)
+            lock_file = lock_path.open("rb+")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            ctx = multiprocessing.get_context("fork")
+            finished = ctx.Event()
+
+            def add_from_child() -> None:
+                SessionCatalog(path).add("child")
+                finished.set()
+
+            process = ctx.Process(target=add_from_child)
+            process.start()
+            try:
+                self.assertFalse(finished.wait(timeout=0.1))
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                lock_file.close()
+            process.join(timeout=2)
+
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            self.assertTrue(finished.is_set())
+            self.assertEqual(SessionCatalog(path).ids(), ["child"])
 
     def test_catalog_file_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

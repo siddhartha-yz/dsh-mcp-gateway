@@ -180,10 +180,18 @@ class SessionCatalog:
                 os.close(descriptor)
 
     def _load(self) -> set[str]:
-        if not self.path.exists():
+        try:
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
             return set()
-        self.path.chmod(0o600)
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, encoding="utf-8") as file:
+                descriptor = -1
+                raw = json.load(file)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
         if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("sessions"), list):
             raise ValueError(f"invalid session catalog: {self.path}")
         sessions = raw["sessions"]

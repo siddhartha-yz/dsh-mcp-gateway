@@ -129,11 +129,13 @@ class SessionCatalog:
         self._ids = self._load()
 
     def contains(self, session_id: str) -> bool:
-        with self._lock:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK:
+            self._ids = self._load()
             return session_id in self._ids
 
     def ids(self) -> list[str]:
-        with self._lock:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK:
+            self._ids = self._load()
             return sorted(self._ids)
 
     def add(self, session_id: str) -> None:

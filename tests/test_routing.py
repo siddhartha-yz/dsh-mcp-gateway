@@ -1529,6 +1529,17 @@ class PublicSdkBackendTests(unittest.TestCase):
 
             self.assertEqual(SessionCatalog(path).ids(), ["s1", "s2"])
 
+    def test_live_catalog_instances_refresh_external_updates_on_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            first = SessionCatalog(path)
+            second = SessionCatalog(path)
+
+            first.add("s1")
+
+            self.assertTrue(second.contains("s1"))
+            self.assertEqual(second.ids(), ["s1"])
+
     def test_catalog_updates_wait_for_cross_process_disk_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

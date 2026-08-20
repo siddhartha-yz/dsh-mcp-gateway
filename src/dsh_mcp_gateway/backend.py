@@ -114,6 +114,9 @@ class GoalControlUnavailable(RuntimeError):
     """The selected DSH transport does not expose durable goal controls."""
 
 
+_SESSION_CATALOG_DISK_LOCK = threading.RLock()
+
+
 class SessionCatalog:
     """Small gateway-owned index used to distinguish persisted from absent ids."""
 
@@ -131,25 +134,29 @@ class SessionCatalog:
             return sorted(self._ids)
 
     def add(self, session_id: str) -> None:
-        with self._lock:
-            if session_id in self._ids:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK:
+            persisted = self._load()
+            if session_id in persisted:
+                self._ids = persisted
                 return
-            self._ids.add(session_id)
+            self._ids = persisted | {session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
-                self._ids.remove(session_id)
+                self._ids = persisted
                 raise
 
     def remove(self, session_id: str) -> None:
-        with self._lock:
-            if session_id not in self._ids:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK:
+            persisted = self._load()
+            if session_id not in persisted:
+                self._ids = persisted
                 return
-            self._ids.remove(session_id)
+            self._ids = persisted - {session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
-                self._ids.add(session_id)
+                self._ids = persisted
                 raise
 
     def _load(self) -> set[str]:

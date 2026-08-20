@@ -1516,6 +1516,17 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertTrue(second.contains("s1"))
             self.assertEqual(second.ids(), ["s1"])
 
+    def test_catalog_instances_do_not_overwrite_each_others_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            first = SessionCatalog(path)
+            second = SessionCatalog(path)
+
+            first.add("s1")
+            second.add("s2")
+
+            self.assertEqual(SessionCatalog(path).ids(), ["s1", "s2"])
+
     def test_catalog_file_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

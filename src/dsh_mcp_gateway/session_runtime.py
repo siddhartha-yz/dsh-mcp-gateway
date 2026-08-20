@@ -36,12 +36,12 @@ class DurableSessionRuntime:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        fd = os.open(self.database, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        fd = os.open(self.database, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             os.fchmod(fd, 0o600)
+            connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=10.0)
         finally:
             os.close(fd)
-        connection = sqlite3.connect(self.database, timeout=10.0)
         for path in (
             Path(f"{self.database}-wal"),
             Path(f"{self.database}-shm"),

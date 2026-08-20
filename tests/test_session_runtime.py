@@ -158,6 +158,31 @@ class DurableSessionRuntimeTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
+    def test_sqlite_database_cannot_be_swapped_to_symlink_before_connect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.sqlite3"
+            target = root / "target.sqlite3"
+            with sqlite3.connect(target):
+                pass
+            real_connect = sqlite3.connect
+
+            def swap_before_connect(database, *args, **kwargs):
+                if path.exists() or path.is_symlink():
+                    path.unlink()
+                path.symlink_to(target)
+                return real_connect(database, *args, **kwargs)
+
+            with (
+                patch("dsh_mcp_gateway.session_runtime.sqlite3.connect", side_effect=swap_before_connect),
+                self.assertRaises(sqlite3.OperationalError),
+            ):
+                DurableSessionRuntime(path)
+
+            with real_connect(target) as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            self.assertNotIn("logical_sessions", tables)
+
     def test_sqlite_state_files_are_private_under_permissive_umask(self) -> None:
         previous_umask = os.umask(0o022)
         try:

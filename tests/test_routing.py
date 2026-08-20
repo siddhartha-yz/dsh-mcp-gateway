@@ -1551,6 +1551,28 @@ class PublicSdkBackendTests(unittest.TestCase):
 
             self.assertEqual(observed_modes, [0o600])
 
+    def test_catalog_rolls_back_memory_when_persistence_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            catalog = SessionCatalog(path)
+
+            with (
+                patch.object(Path, "replace", side_effect=OSError("disk full")),
+                self.assertRaisesRegex(OSError, "disk full"),
+            ):
+                catalog.add("s1")
+            self.assertFalse(catalog.contains("s1"))
+            self.assertFalse(path.exists())
+
+            catalog.add("s1")
+            with (
+                patch.object(Path, "replace", side_effect=OSError("disk full")),
+                self.assertRaisesRegex(OSError, "disk full"),
+            ):
+                catalog.remove("s1")
+            self.assertTrue(catalog.contains("s1"))
+            self.assertTrue(SessionCatalog(path).contains("s1"))
+
     def test_live_prompt_then_notifications_project_status_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()

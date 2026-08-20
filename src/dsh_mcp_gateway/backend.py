@@ -135,14 +135,22 @@ class SessionCatalog:
             if session_id in self._ids:
                 return
             self._ids.add(session_id)
-            self._save()
+            try:
+                self._save()
+            except (OSError, UnicodeError):
+                self._ids.remove(session_id)
+                raise
 
     def remove(self, session_id: str) -> None:
         with self._lock:
             if session_id not in self._ids:
                 return
             self._ids.remove(session_id)
-            self._save()
+            try:
+                self._save()
+            except (OSError, UnicodeError):
+                self._ids.add(session_id)
+                raise
 
     def _load(self) -> set[str]:
         if not self.path.exists():

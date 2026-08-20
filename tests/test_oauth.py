@@ -100,6 +100,20 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(observed_modes)
             self.assertEqual(observed_modes[0], 0o600)
 
+    def test_sqlite_database_rejects_symlinked_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.sqlite3"
+            target.write_text("not a gateway database\n", encoding="utf-8")
+            target.chmod(0o644)
+            path = root / "oauth.sqlite3"
+            path.symlink_to(target)
+
+            with self.assertRaises(OSError):
+                OAuthStore(path)._connect()
+
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+
     def test_issuer_is_canonicalized_once_for_metadata_and_callbacks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))

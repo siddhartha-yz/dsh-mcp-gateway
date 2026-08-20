@@ -144,6 +144,20 @@ class DurableSessionRuntimeTests(unittest.TestCase):
             self.assertTrue(observed_modes)
             self.assertEqual(observed_modes[0], 0o600)
 
+    def test_sqlite_database_rejects_symlinked_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.sqlite3"
+            target.write_text("not a session database\n", encoding="utf-8")
+            target.chmod(0o644)
+            path = root / "sessions.sqlite3"
+            path.symlink_to(target)
+
+            with self.assertRaises(OSError):
+                DurableSessionRuntime(path)
+
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+
     def test_sqlite_state_files_are_private_under_permissive_umask(self) -> None:
         previous_umask = os.umask(0o022)
         try:

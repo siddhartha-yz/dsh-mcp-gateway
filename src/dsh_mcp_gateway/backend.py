@@ -168,7 +168,7 @@ class SessionCatalog:
     def _process_disk_lock(self) -> Iterator[None]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self.path.with_name(f".{self.path.name}.lock")
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             os.fchmod(descriptor, 0o600)
             fcntl.flock(descriptor, fcntl.LOCK_EX)

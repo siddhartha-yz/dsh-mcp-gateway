@@ -1568,6 +1568,22 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertTrue(finished.is_set())
             self.assertEqual(SessionCatalog(path).ids(), ["child"])
 
+    def test_catalog_process_lock_rejects_symlink_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.json"
+            target = root / "target.txt"
+            target.write_text("sentinel\n", encoding="utf-8")
+            target.chmod(0o644)
+            path.with_name(f".{path.name}.lock").symlink_to(target)
+
+            with self.assertRaises(OSError):
+                SessionCatalog(path).add("s1")
+
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertFalse(path.exists())
+
     def test_catalog_file_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

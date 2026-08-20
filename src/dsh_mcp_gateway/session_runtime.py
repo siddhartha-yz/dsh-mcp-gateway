@@ -35,19 +35,27 @@ class DurableSessionRuntime:
         self._lock = threading.RLock()
         self._initialize()
 
+    def _secure_sidecars(self) -> None:
+        for suffix in ("-wal", "-shm"):
+            path = Path(f"{self.database}{suffix}")
+            try:
+                fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue
+            try:
+                os.fchmod(fd, 0o600)
+            finally:
+                os.close(fd)
+
     def _connect(self) -> sqlite3.Connection:
+        self._secure_sidecars()
         fd = os.open(self.database, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             os.fchmod(fd, 0o600)
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=10.0)
         finally:
             os.close(fd)
-        for path in (
-            Path(f"{self.database}-wal"),
-            Path(f"{self.database}-shm"),
-        ):
-            if path.exists():
-                path.chmod(0o600)
+        self._secure_sidecars()
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 10000")

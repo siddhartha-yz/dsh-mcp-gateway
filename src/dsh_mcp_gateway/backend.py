@@ -1007,7 +1007,11 @@ class PublicSdkBackend:
             if session_id in self._allocated or session_id in self._live or self._catalog.contains(session_id):
                 raise ValueError(f"session already exists: {session_id}")
             self._allocated.add(session_id)
-            self._catalog.add(session_id)
+            try:
+                self._catalog.add(session_id)
+            except (OSError, UnicodeError, ValueError):
+                self._allocated.discard(session_id)
+                raise
         return SessionHandle(session_id)
 
     def prompt(self, session_id: str, text: str) -> str:

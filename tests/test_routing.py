@@ -1769,6 +1769,22 @@ class PublicSdkBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "limit"):
                 backend.messages("s1", limit=0)
 
+    def test_failed_catalog_persistence_rolls_back_allocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            catalog = SessionCatalog(path)
+            backend = PublicSdkBackend(FakePublicSdkClient(), catalog)
+
+            with (
+                patch.object(catalog, "add", side_effect=OSError("disk full")),
+                self.assertRaisesRegex(OSError, "disk full"),
+            ):
+                backend.create("s1")
+
+            self.assertEqual(backend.presence("s1"), SessionPresence.ABSENT)
+            with self.assertRaises(KeyError):
+                backend.reuse("s1")
+
     def test_failed_first_prompt_rolls_back_catalog_allocation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

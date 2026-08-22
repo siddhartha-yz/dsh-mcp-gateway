@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -61,8 +62,17 @@ class DurableSessionRuntime:
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
 
+    @contextmanager
+    def _connection(self):
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
@@ -269,7 +279,7 @@ class DurableSessionRuntime:
         if normalized not in {"start", "list", "get", "resume", "report", "finish", "cancel"}:
             raise SessionRuntimeError(f"Unsupported session action: {action}")
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             if normalized == "list":
                 rows = connection.execute(
                     "SELECT * FROM logical_sessions ORDER BY updated_at DESC LIMIT ?",

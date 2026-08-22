@@ -123,6 +123,41 @@ class DurableSessionRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(SessionRuntimeError, "run_id is required"):
                 runtime.manage(action="report", session_id=started["session_id"], summary="missing lease")
 
+    def test_manage_closes_sqlite_connections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = self.make_runtime(tmp)
+            real_connect = sqlite3.connect
+            closed: list[bool] = []
+
+            class TrackingConnection:
+                def __init__(self, connection):
+                    object.__setattr__(self, "connection", connection)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def __setattr__(self, name, value):
+                    setattr(self.connection, name, value)
+
+                def __enter__(self):
+                    self.connection.__enter__()
+                    return self
+
+                def __exit__(self, *args):
+                    return self.connection.__exit__(*args)
+
+                def close(self):
+                    closed.append(True)
+                    self.connection.close()
+
+            def tracking_connect(*args, **kwargs):
+                return TrackingConnection(real_connect(*args, **kwargs))
+
+            with patch("dsh_mcp_gateway.session_runtime.sqlite3.connect", side_effect=tracking_connect):
+                runtime.manage(action="list")
+
+            self.assertEqual(closed, [True])
+
     def test_sqlite_database_is_private_before_connect_returns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.sqlite3"

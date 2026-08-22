@@ -976,6 +976,7 @@ class PublicSdkBackend:
         self._lock = threading.RLock()
         self._allocated: set[str] = set()
         self._live: set[str] = set()
+        self._prompting: dict[str, int] = {}
         self._statuses: dict[str, str] = {}
         self._events: dict[str, deque[dict[str, Any]]] = {}
         self._event_totals: dict[str, int] = {}
@@ -1019,23 +1020,38 @@ class PublicSdkBackend:
             if session_id not in self._allocated and session_id not in self._live:
                 raise KeyError(session_id)
             newly_allocated = session_id in self._allocated
+            self._prompting[session_id] = self._prompting.get(session_id, 0) + 1
         try:
             message_id = self._client.session_prompt(
                 session_id,
                 [{"type": "text", "text": text}],
             )
         except Exception as exc:
-            if newly_allocated:
-                with self._lock:
-                    if session_id in self._allocated and session_id not in self._live:
-                        try:
-                            self._catalog.remove(session_id)
-                        except (OSError, UnicodeError, ValueError) as rollback_exc:
-                            exc.add_note(f"session catalog rollback failed: {rollback_exc}")
-                        else:
-                            self._allocated.discard(session_id)
+            with self._lock:
+                remaining = self._prompting[session_id] - 1
+                if remaining:
+                    self._prompting[session_id] = remaining
+                else:
+                    self._prompting.pop(session_id, None)
+                if (
+                    newly_allocated
+                    and remaining == 0
+                    and session_id in self._allocated
+                    and session_id not in self._live
+                ):
+                    try:
+                        self._catalog.remove(session_id)
+                    except (OSError, UnicodeError, ValueError) as rollback_exc:
+                        exc.add_note(f"session catalog rollback failed: {rollback_exc}")
+                    else:
+                        self._allocated.discard(session_id)
             raise
         with self._lock:
+            remaining = self._prompting[session_id] - 1
+            if remaining:
+                self._prompting[session_id] = remaining
+            else:
+                self._prompting.pop(session_id, None)
             self._allocated.discard(session_id)
             self._live.add(session_id)
         return message_id

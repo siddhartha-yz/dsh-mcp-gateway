@@ -1796,6 +1796,72 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(backend.presence("s1"), SessionPresence.ABSENT)
             self.assertFalse(SessionCatalog(path).contains("s1"))
 
+    def test_concurrent_first_prompt_failure_does_not_erase_successful_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            first_entered = threading.Event()
+            second_entered = threading.Event()
+            allow_failure = threading.Event()
+            allow_success = threading.Event()
+
+            class ConcurrentPromptClient(FakePublicSdkClient):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self._call_lock = threading.Lock()
+                    self._call_count = 0
+
+                def session_prompt(self, session_id: str, content_blocks: list[dict[str, Any]]) -> str:
+                    with self._call_lock:
+                        self._call_count += 1
+                        call_number = self._call_count
+                    if call_number == 1:
+                        first_entered.set()
+                        self.assert_wait(allow_failure)
+                        raise RuntimeError("first prompt failed")
+                    second_entered.set()
+                    self.assert_wait(allow_success)
+                    return "sdk-message-success"
+
+                @staticmethod
+                def assert_wait(event: threading.Event) -> None:
+                    if not event.wait(timeout=2):
+                        raise RuntimeError("test synchronization timed out")
+
+            backend = PublicSdkBackend(ConcurrentPromptClient(), SessionCatalog(path))
+            backend.create("s1")
+            errors: list[BaseException] = []
+            results: list[str] = []
+
+            def fail_prompt() -> None:
+                try:
+                    backend.prompt("s1", "first")
+                except BaseException as exc:  # noqa: BLE001 - captured for cross-thread test assertion.
+                    errors.append(exc)
+
+            def succeed_prompt() -> None:
+                try:
+                    results.append(backend.prompt("s1", "second"))
+                except BaseException as exc:  # noqa: BLE001 - captured for cross-thread test assertion.
+                    errors.append(exc)
+
+            first = threading.Thread(target=fail_prompt)
+            second = threading.Thread(target=succeed_prompt)
+            first.start()
+            self.assertTrue(first_entered.wait(timeout=1))
+            second.start()
+            self.assertTrue(second_entered.wait(timeout=1))
+            allow_failure.set()
+            first.join(timeout=1)
+            allow_success.set()
+            second.join(timeout=1)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(results, ["sdk-message-success"])
+            self.assertEqual([str(exc) for exc in errors], ["first prompt failed"])
+            self.assertEqual(backend.presence("s1"), SessionPresence.LIVE)
+            self.assertTrue(SessionCatalog(path).contains("s1"))
+
     def test_failed_first_prompt_with_catalog_rollback_failure_stays_reusable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

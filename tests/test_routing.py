@@ -1620,22 +1620,41 @@ class PublicSdkBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"
             observed_modes: list[int] = []
-            original_write_text = Path.write_text
+            original_fdopen = os.fdopen
 
-            def recording_write_text(target: Path, *args: Any, **kwargs: Any) -> int:
-                written = original_write_text(target, *args, **kwargs)
-                if target.name.startswith(".sessions.json.") and target.name.endswith(".tmp"):
-                    observed_modes.append(target.stat().st_mode & 0o777)
-                return written
+            def recording_fdopen(fd: int, *args: Any, **kwargs: Any):
+                observed_modes.append(os.fstat(fd).st_mode & 0o777)
+                return original_fdopen(fd, *args, **kwargs)
 
             previous_umask = os.umask(0o022)
             try:
-                with patch.object(Path, "write_text", recording_write_text):
+                with patch("dsh_mcp_gateway.backend.os.fdopen", recording_fdopen):
                     SessionCatalog(path).add("s1")
             finally:
                 os.umask(previous_umask)
 
             self.assertEqual(observed_modes, [0o600])
+
+    def test_catalog_temp_file_cannot_be_swapped_to_symlink_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.json"
+            target = root / "target.txt"
+            target.write_text("sentinel\n", encoding="utf-8")
+            original_write_text = Path.write_text
+
+            def swap_before_write(temp_path: Path, *args: Any, **kwargs: Any) -> int:
+                if temp_path.name.startswith(".sessions.json.") and temp_path.name.endswith(".tmp"):
+                    temp_path.unlink()
+                    temp_path.symlink_to(target)
+                return original_write_text(temp_path, *args, **kwargs)
+
+            with patch.object(Path, "write_text", swap_before_write):
+                SessionCatalog(path).add("s1")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(SessionCatalog(path).ids(), ["s1"])
 
     def test_catalog_rolls_back_memory_when_persistence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

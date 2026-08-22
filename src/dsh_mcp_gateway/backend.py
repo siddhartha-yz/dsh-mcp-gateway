@@ -202,14 +202,18 @@ class SessionCatalog:
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        tmp.touch(mode=0o600, exist_ok=False)
+        descriptor = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
         try:
-            tmp.write_text(
-                json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                descriptor = -1
+                file.write(
+                    json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n"
+                )
             tmp.replace(self.path)
         except (OSError, UnicodeError):
+            if descriptor >= 0:
+                os.close(descriptor)
             tmp.unlink(missing_ok=True)
             raise
 

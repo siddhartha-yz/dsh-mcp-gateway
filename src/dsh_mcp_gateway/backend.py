@@ -205,17 +205,25 @@ class SessionCatalog:
         descriptor = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
         try:
             os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                descriptor = -1
-                file.write(
-                    json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n"
-                )
+            payload = (
+                json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n"
+            ).encode("utf-8")
+            offset = 0
+            while offset < len(payload):
+                written = os.write(descriptor, payload[offset:])
+                if written <= 0:
+                    raise OSError("failed to write session catalog temp file")
+                offset += written
+            opened = os.fstat(descriptor)
+            linked = os.stat(tmp, follow_symlinks=False)
+            if (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino):
+                raise OSError("session catalog temp file changed during save")
             tmp.replace(self.path)
         except (OSError, UnicodeError):
-            if descriptor >= 0:
-                os.close(descriptor)
             tmp.unlink(missing_ok=True)
             raise
+        finally:
+            os.close(descriptor)
 
 
 class ExperimentalWebHostError(RuntimeError):

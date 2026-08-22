@@ -1620,41 +1620,49 @@ class PublicSdkBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"
             observed_modes: list[int] = []
-            original_fdopen = os.fdopen
+            original_write = os.write
 
-            def recording_fdopen(fd: int, *args: Any, **kwargs: Any):
+            def recording_write(fd: int, data: bytes) -> int:
                 observed_modes.append(os.fstat(fd).st_mode & 0o777)
-                return original_fdopen(fd, *args, **kwargs)
+                return original_write(fd, data)
 
             previous_umask = os.umask(0o022)
             try:
-                with patch("dsh_mcp_gateway.backend.os.fdopen", recording_fdopen):
+                with patch("dsh_mcp_gateway.backend.os.write", recording_write):
                     SessionCatalog(path).add("s1")
             finally:
                 os.umask(previous_umask)
 
-            self.assertEqual(observed_modes, [0o600])
+            self.assertTrue(observed_modes)
+            self.assertTrue(all(mode == 0o600 for mode in observed_modes))
 
-    def test_catalog_temp_file_cannot_be_swapped_to_symlink_before_write(self) -> None:
+    def test_catalog_temp_file_cannot_be_swapped_to_symlink_after_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             path = root / "sessions.json"
             target = root / "target.txt"
             target.write_text("sentinel\n", encoding="utf-8")
-            original_write_text = Path.write_text
+            original_write = os.write
+            swapped = False
 
-            def swap_before_write(temp_path: Path, *args: Any, **kwargs: Any) -> int:
-                if temp_path.name.startswith(".sessions.json.") and temp_path.name.endswith(".tmp"):
-                    temp_path.unlink()
-                    temp_path.symlink_to(target)
-                return original_write_text(temp_path, *args, **kwargs)
+            def swap_after_open(fd: int, data: bytes) -> int:
+                nonlocal swapped
+                opened = Path(os.readlink(f"/proc/self/fd/{fd}"))
+                if not swapped and opened.name.startswith(".sessions.json.") and opened.name.endswith(".tmp"):
+                    opened.unlink()
+                    opened.symlink_to(target)
+                    swapped = True
+                return original_write(fd, data)
 
-            with patch.object(Path, "write_text", swap_before_write):
+            with (
+                patch("dsh_mcp_gateway.backend.os.write", swap_after_open),
+                self.assertRaises(OSError),
+            ):
                 SessionCatalog(path).add("s1")
 
+            self.assertTrue(swapped)
             self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
-            self.assertFalse(path.is_symlink())
-            self.assertEqual(SessionCatalog(path).ids(), ["s1"])
+            self.assertFalse(path.exists())
 
     def test_catalog_rolls_back_memory_when_persistence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

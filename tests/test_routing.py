@@ -1664,6 +1664,34 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
             self.assertFalse(path.exists())
 
+    def test_catalog_temp_file_cannot_be_swapped_to_symlink_before_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.json"
+            target = root / "target.txt"
+            target.write_text("sentinel\n", encoding="utf-8")
+            original_replace = os.replace
+            swapped = False
+
+            def swap_before_replace(src: str | bytes, dst: str | bytes, *args: Any, **kwargs: Any) -> None:
+                nonlocal swapped
+                source = Path(src)
+                if source.name.startswith(".sessions.json.") and source.name.endswith(".tmp"):
+                    source.unlink()
+                    source.symlink_to(target)
+                    swapped = True
+                original_replace(src, dst, *args, **kwargs)
+
+            with (
+                patch("dsh_mcp_gateway.backend.os.replace", swap_before_replace),
+                self.assertRaises(OSError),
+            ):
+                SessionCatalog(path).add("s1")
+
+            self.assertTrue(swapped)
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertFalse(path.exists())
+
     def test_catalog_rolls_back_memory_when_persistence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

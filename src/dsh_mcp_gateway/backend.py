@@ -219,6 +219,10 @@ class SessionCatalog:
             if (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino):
                 raise OSError("session catalog temp file changed during save")
             tmp.replace(self.path)
+            published = os.stat(self.path, follow_symlinks=False)
+            if (opened.st_dev, opened.st_ino) != (published.st_dev, published.st_ino):
+                self.path.unlink(missing_ok=True)
+                raise OSError("session catalog changed during publication")
         except (OSError, UnicodeError):
             tmp.unlink(missing_ok=True)
             raise

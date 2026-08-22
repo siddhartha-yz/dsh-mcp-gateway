@@ -1024,12 +1024,16 @@ class PublicSdkBackend:
                 session_id,
                 [{"type": "text", "text": text}],
             )
-        except Exception:
+        except Exception as exc:
             if newly_allocated:
                 with self._lock:
                     if session_id in self._allocated and session_id not in self._live:
-                        self._allocated.discard(session_id)
-                        self._catalog.remove(session_id)
+                        try:
+                            self._catalog.remove(session_id)
+                        except (OSError, UnicodeError, ValueError) as rollback_exc:
+                            exc.add_note(f"session catalog rollback failed: {rollback_exc}")
+                        else:
+                            self._allocated.discard(session_id)
             raise
         with self._lock:
             self._allocated.discard(session_id)

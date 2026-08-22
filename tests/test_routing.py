@@ -1796,6 +1796,25 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(backend.presence("s1"), SessionPresence.ABSENT)
             self.assertFalse(SessionCatalog(path).contains("s1"))
 
+    def test_failed_first_prompt_with_catalog_rollback_failure_stays_reusable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            catalog = SessionCatalog(path)
+            client = FakePublicSdkClient()
+            client.fail = True
+            backend = PublicSdkBackend(client, catalog)
+            backend.create("s1")
+
+            with (
+                patch.object(catalog, "remove", side_effect=OSError("disk full during rollback")),
+                self.assertRaisesRegex(RuntimeError, "sdk prompt failed"),
+            ):
+                backend.prompt("s1", "work")
+
+            self.assertEqual(backend.presence("s1"), SessionPresence.LIVE)
+            self.assertEqual(backend.reuse("s1"), SessionHandle("s1"))
+            self.assertTrue(SessionCatalog(path).contains("s1"))
+
     def test_failed_prompt_keeps_catalog_if_notification_already_marked_session_live(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

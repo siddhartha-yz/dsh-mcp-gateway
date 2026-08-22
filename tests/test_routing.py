@@ -7,6 +7,7 @@ import multiprocessing
 import os
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1973,6 +1974,39 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(bridge.backend.history("s1"), [{"type": "goal/change", "seq": 4}])
             bridge.close()
             self.assertTrue(client.subscription.closed)
+
+    def test_notification_bridge_recovers_after_transient_poll_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakePublicSdkClient()
+            real_drain = client.subscription.drain
+            attempts = 0
+
+            def flaky_drain(on_notification: Any) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise OSError("transient subscription failure")
+                real_drain(on_notification)
+
+            client.subscription.drain = flaky_drain  # type: ignore[method-assign]
+            bridge = PublicSdkBridge(
+                client,
+                SessionCatalog(Path(tmp) / "sessions.json"),
+                poll_interval_s=0.01,
+            )
+            GatewayService(bridge.backend).start("work", session_id="s1")
+            client.subscription.emit(
+                {"method": "session.status", "payload": {"sessionId": "s1", "status": "running"}}
+            )
+            bridge.start()
+            try:
+                deadline = time.monotonic() + 1
+                while bridge.backend.status("s1")["status"] != "running" and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(bridge.backend.status("s1")["status"], "running")
+                self.assertIsInstance(bridge.last_error, OSError)
+            finally:
+                bridge.close()
 
 
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None

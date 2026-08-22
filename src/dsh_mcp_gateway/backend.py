@@ -939,7 +939,6 @@ class PublicSdkBridge:
                 self.poll_once()
             except Exception as exc:  # noqa: BLE001 - SDK subscription is an external transport boundary.
                 self.last_error = exc
-                return
             self._closed.wait(self._poll_interval_s)
 
     def _record(self, notification: Any) -> None:

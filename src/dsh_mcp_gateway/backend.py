@@ -164,11 +164,36 @@ class SessionCatalog:
                 self._ids = persisted
                 raise
 
+    def _open_parent_dir(self) -> int:
+        parent = self.path.parent.absolute()
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for part in parent.parts[1:]:
+                try:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                except FileNotFoundError:
+                    os.mkdir(part, mode=0o700, dir_fd=fd)
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
     @contextmanager
     def _process_disk_lock(self) -> Iterator[None]:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self.path.with_name(f".{self.path.name}.lock")
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        parent_fd = self._open_parent_dir()
+        lock_name = f".{self.path.name}.lock"
+        try:
+            descriptor = os.open(
+                lock_name,
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        finally:
+            os.close(parent_fd)
         try:
             os.fchmod(descriptor, 0o600)
             fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -180,10 +205,18 @@ class SessionCatalog:
                 os.close(descriptor)
 
     def _load(self) -> set[str]:
+        parent_fd = self._open_parent_dir()
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            return set()
+            try:
+                descriptor = os.open(
+                    self.path.name,
+                    os.O_RDONLY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            except FileNotFoundError:
+                return set()
+        finally:
+            os.close(parent_fd)
         try:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, encoding="utf-8") as file:
@@ -200,9 +233,14 @@ class SessionCatalog:
         return set(sessions)
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        descriptor = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        parent_fd = self._open_parent_dir()
+        tmp_name = f".{self.path.name}.{uuid.uuid4().hex}.tmp"
+        descriptor = os.open(
+            tmp_name,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
         try:
             os.fchmod(descriptor, 0o600)
             payload = (
@@ -215,19 +253,28 @@ class SessionCatalog:
                     raise OSError("failed to write session catalog temp file")
                 offset += written
             opened = os.fstat(descriptor)
-            linked = os.stat(tmp, follow_symlinks=False)
+            linked = os.stat(tmp_name, dir_fd=parent_fd, follow_symlinks=False)
             if (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino):
                 raise OSError("session catalog temp file changed during save")
-            tmp.replace(self.path)
-            published = os.stat(self.path, follow_symlinks=False)
+            os.replace(
+                tmp_name,
+                self.path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            published = os.stat(self.path.name, dir_fd=parent_fd, follow_symlinks=False)
             if (opened.st_dev, opened.st_ino) != (published.st_dev, published.st_ino):
-                self.path.unlink(missing_ok=True)
+                os.unlink(self.path.name, dir_fd=parent_fd)
                 raise OSError("session catalog changed during publication")
         except (OSError, UnicodeError):
-            tmp.unlink(missing_ok=True)
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
             raise
         finally:
             os.close(descriptor)
+            os.close(parent_fd)
 
 
 class ExperimentalWebHostError(RuntimeError):

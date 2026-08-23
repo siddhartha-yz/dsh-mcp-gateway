@@ -1603,6 +1603,21 @@ class PublicSdkBackendTests(unittest.TestCase):
                 '{"version":1,"sessions":["victim"]}\n',
             )
 
+    def test_catalog_path_rejects_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+            path = alias / "sessions.json"
+
+            with self.assertRaises(OSError):
+                SessionCatalog(path)
+
+            self.assertFalse((target / "sessions.json").exists())
+            self.assertEqual(list(target.iterdir()), [])
+
     def test_catalog_file_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"
@@ -1677,6 +1692,9 @@ class PublicSdkBackendTests(unittest.TestCase):
             def swap_before_replace(src: str | bytes, dst: str | bytes, *args: Any, **kwargs: Any) -> None:
                 nonlocal swapped
                 source = Path(src)
+                src_dir_fd = kwargs.get("src_dir_fd")
+                if src_dir_fd is not None:
+                    source = Path(os.readlink(f"/proc/self/fd/{src_dir_fd}")) / source
                 if source.name.startswith(".sessions.json.") and source.name.endswith(".tmp"):
                     source.unlink()
                     source.symlink_to(target)
@@ -1699,7 +1717,7 @@ class PublicSdkBackendTests(unittest.TestCase):
             catalog = SessionCatalog(path)
 
             with (
-                patch.object(Path, "replace", side_effect=OSError("disk full")),
+                patch("dsh_mcp_gateway.backend.os.replace", side_effect=OSError("disk full")),
                 self.assertRaisesRegex(OSError, "disk full"),
             ):
                 catalog.add("s1")
@@ -1708,7 +1726,7 @@ class PublicSdkBackendTests(unittest.TestCase):
 
             catalog.add("s1")
             with (
-                patch.object(Path, "replace", side_effect=OSError("disk full")),
+                patch("dsh_mcp_gateway.backend.os.replace", side_effect=OSError("disk full")),
                 self.assertRaisesRegex(OSError, "disk full"),
             ):
                 catalog.remove("s1")

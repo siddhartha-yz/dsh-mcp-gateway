@@ -260,12 +260,35 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_backup_validates_workspace_selection_before_creating_output(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
         validation = 'python3 - "$WORKSPACE" "$OUTPUT" "${WORKSPACE_PATHS[@]}" <<\'PY\''
-        create_output = 'install -d -m 0700 "$OUTPUT"'
+        create_output = 'python3 - "$OUTPUT" create-output <<\'PY\''
         self.assertLess(
             backup.index(validation),
             backup.index(create_output),
             "invalid workspace selections must fail before leaving a partial backup output directory",
         )
+
+    def test_backup_output_creation_rejects_symlink_race(self) -> None:
+        creation = extract_python_heredoc(BACKUP_HOST, 'python3 - "$OUTPUT" create-output <<\'PY\'')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            target.chmod(0o755)
+            output = root / "backup-output"
+            output.symlink_to(target, target_is_directory=True)
+
+            result = subprocess.run(
+                [sys.executable, "-c", creation, str(output)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(output.is_symlink())
+            self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(list(target.iterdir()), [])
 
     def test_failed_backup_snapshot_removes_partial_output(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")

@@ -86,7 +86,11 @@ for raw in sys.argv[3:]:
         raise SystemExit(f"workspace path does not exist: {raw}")
 PY
 
-install -d -m 0700 "$OUTPUT"
+python3 - "$OUTPUT" create-output <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.mkdir(mode=0o700, parents=True, exist_ok=False)
+PY
 BACKUP_COMPLETE=0
 cleanup_partial_output() {
   local original_rc=$?

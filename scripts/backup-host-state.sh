@@ -87,9 +87,36 @@ for raw in sys.argv[3:]:
 PY
 
 python3 - "$OUTPUT" create-output <<'PY'
-import pathlib, sys
+import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-path.mkdir(mode=0o700, parents=True, exist_ok=False)
+if not path.is_absolute():
+    raise SystemExit("backup output path must be absolute")
+parts = path.parts[1:]
+fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+try:
+    for index, part in enumerate(parts):
+        last = index == len(parts) - 1
+        if last:
+            os.mkdir(part, mode=0o700, dir_fd=fd)
+        try:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except FileNotFoundError:
+            if last:
+                raise
+            os.mkdir(part, mode=0o700, dir_fd=fd)
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            if last:
+                try:
+                    os.rmdir(part, dir_fd=fd)
+                except OSError:
+                    pass
+            raise
+        os.close(fd)
+        fd = child
+    os.fchmod(fd, 0o700)
+finally:
+    os.close(fd)
 PY
 BACKUP_COMPLETE=0
 cleanup_partial_output() {

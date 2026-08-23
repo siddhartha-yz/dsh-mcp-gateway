@@ -313,6 +313,33 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o755)
             self.assertEqual(list(target.iterdir()), [])
 
+    def test_backup_and_restore_creation_reject_symlinked_ancestor(self) -> None:
+        cases = (
+            (BACKUP_HOST, 'python3 - "$OUTPUT" create-output <<\'PY\'', "backup-output"),
+            (VERIFY_BACKUP, 'python3 - "$RESTORE_ROOT" create-root <<\'PY\'', "restore-root"),
+        )
+        for script, marker, leaf in cases:
+            with self.subTest(script=script.name):
+                creation = extract_python_heredoc(script, marker)
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    target = root / "target"
+                    target.mkdir()
+                    alias = root / "alias"
+                    alias.symlink_to(target, target_is_directory=True)
+                    requested = alias / leaf
+
+                    result = subprocess.run(
+                        [sys.executable, "-c", creation, str(requested)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((target / leaf).exists())
+
     def test_failed_backup_snapshot_removes_partial_output(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
         start = backup.index('OUTPUT="$(python3 - "$OUTPUT"')

@@ -1064,6 +1064,12 @@ class PublicSdkBackend:
             event = payload.get("event")
             if not isinstance(event, dict):
                 return
+            event_type = event.get("type")
+            event_seq = event.get("seq")
+            if not isinstance(event_type, str) or not event_type:
+                return
+            if not isinstance(event_seq, int) or isinstance(event_seq, bool) or event_seq < 0:
+                return
         else:
             return
         session_id = payload.get("sessionId")

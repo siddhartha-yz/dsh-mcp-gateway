@@ -1742,6 +1742,11 @@ class PublicSdkBackendTests(unittest.TestCase):
             backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(path))
 
             backend.observe_notification("session.event", {"sessionId": "ghost"})
+            backend.observe_notification("session.event", {"sessionId": "ghost", "event": {}})
+            backend.observe_notification(
+                "session.event",
+                {"sessionId": "ghost", "event": {"type": "turn/start", "seq": -1}},
+            )
 
             self.assertEqual(backend.presence("ghost"), SessionPresence.ABSENT)
             self.assertFalse(path.exists())

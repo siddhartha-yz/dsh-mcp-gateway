@@ -1056,7 +1056,15 @@ class PublicSdkBackend:
         return message_id
 
     def observe_notification(self, method: str, payload: dict[str, Any]) -> None:
-        if method not in {"session.status", "session.event"}:
+        if method == "session.status":
+            status = payload.get("status")
+            if not isinstance(status, str) or not status:
+                return
+        elif method == "session.event":
+            event = payload.get("event")
+            if not isinstance(event, dict):
+                return
+        else:
             return
         session_id = payload.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
@@ -1065,14 +1073,14 @@ class PublicSdkBackend:
             self._catalog.add(session_id)
             self._allocated.discard(session_id)
             self._live.add(session_id)
-            if method == "session.status" and isinstance(payload.get("status"), str):
-                self._statuses[session_id] = payload["status"]
-            elif method == "session.event" and isinstance(payload.get("event"), dict):
+            if method == "session.status":
+                self._statuses[session_id] = status
+            else:
                 events = self._events.get(session_id)
                 if events is None:
                     events = deque(maxlen=self._event_buffer_size)
                     self._events[session_id] = events
-                events.append(dict(payload["event"]))
+                events.append(dict(event))
                 self._event_totals[session_id] = self._event_totals.get(session_id, 0) + 1
 
     def status(self, session_id: str) -> dict[str, Any]:

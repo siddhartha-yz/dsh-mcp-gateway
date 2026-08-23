@@ -1736,6 +1736,17 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertEqual(SessionCatalog(path).ids(), [])
 
+    def test_malformed_session_event_does_not_create_ghost_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(path))
+
+            backend.observe_notification("session.event", {"sessionId": "ghost"})
+
+            self.assertEqual(backend.presence("ghost"), SessionPresence.ABSENT)
+            self.assertFalse(path.exists())
+            self.assertEqual(SessionCatalog(path).ids(), [])
+
     def test_live_prompt_then_notifications_project_status_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()

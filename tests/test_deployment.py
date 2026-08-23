@@ -290,6 +290,29 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o755)
             self.assertEqual(list(target.iterdir()), [])
 
+    def test_restore_root_creation_rejects_symlink_race(self) -> None:
+        creation = extract_python_heredoc(VERIFY_BACKUP, 'python3 - "$RESTORE_ROOT" create-root <<\'PY\'')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            target.chmod(0o755)
+            restore_root = root / "restore-root"
+            restore_root.symlink_to(target, target_is_directory=True)
+
+            result = subprocess.run(
+                [sys.executable, "-c", creation, str(restore_root)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(restore_root.is_symlink())
+            self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(list(target.iterdir()), [])
+
     def test_failed_backup_snapshot_removes_partial_output(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
         start = backup.index('OUTPUT="$(python3 - "$OUTPUT"')

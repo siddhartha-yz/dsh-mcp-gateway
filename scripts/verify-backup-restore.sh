@@ -77,6 +77,11 @@ done
   sha256sum -c SHA256SUMS
 )
 
+python3 - "$RESTORE_ROOT" create-root <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.mkdir(mode=0o700, parents=True, exist_ok=False)
+PY
 install -d -m 0700 "$RESTORE_ROOT/system" "$RESTORE_ROOT/workspace" "$RESTORE_ROOT/logs"
 tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz" -C "$RESTORE_ROOT/system"
 tar --no-same-owner -xzf "$BACKUP/gateway-state.tar.gz" -C "$RESTORE_ROOT/system"

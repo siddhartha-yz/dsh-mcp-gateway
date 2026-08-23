@@ -100,6 +100,38 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(observed_modes)
             self.assertEqual(observed_modes[0], 0o600)
 
+    def test_sqlite_connection_is_closed_when_schema_setup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OAuthStore(Path(tmp) / "oauth.sqlite3")
+            real_connect = sqlite3.connect
+            closed: list[bool] = []
+
+            class TrackingConnection:
+                def __init__(self, connection):
+                    object.__setattr__(self, "connection", connection)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def __setattr__(self, name, value):
+                    setattr(self.connection, name, value)
+
+                def close(self):
+                    closed.append(True)
+                    self.connection.close()
+
+            def tracking_connect(*args, **kwargs):
+                return TrackingConnection(real_connect(*args, **kwargs))
+
+            with (
+                patch("dsh_mcp_gateway.oauth.sqlite3.connect", side_effect=tracking_connect),
+                patch.object(store, "_ensure_schema", side_effect=sqlite3.OperationalError("schema failure")),
+                self.assertRaisesRegex(sqlite3.OperationalError, "schema failure"),
+            ):
+                store._connect()
+
+            self.assertEqual(closed, [True])
+
     def test_sqlite_database_rejects_symlinked_state_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

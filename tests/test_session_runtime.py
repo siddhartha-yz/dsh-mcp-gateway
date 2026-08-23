@@ -158,6 +158,39 @@ class DurableSessionRuntimeTests(unittest.TestCase):
 
             self.assertEqual(closed, [True])
 
+    def test_connect_closes_sqlite_connection_when_post_connect_setup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = DurableSessionRuntime.__new__(DurableSessionRuntime)
+            runtime.database = Path(tmp) / "sessions.sqlite3"
+            real_connect = sqlite3.connect
+            closed: list[bool] = []
+
+            class TrackingConnection:
+                def __init__(self, connection):
+                    object.__setattr__(self, "connection", connection)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def __setattr__(self, name, value):
+                    setattr(self.connection, name, value)
+
+                def close(self):
+                    closed.append(True)
+                    self.connection.close()
+
+            def tracking_connect(*args, **kwargs):
+                return TrackingConnection(real_connect(*args, **kwargs))
+
+            with (
+                patch.object(runtime, "_secure_sidecars", side_effect=[None, OSError("sidecar race")]),
+                patch("dsh_mcp_gateway.session_runtime.sqlite3.connect", side_effect=tracking_connect),
+                self.assertRaisesRegex(OSError, "sidecar race"),
+            ):
+                runtime._connect()
+
+            self.assertEqual(closed, [True])
+
     def test_sqlite_database_is_private_before_connect_returns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.sqlite3"

@@ -56,11 +56,15 @@ class DurableSessionRuntime:
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=10.0)
         finally:
             os.close(fd)
-        self._secure_sidecars()
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 10000")
-        return connection
+        try:
+            self._secure_sidecars()
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 10000")
+            return connection
+        except BaseException:
+            connection.close()
+            raise
 
     @contextmanager
     def _connection(self):

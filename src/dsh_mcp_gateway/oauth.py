@@ -186,10 +186,14 @@ class OAuthStore:
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=5)
         finally:
             os.close(fd)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        self._ensure_schema(connection)
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            self._ensure_schema(connection)
+            return connection
+        except BaseException:
+            connection.close()
+            raise
 
     @contextmanager
     def connection(self):

@@ -1715,6 +1715,16 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertTrue(catalog.contains("s1"))
             self.assertTrue(SessionCatalog(path).contains("s1"))
 
+    def test_malformed_empty_session_notification_does_not_corrupt_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            backend = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(path))
+
+            backend.observe_notification("session.status", {"sessionId": "", "status": "running"})
+
+            self.assertFalse(path.exists())
+            self.assertEqual(SessionCatalog(path).ids(), [])
+
     def test_live_prompt_then_notifications_project_status_and_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             client = FakePublicSdkClient()

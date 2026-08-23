@@ -1057,7 +1057,7 @@ class PublicSdkBackend:
 
     def observe_notification(self, method: str, payload: dict[str, Any]) -> None:
         session_id = payload.get("sessionId")
-        if not isinstance(session_id, str):
+        if not isinstance(session_id, str) or not session_id:
             return
         with self._lock:
             self._catalog.add(session_id)

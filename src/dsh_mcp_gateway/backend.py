@@ -1056,6 +1056,8 @@ class PublicSdkBackend:
         return message_id
 
     def observe_notification(self, method: str, payload: dict[str, Any]) -> None:
+        if method not in {"session.status", "session.event"}:
+            return
         session_id = payload.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             return

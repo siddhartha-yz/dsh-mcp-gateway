@@ -1618,6 +1618,28 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertFalse((target / "sessions.json").exists())
             self.assertEqual(list(target.iterdir()), [])
 
+    def test_catalog_parent_creation_tolerates_concurrent_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "state" / "sessions.json"
+            real_mkdir = os.mkdir
+            raced = False
+
+            def raced_mkdir(*args, **kwargs):
+                nonlocal raced
+                real_mkdir(*args, **kwargs)
+                if not raced:
+                    raced = True
+                    raise FileExistsError("directory was concurrently created")
+
+            with patch("dsh_mcp_gateway.backend.os.mkdir", side_effect=raced_mkdir):
+                catalog = SessionCatalog(path)
+                catalog.add("s1")
+
+            self.assertTrue(raced)
+            self.assertEqual(catalog.ids(), ["s1"])
+            self.assertTrue(path.exists())
+
     def test_catalog_file_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

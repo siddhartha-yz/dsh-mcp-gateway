@@ -159,6 +159,27 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(list(target.iterdir()), [])
 
+    def test_sqlite_parent_creation_tolerates_concurrent_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "state" / "oauth.sqlite3"
+            real_mkdir = os.mkdir
+            raced = False
+
+            def raced_mkdir(*args, **kwargs):
+                nonlocal raced
+                real_mkdir(*args, **kwargs)
+                if not raced:
+                    raced = True
+                    raise FileExistsError("directory was concurrently created")
+
+            with patch("dsh_mcp_gateway.oauth.os.mkdir", side_effect=raced_mkdir):
+                connection = OAuthStore(path)._connect()
+                connection.close()
+
+            self.assertTrue(raced)
+            self.assertTrue(path.exists())
+
     def test_sqlite_database_cannot_be_swapped_to_symlink_before_connect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -94,7 +94,10 @@ try:
         except FileNotFoundError:
             if last:
                 raise
-            os.mkdir(part, mode=0o700, dir_fd=fd)
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
         except OSError:
             if last:

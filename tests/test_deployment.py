@@ -313,6 +313,44 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o755)
             self.assertEqual(list(target.iterdir()), [])
 
+    def test_backup_and_restore_creation_tolerate_concurrent_parent_creator(self) -> None:
+        cases = (
+            (BACKUP_HOST, 'python3 - "$OUTPUT" create-output <<\'PY\'', "backup-output"),
+            (VERIFY_BACKUP, 'python3 - "$RESTORE_ROOT" create-root <<\'PY\'', "restore-root"),
+        )
+        for script, marker, leaf in cases:
+            with self.subTest(script=script.name):
+                creation = extract_python_heredoc(script, marker)
+                creation = creation.replace(
+                    "import os, pathlib, sys\n",
+                    "import os, pathlib, sys\n"
+                    "_real_mkdir = os.mkdir\n"
+                    "_raced = False\n"
+                    "def _raced_mkdir(*args, **kwargs):\n"
+                    "    global _raced\n"
+                    "    _real_mkdir(*args, **kwargs)\n"
+                    "    if not _raced:\n"
+                    "        _raced = True\n"
+                    "        raise FileExistsError('directory was concurrently created')\n"
+                    "os.mkdir = _raced_mkdir\n",
+                    1,
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    requested = root / "concurrent-parent" / leaf
+
+                    result = subprocess.run(
+                        [sys.executable, "-c", creation, str(requested)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(requested.is_dir())
+                    self.assertEqual(requested.stat().st_mode & 0o777, 0o700)
+
     def test_backup_and_restore_creation_reject_symlinked_ancestor(self) -> None:
         cases = (
             (BACKUP_HOST, 'python3 - "$OUTPUT" create-output <<\'PY\'', "backup-output"),

@@ -235,13 +235,14 @@ class SessionCatalog:
     def _save(self) -> None:
         parent_fd = self._open_parent_dir()
         tmp_name = f".{self.path.name}.{uuid.uuid4().hex}.tmp"
-        descriptor = os.open(
-            tmp_name,
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
-            0o600,
-            dir_fd=parent_fd,
-        )
+        descriptor = -1
         try:
+            descriptor = os.open(
+                tmp_name,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
             os.fchmod(descriptor, 0o600)
             payload = (
                 json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n"
@@ -273,7 +274,8 @@ class SessionCatalog:
                 pass
             raise
         finally:
-            os.close(descriptor)
+            if descriptor >= 0:
+                os.close(descriptor)
             os.close(parent_fd)
 
 

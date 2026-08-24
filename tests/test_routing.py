@@ -1711,6 +1711,28 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
             self.assertFalse(path.exists())
 
+    def test_catalog_save_closes_parent_fd_when_temp_open_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            catalog = SessionCatalog(path)
+            original_open = os.open
+
+            def fail_temp_open(file: str | bytes | os.PathLike[str], flags: int, *args: Any, **kwargs: Any) -> int:
+                if flags & os.O_EXCL:
+                    raise OSError("temp open failed")
+                return original_open(file, flags, *args, **kwargs)
+
+            before = len(os.listdir("/proc/self/fd"))
+            with (
+                patch("dsh_mcp_gateway.backend.os.open", fail_temp_open),
+                self.assertRaisesRegex(OSError, "temp open failed"),
+            ):
+                catalog.add("s1")
+            after = len(os.listdir("/proc/self/fd"))
+
+            self.assertEqual(after, before)
+            self.assertFalse(path.exists())
+
     def test_catalog_rolls_back_memory_when_persistence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

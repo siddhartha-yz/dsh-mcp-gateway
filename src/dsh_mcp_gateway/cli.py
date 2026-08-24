@@ -223,7 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as exc:
             raise SystemExit(f"invalid --dsh-web-url: {exc}") from exc
         service = GatewayService(backend)
-    state_dir = Path(args.state_dir).resolve()
+    state_dir = Path(args.state_dir).absolute()
     oauth = EmbeddedOAuthConfig(
         issuer_url=public_base,
         resource_url=f"{public_base}/mcp",

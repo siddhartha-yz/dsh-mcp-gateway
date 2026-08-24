@@ -198,6 +198,35 @@ class CliTests(unittest.TestCase):
         self.assertIn("127.0.0.1:*", security.allowed_hosts)
         self.assertIn("https://gateway.example.com", security.allowed_origins)
 
+    def test_state_dir_symlink_ancestor_is_not_resolved_away(self) -> None:
+        fake_server = Mock()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+
+            with (
+                patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+                patch(
+                    "dsh_mcp_gateway.cli.build_embedded_oauth_server",
+                    return_value=(fake_server, Mock()),
+                ),
+                self.assertRaises(OSError),
+            ):
+                main(
+                    [
+                        "--public-base-url",
+                        "https://gateway.example.com",
+                        "--state-dir",
+                        str(alias),
+                    ]
+                )
+
+            self.assertEqual(list(target.iterdir()), [])
+
     def test_primary_harness_mode_wires_generic_bridge_without_gateway_session_runtime(self) -> None:
         fake_bridge = Mock()
         fake_bridge.base_url = "http://127.0.0.1:3080"

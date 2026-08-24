@@ -226,6 +226,19 @@ class DurableSessionRuntimeTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
+    def test_sqlite_database_rejects_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                DurableSessionRuntime(alias / "sessions.sqlite3")
+
+            self.assertEqual(list(target.iterdir()), [])
+
     def test_sqlite_database_rejects_symlinked_sidecar_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

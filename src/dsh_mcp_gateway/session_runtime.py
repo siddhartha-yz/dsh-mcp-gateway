@@ -32,25 +32,57 @@ class DurableSessionRuntime:
 
     def __init__(self, database: str | Path) -> None:
         self.database = Path(database)
-        self.database.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._initialize()
 
-    def _secure_sidecars(self) -> None:
-        for suffix in ("-wal", "-shm"):
-            path = Path(f"{self.database}{suffix}")
-            try:
-                fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
-            except FileNotFoundError:
-                continue
-            try:
-                os.fchmod(fd, 0o600)
-            finally:
+    def _open_parent_dir(self) -> int:
+        parent = self.database.parent.absolute()
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for part in parent.parts[1:]:
+                try:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                except FileNotFoundError:
+                    os.mkdir(part, mode=0o700, dir_fd=fd)
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 os.close(fd)
+                fd = child
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def _secure_sidecars(self) -> None:
+        parent_fd = self._open_parent_dir()
+        try:
+            for suffix in ("-wal", "-shm"):
+                try:
+                    fd = os.open(
+                        f"{self.database.name}{suffix}",
+                        os.O_RDWR | os.O_NOFOLLOW,
+                        dir_fd=parent_fd,
+                    )
+                except FileNotFoundError:
+                    continue
+                try:
+                    os.fchmod(fd, 0o600)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(parent_fd)
 
     def _connect(self) -> sqlite3.Connection:
         self._secure_sidecars()
-        fd = os.open(self.database, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        parent_fd = self._open_parent_dir()
+        try:
+            fd = os.open(
+                self.database.name,
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        finally:
+            os.close(parent_fd)
         try:
             os.fchmod(fd, 0o600)
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=10.0)

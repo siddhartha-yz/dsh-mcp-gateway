@@ -146,6 +146,19 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
+    def test_sqlite_database_rejects_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                OAuthStore(alias / "oauth.sqlite3")._connect()
+
+            self.assertEqual(list(target.iterdir()), [])
+
     def test_sqlite_database_cannot_be_swapped_to_symlink_before_connect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

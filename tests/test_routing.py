@@ -1914,7 +1914,7 @@ class PublicSdkBackendTests(unittest.TestCase):
             backend = PublicSdkBackend(FakePublicSdkClient(), catalog)
 
             with (
-                patch.object(catalog, "add", side_effect=OSError("disk full")),
+                patch.object(catalog, "claim", side_effect=OSError("disk full")),
                 self.assertRaisesRegex(OSError, "disk full"),
             ):
                 backend.create("s1")
@@ -2010,7 +2010,7 @@ class PublicSdkBackendTests(unittest.TestCase):
             backend.create("s1")
 
             with (
-                patch.object(catalog, "remove", side_effect=OSError("disk full during rollback")),
+                patch.object(catalog, "remove_if_claim", side_effect=OSError("disk full during rollback")),
                 self.assertRaisesRegex(RuntimeError, "sdk prompt failed"),
             ):
                 backend.prompt("s1", "work")
@@ -2036,6 +2036,25 @@ class PublicSdkBackendTests(unittest.TestCase):
 
             self.assertEqual(backend.presence("s1"), SessionPresence.LIVE)
             self.assertTrue(SessionCatalog(path).contains("s1"))
+
+    def test_failed_prompt_does_not_erase_session_confirmed_by_other_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            failing_client = FakePublicSdkClient()
+            failing_client.fail = True
+            first = PublicSdkBackend(failing_client, SessionCatalog(path))
+            second = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(path))
+            first.create("s1")
+            second.observe_notification(
+                "session.status",
+                {"sessionId": "s1", "status": "running"},
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "sdk prompt failed"):
+                first.prompt("s1", "work")
+
+            self.assertTrue(SessionCatalog(path).contains("s1"))
+            self.assertEqual(second.presence("s1"), SessionPresence.LIVE)
 
     def test_restart_detects_persisted_id_and_fails_before_sdk_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

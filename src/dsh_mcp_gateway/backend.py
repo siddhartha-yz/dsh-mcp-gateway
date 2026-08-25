@@ -139,12 +139,42 @@ class SessionCatalog:
             return sorted(self._ids)
 
     def add(self, session_id: str) -> bool:
+        return self.claim(session_id) is not None
+
+    def claim(self, session_id: str) -> tuple[int, int] | None:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
             persisted = self._load()
             if session_id in persisted:
                 self._ids = persisted
-                return False
+                return None
             self._ids = persisted | {session_id}
+            try:
+                self._save()
+                return self._identity()
+            except (OSError, UnicodeError):
+                self._ids = persisted
+                raise
+
+    def mark_observed(self, session_id: str) -> None:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
+            persisted = self._load()
+            self._ids = persisted | {session_id}
+            try:
+                self._save()
+            except (OSError, UnicodeError):
+                self._ids = persisted
+                raise
+
+    def remove_if_claim(self, session_id: str, claim: tuple[int, int]) -> bool:
+        with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
+            if self._identity() != claim:
+                self._ids = self._load()
+                return False
+            persisted = self._load()
+            if session_id not in persisted:
+                self._ids = persisted
+                return False
+            self._ids = persisted - {session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
@@ -235,6 +265,17 @@ class SessionCatalog:
         if not all(isinstance(item, str) and item for item in sessions):
             raise ValueError(f"invalid session catalog ids: {self.path}")
         return set(sessions)
+
+    def _identity(self) -> tuple[int, int] | None:
+        parent_fd = self._open_parent_dir()
+        try:
+            try:
+                stat = os.stat(self.path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            return stat.st_dev, stat.st_ino
+        finally:
+            os.close(parent_fd)
 
     def _save(self) -> None:
         parent_fd = self._open_parent_dir()
@@ -1028,6 +1069,8 @@ class PublicSdkBackend:
         self._lock = threading.RLock()
         self._allocated: set[str] = set()
         self._live: set[str] = set()
+        self._claims: dict[str, tuple[int, int]] = {}
+        self._catalog_observed: set[str] = set()
         self._prompting: dict[str, int] = {}
         self._statuses: dict[str, str] = {}
         self._events: dict[str, deque[dict[str, Any]]] = {}
@@ -1061,13 +1104,14 @@ class PublicSdkBackend:
                 raise ValueError(f"session already exists: {session_id}")
             self._allocated.add(session_id)
             try:
-                claimed = self._catalog.add(session_id)
+                claim = self._catalog.claim(session_id)
             except (OSError, UnicodeError, ValueError):
                 self._allocated.discard(session_id)
                 raise
-            if not claimed:
+            if claim is None:
                 self._allocated.discard(session_id)
                 raise ValueError(f"session already exists: {session_id}")
+            self._claims[session_id] = claim
         return SessionHandle(session_id)
 
     def prompt(self, session_id: str, text: str) -> str:
@@ -1095,11 +1139,13 @@ class PublicSdkBackend:
                     and session_id not in self._live
                 ):
                     try:
-                        self._catalog.remove(session_id)
+                        removed = self._catalog.remove_if_claim(session_id, self._claims[session_id])
                     except (OSError, UnicodeError, ValueError) as rollback_exc:
                         exc.add_note(f"session catalog rollback failed: {rollback_exc}")
                     else:
-                        self._allocated.discard(session_id)
+                        if removed:
+                            self._allocated.discard(session_id)
+                            self._claims.pop(session_id, None)
             raise
         with self._lock:
             remaining = self._prompting[session_id] - 1
@@ -1108,6 +1154,7 @@ class PublicSdkBackend:
             else:
                 self._prompting.pop(session_id, None)
             self._allocated.discard(session_id)
+            self._claims.pop(session_id, None)
             self._live.add(session_id)
         return message_id
 
@@ -1132,8 +1179,11 @@ class PublicSdkBackend:
         if not isinstance(session_id, str) or not session_id:
             return
         with self._lock:
-            self._catalog.add(session_id)
+            if session_id not in self._catalog_observed:
+                self._catalog.mark_observed(session_id)
+                self._catalog_observed.add(session_id)
             self._allocated.discard(session_id)
+            self._claims.pop(session_id, None)
             self._live.add(session_id)
             if method == "session.status":
                 self._statuses[session_id] = status

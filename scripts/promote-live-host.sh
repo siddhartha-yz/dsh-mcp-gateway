@@ -169,6 +169,8 @@ if not isinstance(dependencies, dict):
     raise SystemExit('DSH web profile has no dependencies object')
 
 artifacts = root / 'plugin-artifacts'
+if artifacts.is_symlink():
+    raise SystemExit('refusing symlinked DSH plugin-artifacts directory')
 artifacts.mkdir(parents=True, exist_ok=True)
 rewritten = 0
 manifest = []

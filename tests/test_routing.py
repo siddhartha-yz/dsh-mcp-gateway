@@ -1869,6 +1869,44 @@ class PublicSdkBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "limit"):
                 backend.messages("s1", limit=0)
 
+    def test_concurrent_backends_cannot_allocate_same_session_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            barrier = threading.Barrier(2)
+
+            class RacingCatalog(SessionCatalog):
+                def contains(self, session_id: str) -> bool:
+                    present = super().contains(session_id)
+                    barrier.wait(timeout=2)
+                    return present
+
+            backends = [
+                PublicSdkBackend(FakePublicSdkClient(), RacingCatalog(path)),
+                PublicSdkBackend(FakePublicSdkClient(), RacingCatalog(path)),
+            ]
+            created: list[int] = []
+            errors: list[BaseException] = []
+
+            def create(index: int) -> None:
+                try:
+                    backends[index].create("shared")
+                    created.append(index)
+                except BaseException as exc:  # noqa: BLE001 - captured for cross-thread test assertion.
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=create, args=(index,)) for index in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=3)
+
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(len(created), 1)
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], ValueError)
+            self.assertIn("session already exists", str(errors[0]))
+            self.assertEqual(SessionCatalog(path).ids(), ["shared"])
+
     def test_failed_catalog_persistence_rolls_back_allocation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

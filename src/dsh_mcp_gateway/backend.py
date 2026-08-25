@@ -138,18 +138,19 @@ class SessionCatalog:
             self._ids = self._load()
             return sorted(self._ids)
 
-    def add(self, session_id: str) -> None:
+    def add(self, session_id: str) -> bool:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
             persisted = self._load()
             if session_id in persisted:
                 self._ids = persisted
-                return
+                return False
             self._ids = persisted | {session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
                 self._ids = persisted
                 raise
+            return True
 
     def remove(self, session_id: str) -> None:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
@@ -1056,14 +1057,17 @@ class PublicSdkBackend:
     def create(self, session_id: str | None = None) -> SessionHandle:
         session_id = session_id or f"session-{uuid.uuid4()}"
         with self._lock:
-            if session_id in self._allocated or session_id in self._live or self._catalog.contains(session_id):
+            if session_id in self._allocated or session_id in self._live:
                 raise ValueError(f"session already exists: {session_id}")
             self._allocated.add(session_id)
             try:
-                self._catalog.add(session_id)
+                claimed = self._catalog.add(session_id)
             except (OSError, UnicodeError, ValueError):
                 self._allocated.discard(session_id)
                 raise
+            if not claimed:
+                self._allocated.discard(session_id)
+                raise ValueError(f"session already exists: {session_id}")
         return SessionHandle(session_id)
 
     def prompt(self, session_id: str, text: str) -> str:

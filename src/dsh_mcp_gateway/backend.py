@@ -126,73 +126,82 @@ class SessionCatalog:
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = Path(path)
         self._lock = threading.RLock()
-        self._ids = self._load()
+        self._ids, self._claim_tokens = self._load_state()
 
     def contains(self, session_id: str) -> bool:
         with self._lock, _SESSION_CATALOG_DISK_LOCK:
-            self._ids = self._load()
+            self._ids, self._claim_tokens = self._load_state()
             return session_id in self._ids
 
     def ids(self) -> list[str]:
         with self._lock, _SESSION_CATALOG_DISK_LOCK:
-            self._ids = self._load()
+            self._ids, self._claim_tokens = self._load_state()
             return sorted(self._ids)
 
     def add(self, session_id: str) -> bool:
         return self.claim(session_id) is not None
 
-    def claim(self, session_id: str) -> tuple[int, int] | None:
+    def claim(self, session_id: str) -> str | None:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
-            persisted = self._load()
+            persisted, claims = self._load_state()
             if session_id in persisted:
                 self._ids = persisted
+                self._claim_tokens = claims
                 return None
+            token = uuid.uuid4().hex
             self._ids = persisted | {session_id}
+            self._claim_tokens = {**claims, session_id: token}
             try:
                 self._save()
-                return self._identity()
+                return token
             except (OSError, UnicodeError):
                 self._ids = persisted
+                self._claim_tokens = claims
                 raise
 
     def mark_observed(self, session_id: str) -> None:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
-            persisted = self._load()
+            persisted, claims = self._load_state()
             self._ids = persisted | {session_id}
+            self._claim_tokens = {key: value for key, value in claims.items() if key != session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
                 self._ids = persisted
+                self._claim_tokens = claims
                 raise
 
-    def remove_if_claim(self, session_id: str, claim: tuple[int, int]) -> bool:
+    def remove_if_claim(self, session_id: str, claim: str) -> bool:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
-            if self._identity() != claim:
-                self._ids = self._load()
-                return False
-            persisted = self._load()
-            if session_id not in persisted:
-                self._ids = persisted
+            persisted, claims = self._load_state()
+            self._ids = persisted
+            self._claim_tokens = claims
+            if claims.get(session_id) != claim or session_id not in persisted:
                 return False
             self._ids = persisted - {session_id}
+            self._claim_tokens = {key: value for key, value in claims.items() if key != session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
                 self._ids = persisted
+                self._claim_tokens = claims
                 raise
             return True
 
     def remove(self, session_id: str) -> None:
         with self._lock, _SESSION_CATALOG_DISK_LOCK, self._process_disk_lock():
-            persisted = self._load()
+            persisted, claims = self._load_state()
             if session_id not in persisted:
                 self._ids = persisted
+                self._claim_tokens = claims
                 return
             self._ids = persisted - {session_id}
+            self._claim_tokens = {key: value for key, value in claims.items() if key != session_id}
             try:
                 self._save()
             except (OSError, UnicodeError):
                 self._ids = persisted
+                self._claim_tokens = claims
                 raise
 
     def _open_parent_dir(self) -> int:
@@ -239,6 +248,10 @@ class SessionCatalog:
                 os.close(descriptor)
 
     def _load(self) -> set[str]:
+        sessions, _claims = self._load_state()
+        return sessions
+
+    def _load_state(self) -> tuple[set[str], dict[str, str]]:
         parent_fd = self._open_parent_dir()
         try:
             try:
@@ -248,7 +261,7 @@ class SessionCatalog:
                     dir_fd=parent_fd,
                 )
             except FileNotFoundError:
-                return set()
+                return set(), {}
         finally:
             os.close(parent_fd)
         try:
@@ -264,18 +277,16 @@ class SessionCatalog:
         sessions = raw["sessions"]
         if not all(isinstance(item, str) and item for item in sessions):
             raise ValueError(f"invalid session catalog ids: {self.path}")
-        return set(sessions)
-
-    def _identity(self) -> tuple[int, int] | None:
-        parent_fd = self._open_parent_dir()
-        try:
-            try:
-                stat = os.stat(self.path.name, dir_fd=parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                return None
-            return stat.st_dev, stat.st_ino
-        finally:
-            os.close(parent_fd)
+        claims = raw.get("claims", {})
+        if not isinstance(claims, dict) or not all(
+            isinstance(key, str)
+            and key in sessions
+            and isinstance(value, str)
+            and value
+            for key, value in claims.items()
+        ):
+            raise ValueError(f"invalid session catalog claims: {self.path}")
+        return set(sessions), dict(claims)
 
     def _save(self) -> None:
         parent_fd = self._open_parent_dir()
@@ -290,7 +301,15 @@ class SessionCatalog:
             )
             os.fchmod(descriptor, 0o600)
             payload = (
-                json.dumps({"version": 1, "sessions": sorted(self._ids)}, indent=2) + "\n"
+                json.dumps(
+                    {
+                        "version": 1,
+                        "sessions": sorted(self._ids),
+                        "claims": {key: self._claim_tokens[key] for key in sorted(self._claim_tokens)},
+                    },
+                    indent=2,
+                )
+                + "\n"
             ).encode("utf-8")
             offset = 0
             while offset < len(payload):
@@ -1069,7 +1088,7 @@ class PublicSdkBackend:
         self._lock = threading.RLock()
         self._allocated: set[str] = set()
         self._live: set[str] = set()
-        self._claims: dict[str, tuple[int, int]] = {}
+        self._claims: dict[str, str] = {}
         self._catalog_observed: set[str] = set()
         self._prompting: dict[str, int] = {}
         self._statuses: dict[str, str] = {}

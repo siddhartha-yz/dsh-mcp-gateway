@@ -2056,6 +2056,25 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertTrue(SessionCatalog(path).contains("s1"))
             self.assertEqual(second.presence("s1"), SessionPresence.LIVE)
 
+    def test_unrelated_catalog_update_does_not_block_failed_prompt_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            failing_client = FakePublicSdkClient()
+            failing_client.fail = True
+            first = PublicSdkBackend(failing_client, SessionCatalog(path))
+            second = PublicSdkBackend(FakePublicSdkClient(), SessionCatalog(path))
+            first.create("pending-a")
+            second.observe_notification(
+                "session.status",
+                {"sessionId": "live-b", "status": "running"},
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "sdk prompt failed"):
+                first.prompt("pending-a", "work")
+
+            self.assertEqual(first.presence("pending-a"), SessionPresence.ABSENT)
+            self.assertEqual(SessionCatalog(path).ids(), ["live-b"])
+
     def test_restart_detects_persisted_id_and_fails_before_sdk_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

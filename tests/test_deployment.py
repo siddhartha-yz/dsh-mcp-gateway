@@ -217,6 +217,33 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn("plugin-artifacts", completed.stdout + completed.stderr)
             self.assertFalse((outside / "source-manifest.json").exists())
 
+    def test_live_promotion_rejects_symlinked_web_package_path(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            outside = base / "outside-package.json"
+            original = json.dumps({"dependencies": {}}) + "\n"
+            outside.write_text(original, encoding="utf-8")
+            (web / "package.json").symlink_to(outside)
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("package.json", completed.stdout + completed.stderr)
+            self.assertEqual(outside.read_text(encoding="utf-8"), original)
+
     def test_live_promotion_fails_closed_when_readiness_poll_never_succeeds(self) -> None:
         script = PROMOTE_LIVE.read_text(encoding="utf-8")
 

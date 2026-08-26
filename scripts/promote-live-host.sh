@@ -163,7 +163,16 @@ from pathlib import Path
 
 root = Path('/var/lib/dsh-harness')
 package_path = root / 'profiles/web/package.json'
-package = json.loads(package_path.read_text(encoding='utf-8'))
+root_resolved = root.resolve(strict=True)
+try:
+    package_resolved = package_path.resolve(strict=True)
+except OSError as exc:
+    raise SystemExit(f'DSH web package.json is unavailable: {exc}') from exc
+if package_path.is_symlink() or not package_resolved.is_relative_to(root_resolved):
+    raise SystemExit('refusing symlinked or escaping DSH web package.json')
+if not package_resolved.is_file():
+    raise SystemExit('DSH web package.json is not a regular file')
+package = json.loads(package_resolved.read_text(encoding='utf-8'))
 dependencies = package.get('dependencies')
 if not isinstance(dependencies, dict):
     raise SystemExit('DSH web profile has no dependencies object')
@@ -236,7 +245,7 @@ for name, spec in list(dependencies.items()):
         }
     )
 
-package_path.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
+package_resolved.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
 manifest.sort(key=lambda item: item['name'])
 (artifacts / 'source-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 print(f'rebound {rewritten} local plugin artifact(s) into {artifacts}')

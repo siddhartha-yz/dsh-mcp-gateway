@@ -6,10 +6,9 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from dsh_mcp_gateway import build_mcp_server
-from dsh_mcp_gateway.routing import GatewayService
 from dsh_mcp_gateway.session_runtime import DurableSessionRuntime, SessionRuntimeError
 
 
@@ -327,8 +326,7 @@ class SessionManageMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_manage_is_exposed_without_model_provider_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = DurableSessionRuntime(Path(tmp) / "sessions.sqlite3")
-            backend = Mock()
-            server = build_mcp_server(GatewayService(backend), session_runtime=runtime)
+            server = build_mcp_server(None, session_runtime=runtime)
 
             started = await server.call_tool(
                 "session_manage",
@@ -348,7 +346,6 @@ class SessionManageMcpTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertEqual(reported.structured_content["progress"]["summary"], "checkpoint")
-            backend.assert_not_called()
 
     async def test_runtime_only_server_hides_legacy_dsh_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

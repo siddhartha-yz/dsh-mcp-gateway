@@ -93,6 +93,7 @@ for path in \
   "$LIVE_CLOUDFLARED_CONFIG" \
   "$LIVE_CLOUDFLARED_CREDENTIALS" \
   "$SOURCE_ROOT/scripts/bootstrap-target-host.sh" \
+  "$SOURCE_ROOT/scripts/validate-public-origin.py" \
   "$SOURCE_ROOT/deploy/systemd/dsh-cloudflared.service"; do
   [[ -e "$path" ]] || { echo "required live/deployment input is missing: $path" >&2; exit 1; }
 done
@@ -133,7 +134,10 @@ if [[ -z "$PUBLIC_BASE_URL" ]]; then
   [[ -n "$HOSTNAME" ]] || { echo "cannot derive public hostname from Cloudflare config" >&2; exit 1; }
   PUBLIC_BASE_URL="https://$HOSTNAME"
 fi
-[[ "$PUBLIC_BASE_URL" =~ ^https://[^/]+/?$ ]] || { echo "public base URL must be an HTTPS origin" >&2; exit 1; }
+python3 "$SOURCE_ROOT/scripts/validate-public-origin.py" "$PUBLIC_BASE_URL" || {
+  echo "public base URL must be an HTTPS origin without user info, path, params, query, or fragment" >&2
+  exit 1
+}
 
 for snapshot in "$TOOLS_SNAPSHOT" "$SKILLS_SNAPSHOT"; do
   [[ -z "$snapshot" || -f "$snapshot" ]] || { echo "snapshot does not exist: $snapshot" >&2; exit 1; }

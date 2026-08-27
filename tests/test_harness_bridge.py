@@ -5,6 +5,7 @@ import base64
 import json
 import unittest
 from http.client import BadStatusLine
+from io import BytesIO
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -35,6 +36,10 @@ class HarnessBridgeClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "loopback"):
             HarnessBridgeClient("http://example.com:3080")
 
+    def test_origin_params_are_rejected_during_construction(self) -> None:
+        with self.assertRaisesRegex(ValueError, "without path, params"):
+            HarnessBridgeClient("http://127.0.0.1:3080/;tenant=bad")
+
     def test_invalid_port_is_rejected_during_construction(self) -> None:
         for base_url in ("http://127.0.0.1:notaport", "http://127.0.0.1:99999"):
             with self.subTest(base_url=base_url), self.assertRaisesRegex(ValueError, "invalid port"):
@@ -48,12 +53,16 @@ class HarnessBridgeClientTests(unittest.TestCase):
             if request.full_url.endswith("/tools"):
                 return _Response({"tools": [{"name": "community_echo", "description": "echo", "parameters": {}}]})
             if request.full_url.endswith("/skills"):
-                return _Response({"skills": [{"name": "community-review", "description": "review", "provider": "demo"}]})
+                return _Response({"skills": [{"name": "community-review", "description": "review", "source": "runtime", "provider": "demo"}]})
             if request.full_url.endswith("/skill"):
-                return _Response({"skill": {"name": "community-review", "description": "review", "provider": "demo", "content": "Review carefully."}})
+                return _Response({"skill": {"name": "community-review", "description": "review", "source": "runtime", "provider": "demo", "content": "Review carefully."}})
             return _Response({"isError": False, "value": {"echo": "hi"}, "content": []})
 
-        client = HarnessBridgeClient("http://127.0.0.1:3080", timeout_s=7)
+        client = HarnessBridgeClient(
+            "http://127.0.0.1:3080",
+            timeout_s=7,
+            tool_call_timeout_s=130,
+        )
         with patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=fake_urlopen):
             self.assertEqual(client.tools()[0]["name"], "community_echo")
             self.assertEqual(client.skills()[0]["name"], "community-review")
@@ -69,6 +78,65 @@ class HarnessBridgeClientTests(unittest.TestCase):
         self.assertEqual(json.loads(seen[2][2]), {"name": "community-review"})
         self.assertEqual(seen[3][1], "POST")
         self.assertEqual(json.loads(seen[3][2]), {"name": "community_echo", "arguments": {"text": "hi"}})
+        self.assertEqual([entry[3] for entry in seen[:3]], [7, 7, 7])
+        self.assertEqual(seen[3][3], 130)
+
+    def test_malformed_skill_catalog_entries_are_rejected(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        malformed = (
+            ({"name": "skill", "description": "desc", "provider": "demo"}, "valid source"),
+            ({"name": "skill", "description": 3, "source": "runtime", "provider": "demo"}, "string description"),
+            ({"name": "skill", "description": "desc", "source": "runtime", "provider": "demo", "whenToUse": 3}, "whenToUse"),
+            ({"name": "skill", "description": "desc", "source": "runtime", "provider": "demo", "resourceBase": "bad"}, "resourceBase"),
+        )
+        for item, expected in malformed:
+            with (
+                self.subTest(item=item),
+                patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=_Response({"skills": [item]})),
+                self.assertRaisesRegex(HarnessBridgeError, expected),
+            ):
+                client.skills()
+
+    def test_malformed_skill_definition_is_rejected(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        payload = {
+            "skill": {
+                "name": "community-review",
+                "description": "review",
+                "source": "runtime",
+                "provider": "demo",
+                "content": 3,
+            }
+        }
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=_Response(payload)),
+            self.assertRaisesRegex(HarnessBridgeError, "invalid skill definition"),
+        ):
+            client.load_skill("community-review")
+
+    def test_malformed_tool_execution_results_are_rejected(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        malformed = (
+            ({"content": []}, "boolean isError"),
+            ({"isError": "false", "content": [], "value": None}, "boolean isError"),
+            ({"isError": False, "value": 1}, "content list"),
+            ({"isError": False, "content": []}, "without a value"),
+            ({"isError": False, "content": [], "value": 1, "error": {}}, "with an error"),
+            ({"isError": True, "content": [], "error": {"message": "failed"}, "value": 1}, "with a value"),
+            ({"isError": True, "content": [], "error": {}}, "invalid failed tool result"),
+            ({"isError": True, "content": [], "error": {"message": "failed"}, "additionalContexts": {}}, "additionalContexts"),
+        )
+        for payload, expected in malformed:
+            with (
+                self.subTest(payload=payload),
+                patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=_Response(payload)),
+                self.assertRaisesRegex(HarnessBridgeError, expected),
+            ):
+                client.call("community_echo", {})
+
+    def test_non_positive_tool_call_timeout_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tool_call_timeout_s"):
+            HarnessBridgeClient("http://127.0.0.1:3080", tool_call_timeout_s=0)
 
     def test_tools_can_override_transport_timeout_for_readiness(self) -> None:
         seen = []
@@ -90,13 +158,32 @@ class HarnessBridgeClientTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout):
             seen.append((request.full_url, request.method, timeout))
-            return _Response({"toolRevision": 7, "skillRevision": 3})
+            return _Response({"instanceId": "bridge-a", "toolRevision": 7, "skillRevision": 3})
 
         client = HarnessBridgeClient("http://127.0.0.1:3080", timeout_s=4)
         with patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=fake_urlopen):
             self.assertEqual(client.tool_revision(), 7)
 
         self.assertEqual(seen, [("http://127.0.0.1:3080/api/chatgpt-bridge/revision", "GET", 4)])
+
+    def test_tool_revision_token_includes_bridge_instance(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with patch(
+            "dsh_mcp_gateway.harness_bridge.urlopen",
+            return_value=_Response({"instanceId": "bridge-a", "toolRevision": 7, "skillRevision": 3}),
+        ):
+            self.assertEqual(client.tool_revision_token(), ("bridge-a", 7))
+
+    def test_invalid_bridge_instance_id_is_rejected_for_revision_token(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch(
+                "dsh_mcp_gateway.harness_bridge.urlopen",
+                return_value=_Response({"toolRevision": 7, "skillRevision": 3}),
+            ),
+            self.assertRaisesRegex(HarnessBridgeError, "invalid instance id"),
+        ):
+            client.tool_revision_token()
 
     def test_invalid_tool_revision_is_rejected(self) -> None:
         client = HarnessBridgeClient("http://127.0.0.1:3080")
@@ -114,6 +201,28 @@ class HarnessBridgeClientTests(unittest.TestCase):
         ):
             client.tools()
 
+        malformed = (
+            ({"description": "missing name", "parameters": {}}, "valid name"),
+            ({"name": "tool", "description": 3, "parameters": {}}, "non-string description"),
+            ({"name": "tool", "description": "desc", "parameters": []}, "non-object parameter schema"),
+        )
+        for item, expected in malformed:
+            with (
+                self.subTest(item=item),
+                patch("dsh_mcp_gateway.harness_bridge.urlopen", return_value=_Response({"tools": [item]})),
+                self.assertRaisesRegex(HarnessBridgeError, expected),
+            ):
+                client.tools()
+
+    def test_call_rejects_non_object_arguments_without_transport(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen") as mocked,
+            self.assertRaisesRegex(ValueError, "arguments must be an object"),
+        ):
+            client.call("community_echo", [])  # type: ignore[arg-type]
+        mocked.assert_not_called()
+
     def test_malformed_http_is_wrapped_as_bridge_error(self) -> None:
         client = HarnessBridgeClient("http://127.0.0.1:3080")
         with (
@@ -121,6 +230,69 @@ class HarnessBridgeClientTests(unittest.TestCase):
             self.assertRaisesRegex(HarnessBridgeError, "unavailable"),
         ):
             client.tools()
+
+    def test_http_error_arbitrary_body_is_not_reflected(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        error = HTTPError(
+            "http://127.0.0.1:3080/api/chatgpt-bridge/tools",
+            500,
+            "Internal Server Error",
+            {},
+            BytesIO(b"<html>/private/workspace secret detail</html>"),
+        )
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=error),
+            self.assertRaises(HarnessBridgeError) as caught,
+        ):
+            client.tools()
+        message = str(caught.exception)
+        self.assertIn("HTTP 500", message)
+        self.assertIn("non-JSON error body", message)
+        self.assertNotIn("/private/workspace", message)
+        self.assertNotIn("secret detail", message)
+
+    def test_http_error_exposes_only_recognized_structured_public_detail(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        error = HTTPError(
+            "http://127.0.0.1:3080/api/chatgpt-bridge/skill",
+            404,
+            "Not Found",
+            {},
+            BytesIO(json.dumps({
+                "error": "skill_unavailable",
+                "message": 'skill "missing" is unavailable for model invocation',
+            }).encode()),
+        )
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=error),
+            self.assertRaisesRegex(
+                HarnessBridgeError,
+                'HTTP 404: skill_unavailable: skill "missing" is unavailable for model invocation',
+            ),
+        ):
+            client.load_skill("missing")
+
+    def test_http_error_internal_bridge_message_is_suppressed(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        error = HTTPError(
+            "http://127.0.0.1:3080/api/chatgpt-bridge/call",
+            500,
+            "Internal Server Error",
+            {},
+            BytesIO(json.dumps({
+                "error": "bridge_error",
+                "message": "/private/workspace persistence token=secret",
+            }).encode()),
+        )
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=error),
+            self.assertRaises(HarnessBridgeError) as caught,
+        ):
+            client.call("calculator", {"expression": "1+1"})
+        message = str(caught.exception)
+        self.assertEqual(message, "DSH bridge HTTP 500: bridge_error")
+        self.assertNotIn("/private/workspace", message)
+        self.assertNotIn("secret", message)
 
     def test_http_error_body_read_failure_stays_wrapped_as_bridge_error(self) -> None:
         class BrokenErrorBody:
@@ -197,8 +369,38 @@ class HarnessCatalogWatcherTests(unittest.IsolatedAsyncioTestCase):
                 self.revisions = [4, 4, 5, 5]
                 self.index = 0
 
-            def tool_revision(self):
+            def tool_revision_token(self):
                 value = self.revisions[min(self.index, len(self.revisions) - 1)]
+                self.index += 1
+                return "bridge-a", value
+
+        changed = asyncio.Event()
+        publishes = 0
+
+        async def publish_changed():
+            nonlocal publishes
+            publishes += 1
+            changed.set()
+
+        task = asyncio.create_task(watch_tool_catalog(FakeBridge(), publish_changed, interval_s=0.001))
+        try:
+            await asyncio.wait_for(changed.wait(), timeout=1)
+            await asyncio.sleep(0.005)
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertEqual(publishes, 1)
+
+    async def test_watcher_publishes_when_bridge_restarts_with_same_numeric_revision(self) -> None:
+        class FakeBridge:
+            def __init__(self):
+                self.tokens = [("bridge-a", 4), ("bridge-b", 4), ("bridge-b", 4)]
+                self.index = 0
+
+            def tool_revision_token(self):
+                value = self.tokens[min(self.index, len(self.tokens) - 1)]
                 self.index += 1
                 return value
 
@@ -220,6 +422,29 @@ class HarnessCatalogWatcherTests(unittest.IsolatedAsyncioTestCase):
                 await task
 
         self.assertEqual(publishes, 1)
+
+
+class ServerRuntimeModeBoundaryTests(unittest.TestCase):
+    def test_server_builder_rejects_mixed_runtime_authorities(self) -> None:
+        cases = (
+            (object(), object(), None),
+            (object(), None, object()),
+            (None, object(), object()),
+        )
+        for index, (service, session_runtime, harness_bridge) in enumerate(cases):
+            with self.subTest(case=index), self.assertRaisesRegex(
+                ValueError,
+                "mutually exclusive runtime modes",
+            ):
+                build_mcp_server(
+                    service,
+                    session_runtime=session_runtime,
+                    harness_bridge=harness_bridge,
+                )
+
+    def test_projected_surface_requires_harness_bridge(self) -> None:
+        with self.assertRaisesRegex(ValueError, "project_dsh_tools requires harness_bridge"):
+            build_mcp_server(None, project_dsh_tools=True)
 
 
 class HarnessBridgeMcpTests(unittest.IsolatedAsyncioTestCase):

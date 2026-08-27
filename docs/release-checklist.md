@@ -8,12 +8,12 @@ A checked item requires executable or recorded integration evidence; documentati
 
 - [x] Stable `dsh_tool_catalog` + `dsh_tool_call` meta-tools discover and invoke the live DSH `ToolRuntime` catalog without bespoke Python wrappers or a refreshed MCP tool list.
 - [x] Projected calls execute through DSH `ToolRuntime.execute(...)`, preserving DSH guards, policy, result normalization, and scoped restrictions.
-- [x] The bridge uses a DSH agent-preset scope identity without submitting prompts or requiring a model-provider API key; ChatGPT remains the only reasoning agent.
+- [x] Catalog/skill discovery uses DSH's preset standing scope without starting an Agent, Session, or turn. Tool execution lazily uses a metadata-only capability Agent/session keyed by a non-reversible hash of workspace cwd + preset id + resolved composition path + rc6-style `mtimeMs`/size generation stamp. Stable generations resume across DSH restarts; default-preset or composition hot reloads receive a new helper, and setup fails closed if a generation changes while the helper is being created. No prompt or model-provider API key is used, and ChatGPT remains the only reasoning agent.
 - [x] DSH community skills are discovered and loaded through the native scoped `SkillRegistry` with model-invocation policy preserved.
 - [x] DSH image results and attachment-backed images reach ChatGPT as MCP image content without per-tool wrappers.
 - [x] DSH `additionalContexts` survive the external-model boundary, including policy/guard reminders and nested multimodal contexts.
 - [x] Default Harness mode is protocol-level meta-only: MCP `tools/list` stays fixed to the four stable DSH meta-tools and the modern MCP capability surface does not advertise `tools.listChanged`.
-- [x] First-class DSH tool projection remains available only as explicit `--tool-surface projected` UX opt-in. In that mode live DSH `tools/change` invalidations advance a bridge catalog revision and the gateway publishes MCP `tools/list_changed` for subscription-capable clients.
+- [x] First-class DSH tool projection remains available only as explicit `--tool-surface projected` UX opt-in. In that mode live DSH `tools/change` invalidations advance a restart-safe `(bridge instance, tool revision)` token and the gateway publishes MCP `tools/list_changed` for subscription-capable clients.
 - [x] Embedded OAuth persists DCR clients/tokens, supports PKCE public clients, rotates refresh tokens, revokes grant families, bounds anonymous registration state, and keeps the DSH Host private behind the OAuth-protected MCP gateway.
 - [x] Public HTTPS development smoke has exercised OAuth/MCP through a reverse proxy while the gateway and raw DSH Host remained loopback-bound; Host/Origin rebinding checks are regression-tested.
 - [x] The exact DSH runtime is pinned to `@deepseek-ai/dsh@0.1.0-rc.6`; the checked lock contains 588 integrity-pinned packages and the deployment uses Node 24.19.0.

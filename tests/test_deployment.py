@@ -23,6 +23,7 @@ DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
 BOOTSTRAP_HOST = ROOT / "scripts" / "bootstrap-target-host.sh"
+PUBLIC_ORIGIN_VALIDATOR = ROOT / "scripts" / "validate-public-origin.py"
 BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
 VERIFY_BACKUP = ROOT / "scripts" / "verify-backup-restore.sh"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -60,7 +61,9 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("node --check dsh-bridge-plugin/index.js", workflow)
         self.assertIn("node --check deploy/dsh/plugins/lsm-tool-filter.mjs", workflow)
         self.assertIn("node --check tests/test_lsm_tool_filter.mjs", workflow)
-        self.assertIn("run: node tests/test_lsm_tool_filter.mjs", workflow)
+        self.assertIn("node --check tests/test_chatgpt_bridge.mjs", workflow)
+        self.assertIn("node tests/test_lsm_tool_filter.mjs", workflow)
+        self.assertIn("node tests/test_chatgpt_bridge.mjs", workflow)
 
     def test_gateway_stays_loopback_and_does_not_require_host_lifetime(self) -> None:
         unit = read_unit("dsh-mcp-gateway.service")
@@ -162,10 +165,49 @@ class DeploymentTemplateTests(unittest.TestCase):
             script,
         )
 
+    def test_public_origin_validator_accepts_only_real_https_origins(self) -> None:
+        valid = (
+            "https://dsh.example.com",
+            "https://dsh.example.com/",
+            "https://dsh.example.com:8443",
+            "https://[::1]:8443",
+        )
+        invalid = (
+            "http://dsh.example.com",
+            "https://user:pass@dsh.example.com",
+            "https://dsh.example.com/path",
+            "https://dsh.example.com/;tenant=bad",
+            "https://dsh.example.com?tenant=bad",
+            "https://dsh.example.com#fragment",
+            "https://dsh.example.com:99999",
+            "https://dsh.example.com//",
+        )
+        for origin in valid:
+            with self.subTest(origin=origin):
+                result = subprocess.run([sys.executable, str(PUBLIC_ORIGIN_VALIDATOR), origin], check=False)
+                self.assertEqual(result.returncode, 0)
+        for origin in invalid:
+            with self.subTest(origin=origin):
+                result = subprocess.run([sys.executable, str(PUBLIC_ORIGIN_VALIDATOR), origin], check=False)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_bootstrap_uses_shared_public_origin_validator(self) -> None:
+        script = BOOTSTRAP_HOST.read_text(encoding="utf-8")
+        self.assertIn(
+            'python3 "$SOURCE_ROOT/scripts/validate-public-origin.py" "$DSH_MCP_PUBLIC_BASE_URL"',
+            script,
+        )
+        self.assertGreaterEqual(script.count('$SOURCE_ROOT/scripts/validate-public-origin.py'), 2)
+
     def test_live_promotion_preserves_real_workspace_and_migrates_state(self) -> None:
         script = PROMOTE_LIVE.read_text(encoding="utf-8")
 
         self.assertIn('WORKSPACE="/home/ubuntu/workspace"', script)
+        self.assertIn(
+            'python3 "$SOURCE_ROOT/scripts/validate-public-origin.py" "$PUBLIC_BASE_URL"',
+            script,
+        )
+        self.assertGreaterEqual(script.count('$SOURCE_ROOT/scripts/validate-public-origin.py'), 2)
         self.assertIn("ProtectHome=read-only", script)
         self.assertIn("ReadWritePaths=$WORKSPACE /var/lib/dsh-harness", script)
         self.assertIn("artifacts = root / 'plugin-artifacts'", script)
@@ -849,6 +891,28 @@ class DeploymentPreflightTests(unittest.TestCase):
             self.assertTrue(report["ok"])
             self.assertEqual(report["failed"], 0)
             self.assertNotIn(self.secret_marker("admin-pin"), result.stdout)
+
+    def test_preflight_rejects_public_base_with_real_path_before_canonicalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            gateway_env = paths["config_dir"] / "gateway.env"
+            gateway_env.write_text(
+                "\n".join(
+                    (
+                        "DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com//",
+                        f"DSH_MCP_GATEWAY_ADMIN_PIN={self.secret_marker('admin-pin')}",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            gateway_env.chmod(0o600)
+
+            result = self.run_preflight(paths)
+            self.assertEqual(result.returncode, 1)
+            report = json.loads(result.stdout)
+            failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("gateway public base is HTTPS origin", failed)
 
     def test_preflight_accepts_explicit_personal_workspace_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

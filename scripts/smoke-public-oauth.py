@@ -130,7 +130,7 @@ def required_string(payload: dict[str, Any], key: str, label: str) -> str:
 
 
 def normalize_origin(value: str, *, allow_http_loopback: bool) -> str:
-    parsed = urlparse(value.rstrip("/"))
+    parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise SmokeError("base URL must be an absolute HTTP(S) origin")
     if parsed.username is not None or parsed.password is not None:
@@ -150,7 +150,7 @@ def normalize_origin(value: str, *, allow_http_loopback: bool) -> str:
                 loopback = False
         if not allow_http_loopback or not loopback:
             raise SmokeError("public release smoke requires HTTPS; HTTP is allowed only for explicit loopback tests")
-    return value.rstrip("/")
+    return value[:-1] if parsed.path == "/" else value
 
 
 def read_env_value(path: Path, key: str) -> str:

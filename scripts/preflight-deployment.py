@@ -134,7 +134,7 @@ def parse_env_file(path: Path) -> tuple[dict[str, str], str | None]:
 
 
 def is_https_origin(value: str) -> bool:
-    parsed = urlparse(value.rstrip("/"))
+    parsed = urlparse(value)
     if parsed.scheme != "https" or not parsed.hostname:
         return False
     if parsed.username is not None or parsed.password is not None:

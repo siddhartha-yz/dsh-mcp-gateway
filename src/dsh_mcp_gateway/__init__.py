@@ -6,19 +6,42 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from os import PathLike
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .backend import PublicSdkBridge, PublicSdkClient, SessionCatalog
 from .harness_bridge import (
     HarnessBridgeClient,
     HarnessProjectionMixin,
     tool_result_to_mcp,
     watch_tool_catalog,
 )
-from .routing import GatewayService
-from .session_runtime import DurableSessionRuntime
+from .mcp_compat import disable_modern_subscriptions
+
+if TYPE_CHECKING:
+    from .backend import PublicSdkBridge, PublicSdkClient
+    from .routing import GatewayService
+    from .session_runtime import DurableSessionRuntime
 
 __version__ = "0.1.0"
+
+_LEGACY_EXPORTS = {
+    "PublicSdkBridge": (".backend", "PublicSdkBridge"),
+    "PublicSdkClient": (".backend", "PublicSdkClient"),
+    "SessionCatalog": (".backend", "SessionCatalog"),
+    "GatewayService": (".routing", "GatewayService"),
+    "DurableSessionRuntime": (".session_runtime", "DurableSessionRuntime"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LEGACY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    module_name, attribute = target
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value
 
 
 def build_mcp_server(
@@ -31,7 +54,19 @@ def build_mcp_server(
     auth: Any | None = None,
     _server_cls: Any | None = None,
 ) -> Any:
-    """Build the MCP v2 tool surface around an injected gateway service."""
+    """Build one mutually exclusive MCP runtime surface."""
+    runtime_modes = sum(
+        (
+            service is not None,
+            session_runtime is not None,
+            harness_bridge is not None,
+        )
+    )
+    if runtime_modes > 1:
+        raise ValueError("service, session_runtime, and harness_bridge are mutually exclusive runtime modes")
+    if project_dsh_tools and harness_bridge is None:
+        raise ValueError("project_dsh_tools requires harness_bridge")
+
     try:
         from mcp.server import MCPServer
         from mcp.types import ToolAnnotations
@@ -123,18 +158,7 @@ def build_mcp_server(
         lifespan=harness_lifespan,
     )
     if harness_bridge is not None and not project_dsh_tools:
-        # MCP 2026-07-28 derives tools.listChanged from whether the modern
-        # subscriptions/listen endpoint is served. MCPServer currently enables
-        # that endpoint by default even when this gateway never publishes tool
-        # changes. Meta-only mode deliberately removes it so a client cannot
-        # infer or receive a dynamic first-class tool-refresh channel. There is
-        # no public SDK switch for this yet, so fail closed if the SDK internals
-        # change instead of silently weakening the product invariant.
-        lowlevel = getattr(mcp, "_lowlevel_server", None)
-        handlers = getattr(lowlevel, "_request_handlers", None)
-        if not isinstance(handlers, dict) or "subscriptions/listen" not in handlers:
-            raise RuntimeError("MCP SDK subscription internals changed; cannot guarantee meta-only tool surface")
-        handlers.pop("subscriptions/listen")
+        disable_modern_subscriptions(mcp)
     if harness_bridge is not None:
         mcp._dsh_harness_bridge = harness_bridge
 
@@ -396,6 +420,9 @@ def build_public_sdk_oauth_gateway(
     event_buffer_size: int = 2000,
 ) -> PublicSdkGateway:
     """Compose an OAuth-protected MCP facade around an initialized DSH SDK client."""
+    from .backend import PublicSdkBridge, SessionCatalog
+    from .routing import GatewayService
+
     bridge = PublicSdkBridge(
         client,
         SessionCatalog(catalog_path),
@@ -424,6 +451,9 @@ def build_public_sdk_gateway(
     The caller retains ownership of the SDK client/runtime. Closing the returned
     gateway stops only its notification subscription.
     """
+    from .backend import PublicSdkBridge, SessionCatalog
+    from .routing import GatewayService
+
     bridge = PublicSdkBridge(
         client,
         SessionCatalog(catalog_path),

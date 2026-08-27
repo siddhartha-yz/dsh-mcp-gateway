@@ -72,7 +72,8 @@ for path in \
   "$SOURCE_ROOT/dsh-bridge-plugin/index.js" \
   "$SOURCE_ROOT/deploy/systemd/dsh-web-host.service" \
   "$SOURCE_ROOT/deploy/systemd/dsh-mcp-gateway.service" \
-  "$SOURCE_ROOT/scripts/preflight-deployment.py"; do
+  "$SOURCE_ROOT/scripts/preflight-deployment.py" \
+  "$SOURCE_ROOT/scripts/validate-public-origin.py"; do
   [[ -f "$path" ]] || { echo "required repository file is missing: $path" >&2; exit 1; }
 done
 
@@ -222,8 +223,8 @@ if [[ -z "${DSH_MCP_GATEWAY_ADMIN_PIN:-}" ]]; then
   echo
 fi
 
-[[ "$DSH_MCP_PUBLIC_BASE_URL" =~ ^https://[^/]+/?$ ]] || {
-  echo "DSH_MCP_PUBLIC_BASE_URL must be an HTTPS origin without a path" >&2
+python3 "$SOURCE_ROOT/scripts/validate-public-origin.py" "$DSH_MCP_PUBLIC_BASE_URL" || {
+  echo "DSH_MCP_PUBLIC_BASE_URL must be an HTTPS origin without user info, path, params, query, or fragment" >&2
   exit 1
 }
 [[ ${#DSH_MCP_GATEWAY_ADMIN_PIN} -ge 12 ]] || {

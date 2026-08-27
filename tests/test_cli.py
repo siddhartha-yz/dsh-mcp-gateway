@@ -21,6 +21,14 @@ class CliTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "origin without a path"):
             main(["--public-base-url", "https://gateway.example.com/prefix"])
 
+    def test_rejects_public_origin_with_multiple_trailing_slashes(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "origin without a path"):
+            main(["--public-base-url", "https://gateway.example.com//"])
+
+    def test_rejects_public_origin_with_params(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "origin without a path, params"):
+            main(["--public-base-url", "https://gateway.example.com/;tenant=bad"])
+
     def test_rejects_public_origin_with_user_info(self) -> None:
         with self.assertRaisesRegex(SystemExit, "must not contain user info"):
             main(["--public-base-url", "https://user:pass@gateway.example.com"])
@@ -32,6 +40,10 @@ class CliTests(unittest.TestCase):
                 "must contain a valid port",
             ):
                 main(["--public-base-url", public_base])
+
+    def test_transport_security_rejects_non_origin_input(self) -> None:
+        with self.assertRaisesRegex(ValueError, "without path, params"):
+            build_transport_security("https://gateway.example.com/;tenant=bad")
 
     def test_transport_security_rejects_invalid_port_cleanly(self) -> None:
         with self.assertRaisesRegex(ValueError, "public_base must contain a valid port"):
@@ -54,6 +66,44 @@ class CliTests(unittest.TestCase):
             self.assertRaisesRegex(SystemExit, "DSH_MCP_GATEWAY_ADMIN_PIN is required"),
         ):
             main(["--public-base-url", "https://gateway.example.com"])
+
+    def test_runtime_mode_must_be_selected_explicitly(self) -> None:
+        with (
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            self.assertRaisesRegex(SystemExit, "select a runtime explicitly"),
+        ):
+            main(["--public-base-url", "https://gateway.example.com"])
+
+    def test_runtime_modes_are_mutually_exclusive(self) -> None:
+        with (
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            self.assertRaisesRegex(SystemExit, "mutually exclusive"),
+        ):
+            main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--dsh-harness-url",
+                    "http://127.0.0.1:3080",
+                    "--dsh-web-url",
+                    "http://127.0.0.1:3080",
+                ]
+            )
+
+    def test_projected_tool_surface_requires_primary_harness_mode(self) -> None:
+        with (
+            patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
+            self.assertRaisesRegex(SystemExit, "projected requires --dsh-harness-url"),
+        ):
+            main(
+                [
+                    "--public-base-url",
+                    "https://gateway.example.com",
+                    "--legacy-session-runtime",
+                    "--tool-surface",
+                    "projected",
+                ]
+            )
 
     def test_rejects_dsh_web_url_with_path_as_operator_error(self) -> None:
         with (
@@ -151,7 +201,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(bad_origin.status_code, 403)
         self.assertEqual(bad_origin.text, "Invalid Origin header")
 
-    def test_happy_path_builds_runtime_only_oauth_gateway_with_canonical_issuer(self) -> None:
+    def test_explicit_legacy_runtime_builds_runtime_only_oauth_gateway_with_canonical_issuer(self) -> None:
         fake_server = Mock()
 
         with (
@@ -168,6 +218,7 @@ class CliTests(unittest.TestCase):
                     "https://gateway.example.com",
                     "--state-dir",
                     tmp,
+                    "--legacy-session-runtime",
                     "--port",
                     "9876",
                 ]
@@ -222,6 +273,7 @@ class CliTests(unittest.TestCase):
                         "https://gateway.example.com",
                         "--state-dir",
                         str(alias),
+                        "--legacy-session-runtime",
                     ]
                 )
 
@@ -291,7 +343,7 @@ class CliTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch.dict(os.environ, {"DSH_MCP_GATEWAY_ADMIN_PIN": "test-admin-pin"}, clear=False),
-            patch("dsh_mcp_gateway.cli.ExperimentalWebHostBackend", return_value=fake_backend) as backend_cls,
+            patch("dsh_mcp_gateway.backend.ExperimentalWebHostBackend", return_value=fake_backend) as backend_cls,
             patch(
                 "dsh_mcp_gateway.cli.build_embedded_oauth_server",
                 return_value=(fake_server, Mock()),

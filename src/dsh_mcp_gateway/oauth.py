@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -55,7 +55,19 @@ class EmbeddedOAuthConfig:
     def __post_init__(self) -> None:
         if not self.issuer_url:
             raise ValueError("issuer_url is required")
-        object.__setattr__(self, "issuer_url", f"{self.issuer_url.rstrip('/')}/")
+        issuer = urlparse(self.issuer_url)
+        if issuer.scheme not in {"http", "https"} or not issuer.hostname:
+            raise ValueError("issuer_url must be an absolute HTTP(S) origin")
+        if issuer.username is not None or issuer.password is not None:
+            raise ValueError("issuer_url must not contain user info")
+        if issuer.path not in {"", "/"} or issuer.params or issuer.query or issuer.fragment:
+            raise ValueError("issuer_url must be an origin without path, params, query, or fragment")
+        try:
+            _ = issuer.port
+        except ValueError as exc:
+            raise ValueError("issuer_url contains an invalid port") from exc
+        canonical_issuer = self.issuer_url if issuer.path == "/" else f"{self.issuer_url}/"
+        object.__setattr__(self, "issuer_url", canonical_issuer)
         if not self.resource_url:
             raise ValueError("resource_url is required")
         if len(self.admin_pin) < 12:

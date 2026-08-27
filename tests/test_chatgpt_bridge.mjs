@@ -1,0 +1,550 @@
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
+
+import { apply } from '../dsh-bridge-plugin/index.js'
+
+const PREFIX = '/api/chatgpt-bridge'
+const CAPABILITY_SESSION_PREFIX = 'dsh-mcp-gateway-chatgpt-capability'
+const DEFAULT_PRESET_PATH = join(process.cwd(), 'dsh-bridge-plugin', 'index.js')
+
+function expectedCapabilitySessionId(presetId = 'default', presetPath = DEFAULT_PRESET_PATH) {
+  const { mtimeMs, size } = statSync(presetPath)
+  const suffix = createHash('sha256')
+    .update(JSON.stringify([process.cwd(), presetId, presetPath, mtimeMs, size]))
+    .digest('hex')
+    .slice(0, 24)
+  return `${CAPABILITY_SESSION_PREFIX}-${suffix}`
+}
+
+function responseCapture() {
+  const state = { status: undefined, headers: undefined, body: undefined }
+  const listeners = new Map()
+  return {
+    state,
+    writableEnded: false,
+    destroyed: false,
+    once(name, callback) {
+      listeners.set(name, callback)
+      return this
+    },
+    off(name, callback) {
+      if (listeners.get(name) === callback) listeners.delete(name)
+      return this
+    },
+    emitClose() {
+      this.destroyed = true
+      const callback = listeners.get('close')
+      if (callback) {
+        listeners.delete('close')
+        callback()
+      }
+    },
+    writeHead(status, headers) {
+      state.status = status
+      state.headers = headers
+    },
+    end(data) {
+      this.writableEnded = true
+      state.body = JSON.parse(String(data))
+    },
+  }
+}
+
+function postJson(payload) {
+  const req = Readable.from([Buffer.from(JSON.stringify(payload))])
+  req.method = 'POST'
+  return req
+}
+
+function postRaw(body) {
+  const req = Readable.from([Buffer.isBuffer(body) ? body : Buffer.from(body)])
+  req.method = 'POST'
+  return req
+}
+
+function makeContext({
+  persisted = false,
+  defaultId = 'default',
+  presetPath = DEFAULT_PRESET_PATH,
+  listError,
+  resumeError,
+  executeError,
+  executeResult,
+  executeWaitForAbort = false,
+  skillListError,
+  mountHook,
+  omitAgents = false,
+  omitPresets = false,
+  attachments,
+} = {}) {
+  const routes = new Map()
+  let currentDefaultId = defaultId
+  const scope = { agentPreset: defaultId }
+  const helperSessionId = expectedCapabilitySessionId(defaultId, presetPath)
+  const agent = { id: helperSessionId, session: { header: { meta: { cwd: process.cwd() } } } }
+  const agentFor = id => id === helperSessionId
+    ? agent
+    : { id, session: { header: { meta: { cwd: process.cwd() } } } }
+  const calls = {
+    standing: 0,
+    standingIds: [],
+    mountIds: [],
+    create: [],
+    resume: [],
+    schemas: [],
+    execute: [],
+    skillList: [],
+    warnings: [],
+  }
+
+  const ctx = {
+    logger: {
+      warn(value) {
+        calls.warnings.push(value)
+      },
+    },
+    llm: {
+      registerAdapter() {},
+    },
+    effect(factory) {
+      return factory()
+    },
+    on() {
+      return () => {}
+    },
+    webServer: {
+      register(route) {
+        routes.set(route.path, route.handler)
+        return () => routes.delete(route.path)
+      },
+    },
+    tools: {
+      schemas(viewScope) {
+        calls.schemas.push(viewScope)
+        return [{ name: 'bash', description: 'bash', parameters: { type: 'object' } }]
+      },
+      async execute(input) {
+        calls.execute.push(input)
+        if (executeError) throw executeError
+        if (executeWaitForAbort) {
+          await new Promise((resolve, reject) => {
+            if (input.signal.aborted) {
+              reject(input.signal.reason)
+              return
+            }
+            input.signal.addEventListener('abort', () => reject(input.signal.reason), { once: true })
+          })
+        }
+        return executeResult ?? { isError: false, value: null, content: [{ type: 'text', text: 'ok' }] }
+      },
+    },
+    skills: {
+      async list(options) {
+        calls.skillList.push(options)
+        if (skillListError) throw skillListError
+        return []
+      },
+      async get() {
+        return undefined
+      },
+    },
+    get(name) {
+      if (name === 'agentPresets') {
+        if (omitPresets) return undefined
+        return {
+          get defaultId() {
+            return currentDefaultId
+          },
+          async resolve(id) {
+            return { id, path: presetPath }
+          },
+          async standingKeyFor(id) {
+            calls.standing += 1
+            calls.standingIds.push(id)
+            return { agentPreset: id }
+          },
+          async mount(_agentCtx, id) {
+            calls.mountIds.push(id)
+            if (mountHook) await mountHook({ id, presetPath, calls })
+            return { id, path: presetPath }
+          },
+        }
+      }
+      if (name === 'agents') {
+        if (omitAgents) return undefined
+        return {
+          async create(options) {
+            calls.create.push(options)
+            const createdAgent = agentFor(options.sessionId)
+            if (options.setup) await options.setup({ agent: createdAgent })
+            return { agent: createdAgent, async dispose() {} }
+          },
+          async resume(options) {
+            calls.resume.push(options)
+            if (resumeError) throw resumeError
+            const resumedAgent = agentFor(options.resumeSessionId)
+            if (options.setup) await options.setup({ agent: resumedAgent })
+            return { agent: resumedAgent, async dispose() {} }
+          },
+        }
+      }
+      if (name === 'sessionPersistence') {
+        return {
+          async list() {
+            if (listError) throw listError
+            return persisted ? [{ id: helperSessionId }] : []
+          },
+        }
+      }
+      if (name === 'attachments') return attachments
+      return undefined
+    },
+  }
+
+  apply(ctx)
+  return {
+    routes,
+    scope,
+    agent,
+    calls,
+    helperSessionId,
+    setDefaultId(value) {
+      currentDefaultId = value
+    },
+  }
+}
+
+{
+  const { routes, scope, calls } = makeContext()
+  const toolsRes = responseCapture()
+  await routes.get(`${PREFIX}/tools`)({ method: 'GET' }, toolsRes)
+  assert.equal(toolsRes.state.status, 200)
+  assert.equal(toolsRes.state.body.scope, 'dsh-preset-standing')
+  assert.deepEqual(calls.schemas, [scope])
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.resume.length, 0)
+
+  const skillsRes = responseCapture()
+  await routes.get(`${PREFIX}/skills`)({ method: 'GET' }, skillsRes)
+  assert.equal(skillsRes.state.status, 200)
+  assert.equal(calls.skillList.length, 1)
+  assert.deepEqual(calls.skillList[0].scope, scope)
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.resume.length, 0)
+}
+
+{
+  const { routes, agent, calls, helperSessionId } = makeContext({ persisted: false })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: { command: 'true' } }), res)
+  assert.equal(res.state.status, 200)
+  assert.equal(calls.create.length, 1)
+  assert.equal(calls.create[0].sessionId, helperSessionId)
+  assert.match(helperSessionId, /^dsh-mcp-gateway-chatgpt-capability-[0-9a-f]{24}$/)
+  assert.equal(helperSessionId.includes(process.cwd()), false)
+  assert.equal(calls.resume.length, 0)
+  assert.equal(calls.execute.length, 1)
+  assert.equal(calls.execute[0].agent, agent)
+}
+
+{
+  const { routes, agent, calls, helperSessionId } = makeContext({ persisted: true })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: { command: 'true' } }), res)
+  assert.equal(res.state.status, 200)
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.resume.length, 1)
+  assert.equal(calls.resume[0].resumeSessionId, helperSessionId)
+  assert.equal(calls.execute.length, 1)
+  assert.equal(calls.execute[0].agent, agent)
+}
+
+{
+  const first = makeContext({ defaultId: 'default' }).helperSessionId
+  const second = makeContext({ defaultId: 'alternate' }).helperSessionId
+  assert.notEqual(first, second)
+}
+
+{
+  const { routes, calls, setDefaultId } = makeContext()
+  const first = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), first)
+  const firstHelper = calls.create[0].sessionId
+  assert.equal(calls.execute[0].agent.id, firstHelper)
+
+  setDefaultId('alternate')
+  const catalog = responseCapture()
+  await routes.get(`${PREFIX}/tools`)({ method: 'GET' }, catalog)
+  assert.equal(calls.schemas.at(-1).agentPreset, 'alternate')
+
+  const second = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), second)
+  const secondHelper = calls.create[1].sessionId
+  assert.notEqual(secondHelper, firstHelper)
+  assert.equal(secondHelper, expectedCapabilitySessionId('alternate'))
+  assert.equal(calls.execute[1].agent.id, secondHelper)
+  assert.equal(calls.mountIds[1], 'alternate')
+
+  const third = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), third)
+  assert.equal(calls.create.length, 2)
+  assert.equal(calls.execute[2].agent.id, secondHelper)
+}
+
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-bridge-preset-generation-'))
+  const presetPath = join(dir, 'agent.cordis.yml')
+  try {
+    writeFileSync(presetPath, 'first')
+    const { routes, calls } = makeContext({ presetPath })
+    const first = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), first)
+    const firstHelper = calls.create[0].sessionId
+
+    writeFileSync(presetPath, 'second-generation-is-longer')
+    const second = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), second)
+    const secondHelper = calls.create[1].sessionId
+
+    assert.notEqual(secondHelper, firstHelper)
+    assert.equal(calls.create.length, 2)
+    assert.equal(calls.execute[1].agent.id, secondHelper)
+    assert.equal(calls.mountIds.length, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-bridge-preset-race-'))
+  const presetPath = join(dir, 'agent.cordis.yml')
+  let mutateOnce = true
+  try {
+    writeFileSync(presetPath, 'first')
+    const { routes, calls } = makeContext({
+      presetPath,
+      mountHook() {
+        if (!mutateOnce) return
+        mutateOnce = false
+        writeFileSync(presetPath, 'second-generation-is-longer')
+      },
+    })
+
+    const raced = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), raced)
+    assert.equal(raced.state.status, 500)
+    assert.equal(raced.state.body.error, 'bridge_error')
+    assert.equal(calls.execute.length, 0)
+
+    const retried = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), retried)
+    assert.equal(retried.state.status, 200)
+    assert.equal(calls.create.length, 2)
+    assert.equal(calls.execute.length, 1)
+    assert.equal(calls.mountIds.length, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+{
+  const { routes, calls } = makeContext({ listError: new Error('persistence unavailable') })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(res.state.body.message, 'internal DSH bridge operation failed')
+  assert.equal(JSON.stringify(res.state.body).includes('persistence unavailable'), false)
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.resume.length, 0)
+  assert.equal(calls.warnings.length, 2)
+}
+
+{
+  const { routes, calls } = makeContext({ persisted: true, resumeError: new Error('resume failed') })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(JSON.stringify(res.state.body).includes('resume failed'), false)
+  assert.equal(calls.resume.length, 1)
+  assert.equal(calls.create.length, 0)
+}
+
+{
+  const { routes, calls } = makeContext({ omitPresets: true })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/tools`)({ method: 'GET' }, res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(calls.schemas.length, 0)
+}
+
+{
+  const { routes, calls } = makeContext({ omitAgents: true })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(calls.execute.length, 0)
+}
+
+{
+  const { routes } = makeContext({
+    executeResult: {
+      isError: false,
+      value: { image: true },
+      content: [{ type: 'image', attachment: { id: 'image-1' } }],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'read_image', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+}
+
+{
+  const { routes } = makeContext({
+    attachments: {
+      async readImage() {
+        return {
+          data: Buffer.from('image-bytes'),
+          ref: {},
+        }
+      },
+    },
+    executeResult: {
+      isError: false,
+      value: { image: true },
+      content: [{ type: 'image', attachment: { id: 'image-1' } }],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'read_image', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+}
+
+{
+  const { routes } = makeContext({
+    attachments: {
+      async readImage() {
+        return {
+          data: Buffer.from('image-bytes'),
+          ref: { mediaType: 'image/png' },
+        }
+      },
+    },
+    executeResult: {
+      isError: false,
+      value: { image: true },
+      content: [{ type: 'image', attachment: { id: 'image-1' } }],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'read_image', arguments: {} }), res)
+  assert.equal(res.state.status, 200)
+  assert.equal(res.state.body.content[0].type, 'image')
+  assert.equal(res.state.body.content[0].mediaType, 'image/png')
+  assert.equal(res.state.body.content[0].data, Buffer.from('image-bytes').toString('base64'))
+}
+
+{
+  const { routes, calls } = makeContext({ executeError: new Error('/private/workspace/tool failed') })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: ' bash ', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(JSON.stringify(res.state.body).includes('/private/workspace'), false)
+  assert.equal(calls.execute[0].name, 'bash')
+  assert.equal(calls.warnings.length, 2)
+}
+
+{
+  const { routes, calls } = makeContext({ skillListError: new Error('/private/skills unavailable') })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/skills`)({ method: 'GET' }, res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(JSON.stringify(res.state.body).includes('/private/skills'), false)
+  assert.equal(calls.warnings.length, 2)
+}
+
+{
+  let releaseSetup
+  const setupGate = new Promise(resolve => {
+    releaseSetup = resolve
+  })
+  const { routes, calls } = makeContext({ mountHook: () => setupGate })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  for (let attempt = 0; attempt < 20 && calls.mountIds.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.mountIds.length, 1)
+  res.emitClose()
+  releaseSetup()
+  await pending
+  assert.equal(calls.execute.length, 0)
+  assert.equal(res.state.status, undefined)
+  assert.equal(calls.warnings.length, 0)
+}
+
+{
+  const { routes, calls } = makeContext({ executeWaitForAbort: true })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  for (let attempt = 0; attempt < 20 && calls.execute.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.execute.length, 1)
+  assert.equal(calls.execute[0].signal.aborted, false)
+  res.emitClose()
+  await pending
+  assert.equal(calls.execute[0].signal.aborted, true)
+  assert.equal(res.state.status, undefined)
+  assert.equal(calls.warnings.length, 0)
+}
+
+{
+  const { routes, calls } = makeContext()
+  const badArguments = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: [] }), badArguments)
+  assert.equal(badArguments.state.status, 400)
+  assert.deepEqual(badArguments.state.body, {
+    error: 'invalid_request',
+    message: 'arguments must be an object when supplied',
+  })
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.execute.length, 0)
+}
+
+{
+  const { routes } = makeContext()
+  const invalid = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postRaw('{not-json'), invalid)
+  assert.equal(invalid.state.status, 400)
+  assert.deepEqual(invalid.state.body, {
+    error: 'invalid_request',
+    message: 'request body must be valid JSON',
+  })
+
+  const tooLarge = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postRaw(Buffer.alloc(1_000_001, 0x20)), tooLarge)
+  assert.equal(tooLarge.state.status, 413)
+  assert.deepEqual(tooLarge.state.body, {
+    error: 'request_too_large',
+    message: 'request body too large',
+  })
+
+  const whitespace = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: '   ', arguments: {} }), whitespace)
+  assert.equal(whitespace.state.status, 400)
+  assert.equal(whitespace.state.body.error, 'invalid_request')
+}
+
+console.log('chatgpt-bridge-standing-scope-and-capability-session-ok')

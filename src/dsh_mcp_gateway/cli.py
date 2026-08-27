@@ -9,10 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import build_embedded_oauth_server
-from .backend import ExperimentalWebHostBackend
 from .harness_bridge import HarnessBridgeClient
-from .routing import GatewayService
-from .session_runtime import DurableSessionRuntime
 
 
 def build_transport_security(public_base: str):
@@ -20,12 +17,22 @@ def build_transport_security(public_base: str):
     from mcp.server.transport_security import TransportSecuritySettings
 
     parsed_public = urlparse(public_base)
-    if not parsed_public.hostname:
-        raise ValueError("public_base must contain a hostname")
+    if parsed_public.scheme != "https" or not parsed_public.hostname:
+        raise ValueError("public_base must be an absolute https:// origin")
+    if parsed_public.username is not None or parsed_public.password is not None:
+        raise ValueError("public_base must not contain user info")
+    if (
+        parsed_public.path not in {"", "/"}
+        or parsed_public.params
+        or parsed_public.query
+        or parsed_public.fragment
+    ):
+        raise ValueError("public_base must be an origin without path, params, query, or fragment")
     try:
         public_port = parsed_public.port
     except ValueError as exc:
         raise ValueError("public_base must contain a valid port") from exc
+    canonical_public_base = public_base[:-1] if parsed_public.path == "/" else public_base
     public_host = parsed_public.netloc
     allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
     if public_port is None:
@@ -35,7 +42,7 @@ def build_transport_security(public_base: str):
         enable_dns_rebinding_protection=True,
         allowed_hosts=list(dict.fromkeys(allowed_hosts)),
         allowed_origins=[
-            public_base,
+            canonical_public_base,
             "http://127.0.0.1:*",
             "http://localhost:*",
             "http://[::1]:*",
@@ -126,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Working directory used only by the optional legacy DSH adapter.",
     )
     parser.add_argument(
+        "--legacy-session-runtime",
+        action="store_true",
+        help="Explicitly enable the legacy gateway-owned standalone session_manage runtime.",
+    )
+    parser.add_argument(
         "--public-base-url",
         required=True,
         help="Public HTTPS origin used as OAuth issuer, for example https://gateway.example.com.",
@@ -182,7 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit(
                 "--bind-host must be loopback unless --allow-non-loopback-bind is explicitly supplied"
             )
-    public_base = args.public_base_url.rstrip("/")
+    public_base = args.public_base_url
     parsed_public = urlparse(public_base)
     if parsed_public.scheme != "https" or not parsed_public.hostname:
         raise SystemExit("--public-base-url must be an absolute https:// origin")
@@ -192,11 +204,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--public-base-url must contain a valid port") from exc
     if parsed_public.username is not None or parsed_public.password is not None:
         raise SystemExit("--public-base-url must not contain user info")
-    if parsed_public.path not in {"", "/"} or parsed_public.query or parsed_public.fragment:
-        raise SystemExit("--public-base-url must be an origin without a path, query, or fragment")
+    if (
+        parsed_public.path not in {"", "/"}
+        or parsed_public.params
+        or parsed_public.query
+        or parsed_public.fragment
+    ):
+        raise SystemExit("--public-base-url must be an origin without a path, params, query, or fragment")
+    public_base = public_base[:-1] if parsed_public.path == "/" else public_base
     admin_pin = os.environ.get("DSH_MCP_GATEWAY_ADMIN_PIN", "")
     if not admin_pin:
         raise SystemExit("DSH_MCP_GATEWAY_ADMIN_PIN is required")
+
+    selected_modes = sum(
+        (
+            bool(args.dsh_harness_url),
+            bool(args.dsh_web_url),
+            bool(args.legacy_session_runtime),
+        )
+    )
+    if selected_modes == 0:
+        raise SystemExit(
+            "select a runtime explicitly with --dsh-harness-url, --dsh-web-url, "
+            "or --legacy-session-runtime"
+        )
+    if selected_modes > 1:
+        raise SystemExit(
+            "--dsh-harness-url, --dsh-web-url, and --legacy-session-runtime are mutually exclusive"
+        )
+    if args.tool_surface == "projected" and not args.dsh_harness_url:
+        raise SystemExit("--tool-surface projected requires --dsh-harness-url")
 
     try:
         from .oauth import EmbeddedOAuthConfig
@@ -215,6 +252,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     backend = None
     service = None
     if args.dsh_web_url:
+        from .backend import ExperimentalWebHostBackend
+        from .routing import GatewayService
+
         try:
             backend = ExperimentalWebHostBackend(
                 args.dsh_web_url,
@@ -233,7 +273,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_client_metadata_bytes=args.max_client_metadata_bytes,
         max_registration_request_bytes=args.max_registration_request_bytes,
     )
-    session_runtime = None if harness_bridge is not None else DurableSessionRuntime(state_dir / "sessions.sqlite3")
+    session_runtime = None
+    if args.legacy_session_runtime:
+        from .session_runtime import DurableSessionRuntime
+
+        session_runtime = DurableSessionRuntime(state_dir / "sessions.sqlite3")
     server, _provider = build_embedded_oauth_server(
         service,
         oauth,
@@ -247,8 +291,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"DSH Harness bridge configured at {harness_bridge.base_url}; ChatGPT remains the reasoning agent; "
             f"tool surface={args.tool_surface}"
         )
-    elif backend is None:
-        print("Legacy standalone session runtime enabled; no DSH Harness bridge is configured")
+    elif args.legacy_session_runtime:
+        print("Legacy standalone session runtime explicitly enabled; no DSH Harness bridge is configured")
     else:
         print(f"Legacy DSH Web Host configured at {backend.base_url}; readiness is checked via /readyz")
     print(f"MCP gateway listening on http://{args.bind_host}:{args.port}/mcp")

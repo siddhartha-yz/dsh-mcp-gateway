@@ -17,14 +17,39 @@ class HarnessBridgeError(RuntimeError):
 
 
 MAX_BRIDGE_RESPONSE_BYTES = 16 * 1024 * 1024
+DEFAULT_TOOL_CALL_TRANSPORT_TIMEOUT_S = 125.0
 
 
 def _http_error_detail(error: HTTPError, *, limit: int) -> str:
+    """Return only the bridge's small structured public error surface."""
     try:
         try:
-            return error.read(limit + 1).decode("utf-8", errors="replace")[:limit]
+            raw = error.read(limit + 1)
         except (OSError, HTTPException, ValueError) as exc:
             return f"<error body unavailable: {type(exc).__name__}>"
+        if len(raw) > limit:
+            return "<error body too large>"
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return "<non-JSON error body>"
+        if not isinstance(decoded, dict):
+            return "<invalid error body>"
+        code = decoded.get("error")
+        message = decoded.get("message")
+        if not isinstance(code, str) or code not in {
+            "bridge_error",
+            "invalid_request",
+            "method_not_allowed",
+            "request_too_large",
+            "skill_unavailable",
+        }:
+            return "<unrecognized bridge error>"
+        if code == "bridge_error":
+            return code
+        if isinstance(message, str) and 0 < len(message) <= 512:
+            return f"{code}: {message}"
+        return code
     finally:
         try:
             error.close()
@@ -39,13 +64,7 @@ def _read_bounded(response, *, limit: int = MAX_BRIDGE_RESPONSE_BYTES) -> bytes:
     return body
 
 
-def _projected_tool(schema: dict[str, Any]):
-    """Convert one DSH ToolRuntime schema into an MCP first-class tool schema."""
-    try:
-        from mcp.types import Tool as MCPTool
-    except ImportError as exc:  # pragma: no cover - optional server dependency boundary
-        raise RuntimeError("MCP dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
-
+def _validated_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     name = schema.get("name")
     description = schema.get("description")
     parameters = schema.get("parameters")
@@ -55,6 +74,20 @@ def _projected_tool(schema: dict[str, Any]):
         raise HarnessBridgeError(f"DSH tool {name!r} returned a non-string description")
     if not isinstance(parameters, dict):
         raise HarnessBridgeError(f"DSH tool {name!r} returned a non-object parameter schema")
+    return schema
+
+
+def _projected_tool(schema: dict[str, Any]):
+    """Convert one validated DSH ToolRuntime schema into an MCP first-class tool schema."""
+    schema = _validated_tool_schema(schema)
+    try:
+        from mcp.types import Tool as MCPTool
+    except ImportError as exc:  # pragma: no cover - optional server dependency boundary
+        raise RuntimeError("MCP dependencies are unavailable; install dsh-mcp-gateway[server]") from exc
+
+    name = schema["name"]
+    description = schema.get("description")
+    parameters = schema["parameters"]
     return MCPTool(
         name=name,
         description=description or "DSH Harness capability",
@@ -63,8 +96,48 @@ def _projected_tool(schema: dict[str, Any]):
     )
 
 
+def _validated_skill(skill: dict[str, Any], *, require_content: bool) -> dict[str, Any]:
+    for field in ("name", "source", "provider"):
+        value = skill.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise HarnessBridgeError(f"DSH bridge returned a skill without a valid {field}")
+    if not isinstance(skill.get("description"), str):
+        raise HarnessBridgeError("DSH bridge returned a skill without a string description")
+    if "whenToUse" in skill and not isinstance(skill["whenToUse"], str):
+        raise HarnessBridgeError("DSH bridge returned a skill with invalid whenToUse")
+    if "resourceBase" in skill and not isinstance(skill["resourceBase"], dict):
+        raise HarnessBridgeError("DSH bridge returned a skill with invalid resourceBase")
+    if require_content and not isinstance(skill.get("content"), str):
+        raise HarnessBridgeError("DSH bridge returned an invalid skill definition")
+    return skill
+
+
+def _validated_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    is_error = result.get("isError")
+    if not isinstance(is_error, bool):
+        raise HarnessBridgeError("DSH bridge returned a tool result without a boolean isError")
+    content = result.get("content")
+    if not isinstance(content, list):
+        raise HarnessBridgeError("DSH bridge returned a tool result without a content list")
+    if "additionalContexts" in result and not isinstance(result["additionalContexts"], list):
+        raise HarnessBridgeError("DSH bridge returned invalid additionalContexts")
+    if is_error:
+        error = result.get("error")
+        if not isinstance(error, dict) or not isinstance(error.get("message"), str):
+            raise HarnessBridgeError("DSH bridge returned an invalid failed tool result")
+        if "value" in result:
+            raise HarnessBridgeError("DSH bridge returned a failed tool result with a value")
+    else:
+        if "value" not in result:
+            raise HarnessBridgeError("DSH bridge returned a successful tool result without a value")
+        if "error" in result:
+            raise HarnessBridgeError("DSH bridge returned a successful tool result with an error")
+    return result
+
+
 def tool_result_to_mcp(result: dict[str, Any]):
-    """Translate a DSH ToolRuntime execution result into an MCP call result."""
+    """Translate a validated DSH ToolRuntime execution result into an MCP call result."""
+    result = _validated_tool_result(result)
     try:
         from mcp.types import CallToolResult, ImageContent, TextContent
     except ImportError as exc:  # pragma: no cover - optional server dependency boundary
@@ -171,10 +244,10 @@ async def watch_tool_catalog(
     """
     if interval_s <= 0:
         raise ValueError("interval_s must be positive")
-    previous: int | None = None
+    previous: tuple[str, int] | None = None
     while True:
         try:
-            current = await asyncio.to_thread(bridge.tool_revision)
+            current = await asyncio.to_thread(bridge.tool_revision_token)
             if previous is not None and current != previous:
                 await publish_changed()
             previous = current
@@ -231,6 +304,7 @@ class HarnessBridgeClient:
     base_url: str
     timeout_s: float = 30.0
     allow_non_loopback: bool = False
+    tool_call_timeout_s: float = DEFAULT_TOOL_CALL_TRANSPORT_TIMEOUT_S
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.base_url)
@@ -238,14 +312,16 @@ class HarnessBridgeClient:
             raise ValueError("base_url must be an absolute http(s) origin")
         if parsed.username is not None or parsed.password is not None:
             raise ValueError("base_url must not contain user info")
-        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise ValueError("base_url must be an origin without path, query, or fragment")
+        if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+            raise ValueError("base_url must be an origin without path, params, query, or fragment")
         try:
             _ = parsed.port
         except ValueError as exc:
             raise ValueError("base_url contains an invalid port") from exc
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
+        if self.tool_call_timeout_s <= 0:
+            raise ValueError("tool_call_timeout_s must be positive")
         if not self.allow_non_loopback and not self._is_loopback(parsed.hostname):
             raise ValueError("DSH harness bridge must use loopback unless explicitly allowed")
         self.base_url = self.base_url.rstrip("/")
@@ -292,40 +368,60 @@ class HarnessBridgeClient:
             raise HarnessBridgeError("DSH bridge returned a non-object response")
         return decoded
 
-    def tool_revision(self) -> int:
-        payload = self._request("/api/chatgpt-bridge/revision")
+    def _revision_payload(self) -> dict[str, Any]:
+        return self._request("/api/chatgpt-bridge/revision")
+
+    @staticmethod
+    def _validated_tool_revision(payload: dict[str, Any]) -> int:
         revision = payload.get("toolRevision")
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
             raise HarnessBridgeError("DSH bridge returned an invalid tool revision")
         return revision
+
+    def tool_revision(self) -> int:
+        """Return the process-local numeric tool revision for diagnostics."""
+        return self._validated_tool_revision(self._revision_payload())
+
+    def tool_revision_token(self) -> tuple[str, int]:
+        """Return a restart-safe token for projected MCP catalog invalidation."""
+        payload = self._revision_payload()
+        instance_id = payload.get("instanceId")
+        if not isinstance(instance_id, str) or not instance_id:
+            raise HarnessBridgeError("DSH bridge returned an invalid instance id")
+        return instance_id, self._validated_tool_revision(payload)
 
     def tools(self, *, timeout_s: float | None = None) -> list[dict[str, Any]]:
         payload = self._request("/api/chatgpt-bridge/tools", timeout_s=timeout_s)
         tools = payload.get("tools")
         if not isinstance(tools, list) or not all(isinstance(item, dict) for item in tools):
             raise HarnessBridgeError("DSH bridge returned an invalid tool catalog")
-        return [dict(item) for item in tools]
+        return [dict(_validated_tool_schema(item)) for item in tools]
 
     def skills(self) -> list[dict[str, Any]]:
         payload = self._request("/api/chatgpt-bridge/skills")
         skills = payload.get("skills")
         if not isinstance(skills, list) or not all(isinstance(item, dict) for item in skills):
             raise HarnessBridgeError("DSH bridge returned an invalid skill catalog")
-        return [dict(item) for item in skills]
+        return [dict(_validated_skill(item, require_content=False)) for item in skills]
 
     def load_skill(self, name: str) -> dict[str, Any]:
         if not name.strip():
             raise ValueError("name must be non-empty")
         payload = self._request("/api/chatgpt-bridge/skill", payload={"name": name})
         skill = payload.get("skill")
-        if not isinstance(skill, dict) or not isinstance(skill.get("content"), str):
+        if not isinstance(skill, dict):
             raise HarnessBridgeError("DSH bridge returned an invalid skill definition")
-        return dict(skill)
+        return dict(_validated_skill(skill, require_content=True))
 
     def call(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         if not name.strip():
             raise ValueError("name must be non-empty")
-        return self._request(
-            "/api/chatgpt-bridge/call",
-            payload={"name": name, "arguments": arguments or {}},
+        if arguments is not None and not isinstance(arguments, dict):
+            raise ValueError("arguments must be an object when supplied")
+        return _validated_tool_result(
+            self._request(
+                "/api/chatgpt-bridge/call",
+                payload={"name": name, "arguments": arguments or {}},
+                timeout_s=self.tool_call_timeout_s,
+            )
         )

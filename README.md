@@ -66,9 +66,9 @@ Generic Harness operations cover both DSH tools and DSH community skills:
 
 The default gateway mode is deliberately **meta-only**: `tools/list` exposes only those four stable DSH meta-tools, individual DSH ToolRuntime schemas are not projected into ChatGPT, and the gateway does not advertise the modern tool-list change subscription. This makes the frozen-snapshot property an enforced protocol boundary rather than an assumption about client behavior. Operators may explicitly enable `--tool-surface projected` as a separate UX mode when they want compatible DSH tools to appear as first-class MCP tools.
 
-The bridge now uses DSH's own AgentRegistry and agent-preset composition only as a **capability/scope identity**: it creates one idle DSH Agent, mounts the deployment's default preset through `agentPresets.mount(...)`, never submits a prompt to that Agent, and passes the resulting Agent to `ToolRuntime.schemas(agent)` / `ToolRuntime.execute({ ..., agent })` and SkillRegistry scope lookup. This preserves DSH's preset restrictions, guards, jobs/filesystem/session ownership, and community-extension scope instead of promoting scoped registrations to globals.
+The bridge uses DSH's native preset scope directly for discovery. `agentPresets.standingKeyFor(presetId)` resolves the deployment's current default preset without starting an Agent, Session, or model turn; `ToolRuntime.schemas(scope)` and SkillRegistry lookups use that standing scope. Tool execution still goes through `ToolRuntime.execute(...)`, whose public rc6 API requires an Agent for agent-scoped policy and modality checks. The bridge therefore creates that metadata-only execution Agent lazily on the first tool call. Its durable helper id is a non-reversible hash of the workspace cwd, preset id, resolved composition path, and the same `mtimeMs`/size file stamp rc6 uses to detect a new standing generation. A restart resumes the same helper only while that exact workspace/preset composition generation still applies; a different workspace, changed default preset, or edited composition receives a distinct helper. Setup rechecks the preset path/stamp after `agentPresets.mount(...)` and fails closed if a hot reload raced helper creation. Catalog/skill reads create no helper session, and ordinary restarts no longer accumulate one new durable helper per boot.
 
-For native DSH tools whose execution is gated by the routed model's declared modalities, the idle capability Agent points at a local **metadata-only ChatGPT Web route**. That route declares `text` + `image` input so DSH's own `read_image` gate can validate the external ChatGPT consumer, but its `stream()` method always fails and the bridge never drives the Agent. It therefore performs no inference, requires no model API key, and cannot become a hidden second model. A real rc6 smoke verified preset-scoped `bash` execution and native `read_image` returning an image block through the bridge with no provider credential configured.
+For native DSH tools whose execution is gated by the routed model's declared modalities, the lazy execution Agent points at a local **metadata-only ChatGPT Web route**. That route declares `text` + `image` input so DSH's own `read_image` gate can validate the external ChatGPT consumer, but its `stream()` method always fails and the bridge never submits a prompt to the Agent. It therefore performs no inference, requires no model API key, and cannot become a hidden second model. A real rc6 smoke verified preset-scoped `bash` execution and native `read_image` returning an image block through the bridge with no provider credential configured.
 
 DSH `additionalContexts` are also preserved across the external-agent boundary. DSH uses these follow-up user contexts for guard reminders and for nested Code Mode results such as an image returned by `run_code`. The bridge materializes attachment-backed images inside those contexts and the MCP adapter appends their visible text/image blocks to the tool result, so replacing DSH's own model loop with ChatGPT Web does not silently discard policy or nested multimodal context.
 
@@ -103,7 +103,9 @@ https://gateway.example.com/mcp
 
 ## Optional legacy DSH adapter
 
-Earlier development explored using DeepSeek Harness as a second autonomous Agent. That is no longer the default product direction. The experimental DSH Web Host adapter is retained only as an opt-in compatibility/research path:
+Earlier development explored using DeepSeek Harness as a second autonomous Agent. That is no longer the default product direction. Legacy runtime paths are explicit opt-ins; starting the gateway without selecting a runtime now fails closed instead of silently creating a gateway-owned session runtime.
+
+The experimental DSH Web Host adapter is retained only as an opt-in compatibility/research path:
 
 ```sh
 dsh-mcp-gateway \
@@ -112,7 +114,7 @@ dsh-mcp-gateway \
   --dsh-cwd /path/to/workspace
 ```
 
-Only when this option is supplied are the legacy `dsh_*` MCP tools registered and `/readyz` made dependent on that Host. Historical evidence, goal-round experiments, deployment material, and rc6 restart notes are preserved in [`docs/legacy-dsh-prototype.md`](docs/legacy-dsh-prototype.md).
+Only when this option is supplied are the legacy `dsh_*` MCP tools registered and `/readyz` made dependent on that Host. The older gateway-owned standalone `session_manage` runtime is available only with `--legacy-session-runtime` for migration/testing. Runtime modes are mutually exclusive, and `--tool-surface projected` is valid only with `--dsh-harness-url`. Historical evidence, goal-round experiments, deployment material, and rc6 restart notes are preserved in [`docs/legacy-dsh-prototype.md`](docs/legacy-dsh-prototype.md).
 
 No DeepSeek API key is required for the primary ChatGPT-to-DSH harness path.
 

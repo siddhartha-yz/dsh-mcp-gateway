@@ -212,6 +212,35 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(config.scopes, ("dsh:control", "offline_access"))
             self.assertEqual(config.required_scopes, ("dsh:control",))
 
+    def test_issuer_single_trailing_slash_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EmbeddedOAuthConfig(
+                issuer_url="http://127.0.0.1:8000/",
+                resource_url="http://127.0.0.1:8000/mcp",
+                state_db=Path(tmp) / "oauth.sqlite3",
+                admin_pin="test-admin-pin",
+            )
+            self.assertEqual(config.issuer_url, "http://127.0.0.1:8000/")
+
+    def test_issuer_rejects_non_origin_urls_before_canonicalization(self) -> None:
+        invalid = (
+            "http://127.0.0.1:8000//",
+            "http://127.0.0.1:8000/path",
+            "http://127.0.0.1:8000/;tenant=bad",
+            "http://127.0.0.1:8000?tenant=bad",
+            "http://user:pass@127.0.0.1:8000",
+            "http://127.0.0.1:99999",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for issuer_url in invalid:
+                with self.subTest(issuer_url=issuer_url), self.assertRaises(ValueError):
+                    EmbeddedOAuthConfig(
+                        issuer_url=issuer_url,
+                        resource_url="http://127.0.0.1:8000/mcp",
+                        state_db=Path(tmp) / "oauth.sqlite3",
+                        admin_pin="test-admin-pin",
+                    )
+
     def test_required_scopes_must_be_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "subset"):
             EmbeddedOAuthConfig(

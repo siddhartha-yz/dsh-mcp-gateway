@@ -248,6 +248,14 @@ class ReleaseSmokeHandler(BaseHTTPRequestHandler):
 
 
 class PublicReleaseSmokeTests(unittest.TestCase):
+    def test_origin_normalization_validates_before_removing_one_trailing_slash(self) -> None:
+        self.assertEqual(
+            smoke_module.normalize_origin("https://gateway.example.com/", allow_http_loopback=False),
+            "https://gateway.example.com",
+        )
+        with self.assertRaisesRegex(smoke_module.SmokeError, "origin without path"):
+            smoke_module.normalize_origin("https://gateway.example.com//", allow_http_loopback=False)
+
     @staticmethod
     def secret_marker(kind: str) -> str:
         return f"fixture-{kind}-never-print"

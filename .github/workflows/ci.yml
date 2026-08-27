@@ -77,9 +77,12 @@ jobs:
           node --check dsh-bridge-plugin/index.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_lsm_tool_filter.mjs
+          node --check tests/test_chatgpt_bridge.mjs
 
       - name: Test deployment JavaScript
-        run: node tests/test_lsm_tool_filter.mjs
+        run: |
+          node tests/test_lsm_tool_filter.mjs
+          node tests/test_chatgpt_bridge.mjs
 
       - name: Verify systemd unit syntax
         run: ./scripts/verify-systemd.sh

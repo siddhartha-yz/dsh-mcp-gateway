@@ -86,7 +86,7 @@ for raw in sys.argv[3:]:
         raise SystemExit(f"workspace path does not exist: {raw}")
 PY
 
-python3 - "$OUTPUT" create-output <<'PY'
+OUTPUT_ID="$(python3 - "$OUTPUT" create-output <<'PY'
 import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 if not path.is_absolute():
@@ -118,23 +118,36 @@ try:
         os.close(fd)
         fd = child
     os.fchmod(fd, 0o700)
+    opened = os.fstat(fd)
+    print(f"{opened.st_dev}:{opened.st_ino}")
 finally:
     os.close(fd)
+PY
+)"
+exec {OUTPUT_FD}<"$OUTPUT"
+OUTPUT_IO="/proc/self/fd/$OUTPUT_FD"
+python3 - "$OUTPUT_IO" "${OUTPUT_ID}" <<'PY'
+import os, sys
+opened = os.stat(sys.argv[1])
+actual = f"{opened.st_dev}:{opened.st_ino}"
+if actual != sys.argv[2]:
+    raise SystemExit("backup output path changed after secure creation")
 PY
 BACKUP_COMPLETE=0
 cleanup_partial_output() {
   local original_rc=$?
   if ((original_rc != 0 && BACKUP_COMPLETE == 0)); then
-    rm -rf -- "$OUTPUT"
+    find -H "$OUTPUT_IO" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    rmdir -- "$OUTPUT" 2>/dev/null || true
   fi
   return "$original_rc"
 }
 trap cleanup_partial_output EXIT
 
 # Snapshot the live capability surface before making the backup offline.
-curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT/tools-before.json"
-curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills > "$OUTPUT/skills-before.json"
-chmod 0600 "$OUTPUT/tools-before.json" "$OUTPUT/skills-before.json"
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT_IO/tools-before.json"
+curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills > "$OUTPUT_IO/skills-before.json"
+chmod 0600 "$OUTPUT_IO/tools-before.json" "$OUTPUT_IO/skills-before.json"
 
 HOST_WAS_ACTIVE=0
 GATEWAY_WAS_ACTIVE=0
@@ -167,7 +180,8 @@ restore_services() {
     systemctl start dsh-cloudflared.service || restart_rc=1
   fi
   if ((original_rc != 0 || restart_rc != 0)) && ((BACKUP_COMPLETE == 0)); then
-    rm -rf -- "$OUTPUT"
+    find -H "$OUTPUT_IO" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    rmdir -- "$OUTPUT" 2>/dev/null || true
   fi
   set -e
   if ((original_rc != 0)); then
@@ -183,8 +197,8 @@ trap restore_services EXIT
 ((HOST_WAS_ACTIVE)) && systemctl stop dsh-web-host.service
 
 # Preserve the production paths in each archive so a real restore can extract at /.
-tar --numeric-owner -C / -czf "$OUTPUT/dsh-home.tar.gz" var/lib/dsh-harness
-tar --numeric-owner -C / -czf "$OUTPUT/gateway-state.tar.gz" var/lib/dsh-mcp-gateway
+tar --numeric-owner -C / -czf "$OUTPUT_IO/dsh-home.tar.gz" var/lib/dsh-harness
+tar --numeric-owner -C / -czf "$OUTPUT_IO/gateway-state.tar.gz" var/lib/dsh-mcp-gateway
 
 CONFIG_PATHS=(
   etc/dsh-mcp-gateway
@@ -194,41 +208,125 @@ CONFIG_PATHS=(
   etc/systemd/system/dsh-cloudflared.service
 )
 [[ -d /etc/systemd/system/dsh-web-host.service.d ]] && CONFIG_PATHS+=(etc/systemd/system/dsh-web-host.service.d)
-tar --numeric-owner -C / -czf "$OUTPUT/config.tar.gz" "${CONFIG_PATHS[@]}"
+tar --numeric-owner -C / -czf "$OUTPUT_IO/config.tar.gz" "${CONFIG_PATHS[@]}"
 
-if ((${#WORKSPACE_PATHS[@]})); then
-  tar --numeric-owner -C "$WORKSPACE" -czf "$OUTPUT/workspace-selected.tar.gz" -- "${WORKSPACE_PATHS[@]}"
-else
-  tar -czf "$OUTPUT/workspace-selected.tar.gz" --files-from /dev/null
-fi
-chmod 0600 "$OUTPUT"/*.tar.gz
-
-# Record a non-secret manifest plus exact selected-workspace hashes.
-python3 - "$OUTPUT" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
+python3 - "$OUTPUT_IO/workspace-selected.tar.gz" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
 from __future__ import annotations
-import datetime, hashlib, json, os, pathlib, subprocess, sys
-out=pathlib.Path(sys.argv[1]); workspace=pathlib.Path(sys.argv[2]).resolve(); selected=sys.argv[3:]
+import os, pathlib, stat, sys, tarfile
+
+archive = sys.argv[1]
+workspace = os.path.abspath(sys.argv[2])
+selected = sys.argv[3:]
+
+
+def open_absolute_directory(path: str) -> int:
+    if not os.path.isabs(path):
+        raise SystemExit('workspace path must be absolute')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in pathlib.Path(path).parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def tar_info(name: str, st: os.stat_result) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.mode = stat.S_IMODE(st.st_mode)
+    info.uid = st.st_uid
+    info.gid = st.st_gid
+    info.mtime = int(st.st_mtime)
+    return info
+
+
+def add_opened(tf: tarfile.TarFile, fd: int, name: str) -> None:
+    st = os.fstat(fd)
+    info = tar_info(name, st)
+    if stat.S_ISREG(st.st_mode):
+        info.type = tarfile.REGTYPE
+        info.size = st.st_size
+        with os.fdopen(os.dup(fd), 'rb') as source:
+            tf.addfile(info, source)
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        raise SystemExit(f'unsupported workspace path type: {name}')
+    info.type = tarfile.DIRTYPE
+    tf.addfile(info)
+    with os.scandir(fd) as entries:
+        for entry in sorted(entries, key=lambda item: item.name):
+            child_name = f'{name}/{entry.name}'
+            child_stat = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISLNK(child_stat.st_mode):
+                link_info = tar_info(child_name, child_stat)
+                link_info.type = tarfile.SYMTYPE
+                link_info.linkname = os.readlink(entry.name, dir_fd=fd)
+                tf.addfile(link_info)
+                continue
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            if stat.S_ISDIR(child_stat.st_mode):
+                flags |= os.O_DIRECTORY
+            child_fd = os.open(entry.name, flags, dir_fd=fd)
+            try:
+                add_opened(tf, child_fd, child_name)
+            finally:
+                os.close(child_fd)
+
+
+root_fd = open_absolute_directory(workspace)
+try:
+    with tarfile.open(archive, 'w:gz') as tf:
+        for raw in selected:
+            parts = pathlib.PurePosixPath(raw).parts
+            if not raw or os.path.isabs(raw) or any(part in {'.', '..'} for part in parts):
+                raise SystemExit(f'workspace path must be a normalized relative path: {raw!r}')
+            parent_fd = os.dup(root_fd)
+            try:
+                for part in parts[:-1]:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                    os.close(parent_fd)
+                    parent_fd = child
+                leaf_stat = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+                if stat.S_ISLNK(leaf_stat.st_mode):
+                    raise SystemExit(f'workspace path must not be a symlink: {raw}')
+                flags = os.O_RDONLY | os.O_NOFOLLOW
+                if stat.S_ISDIR(leaf_stat.st_mode):
+                    flags |= os.O_DIRECTORY
+                leaf_fd = os.open(parts[-1], flags, dir_fd=parent_fd)
+                try:
+                    add_opened(tf, leaf_fd, raw)
+                finally:
+                    os.close(leaf_fd)
+            finally:
+                os.close(parent_fd)
+finally:
+    os.close(root_fd)
+PY
+chmod 0600 "$OUTPUT_IO"/*.tar.gz
+
+# Record a non-secret manifest plus exact hashes of the securely archived workspace files.
+python3 - "$OUTPUT_IO" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
+from __future__ import annotations
+import datetime, hashlib, json, os, pathlib, subprocess, sys, tarfile
+out=pathlib.Path(sys.argv[1]); workspace=pathlib.Path(os.path.abspath(sys.argv[2])); selected=sys.argv[3:]
 tools=json.loads((out/'tools-before.json').read_text())['tools']
 skills=json.loads((out/'skills-before.json').read_text())['skills']
-
-def hash_path(rel: str):
-    target=workspace/rel
-    if target.is_symlink():
-        raise SystemExit(f'workspace path became a symlink during backup: {rel}')
-    target=target.resolve()
-    rows=[]
-    if target.is_file():
-        rows.append({'path': rel, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'size': target.stat().st_size})
-    elif target.is_dir():
-        for p in sorted(target.rglob('*')):
-            if p.is_file() and not p.is_symlink():
-                r=p.relative_to(workspace).as_posix()
-                rows.append({'path': r, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size': p.stat().st_size})
-    else:
-        raise SystemExit(f'unsupported workspace path type: {rel}')
-    return rows
 workspace_files=[]
-for rel in selected: workspace_files.extend(hash_path(rel))
+with tarfile.open(out/'workspace-selected.tar.gz', 'r:gz') as tf:
+    for member in tf.getmembers():
+        if not member.isfile():
+            continue
+        source=tf.extractfile(member)
+        if source is None:
+            raise SystemExit(f'failed to read archived workspace file: {member.name}')
+        digest=hashlib.sha256(); size=0
+        with source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk); size += len(chunk)
+        workspace_files.append({'path': member.name, 'sha256': digest.hexdigest(), 'size': size})
 public_base=''
 for line in pathlib.Path('/etc/dsh-mcp-gateway/gateway.env').read_text().splitlines():
     if line.startswith('DSH_MCP_PUBLIC_BASE_URL='):
@@ -252,7 +350,7 @@ print(f"backup manifest: tools={len(manifest['tool_names'])} skills={len(manifes
 PY
 
 (
-  cd "$OUTPUT"
+  cd "$OUTPUT_IO"
   sha256sum MANIFEST.json tools-before.json skills-before.json dsh-home.tar.gz gateway-state.tar.gz config.tar.gz workspace-selected.tar.gz > SHA256SUMS
   chmod 0600 SHA256SUMS
 )
@@ -262,9 +360,13 @@ trap - EXIT
 restore_services
 trap cleanup_partial_output EXIT
 
-chown -R "$OUTPUT_OWNER:$(id -gn "$OUTPUT_OWNER")" "$OUTPUT"
-chmod 0700 "$OUTPUT"
-find "$OUTPUT" -type f -exec chmod 0600 {} +
+[[ ! -L "$OUTPUT" && "$OUTPUT" -ef "$OUTPUT_IO" ]] || {
+  echo "backup output path changed during backup: $OUTPUT" >&2
+  exit 1
+}
+chown -R "$OUTPUT_OWNER:$(id -gn "$OUTPUT_OWNER")" "$OUTPUT_IO"
+chmod 0700 "$OUTPUT_IO"
+find -H "$OUTPUT_IO" -type f -exec chmod 0600 {} +
 BACKUP_COMPLETE=1
 trap - EXIT
 

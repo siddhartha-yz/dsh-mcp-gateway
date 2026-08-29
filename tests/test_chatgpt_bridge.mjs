@@ -68,15 +68,18 @@ function postRaw(body) {
 
 function makeContext({
   persisted = false,
+  persistedHeader,
   defaultId = 'default',
   presetPath = DEFAULT_PRESET_PATH,
   listError,
   resumeError,
   executeError,
+  executeHook,
   executeResult,
   executeWaitForAbort = false,
   skillListError,
   mountHook,
+  resolveHook,
   omitAgents = false,
   omitPresets = false,
   attachments,
@@ -99,6 +102,7 @@ function makeContext({
     execute: [],
     skillList: [],
     warnings: [],
+    disposed: [],
   }
 
   const ctx = {
@@ -130,6 +134,7 @@ function makeContext({
       async execute(input) {
         calls.execute.push(input)
         if (executeError) throw executeError
+        if (executeHook) return executeHook(input, calls)
         if (executeWaitForAbort) {
           await new Promise((resolve, reject) => {
             if (input.signal.aborted) {
@@ -160,6 +165,7 @@ function makeContext({
             return currentDefaultId
           },
           async resolve(id) {
+            if (resolveHook) await resolveHook({ id, presetPath, calls })
             return { id, path: presetPath }
           },
           async standingKeyFor(id) {
@@ -181,14 +187,24 @@ function makeContext({
             calls.create.push(options)
             const createdAgent = agentFor(options.sessionId)
             if (options.setup) await options.setup({ agent: createdAgent })
-            return { agent: createdAgent, async dispose() {} }
+            return {
+              agent: createdAgent,
+              async dispose() {
+                calls.disposed.push(createdAgent.id)
+              },
+            }
           },
           async resume(options) {
             calls.resume.push(options)
             if (resumeError) throw resumeError
             const resumedAgent = agentFor(options.resumeSessionId)
             if (options.setup) await options.setup({ agent: resumedAgent })
-            return { agent: resumedAgent, async dispose() {} }
+            return {
+              agent: resumedAgent,
+              async dispose() {
+                calls.disposed.push(resumedAgent.id)
+              },
+            }
           },
         }
       }
@@ -196,7 +212,13 @@ function makeContext({
         return {
           async list() {
             if (listError) throw listError
-            return persisted ? [{ id: helperSessionId }] : []
+            if (!persisted) return []
+            return [{
+              id: helperSessionId,
+              cwd: process.cwd(),
+              agentPreset: defaultId,
+              ...persistedHeader,
+            }]
           },
         }
       }
@@ -252,6 +274,34 @@ function makeContext({
 }
 
 {
+  const { routes, calls } = makeContext({
+    persisted: true,
+    persistedHeader: { cwd: '/wrong/workspace' },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(calls.resume.length, 0)
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.execute.length, 0)
+}
+
+{
+  const { routes, calls } = makeContext({
+    persisted: true,
+    persistedHeader: { agentPreset: 'wrong-preset' },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+  assert.equal(calls.resume.length, 0)
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.execute.length, 0)
+}
+
+{
   const { routes, agent, calls, helperSessionId } = makeContext({ persisted: true })
   const res = responseCapture()
   await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: { command: 'true' } }), res)
@@ -288,6 +338,7 @@ function makeContext({
   assert.equal(secondHelper, expectedCapabilitySessionId('alternate'))
   assert.equal(calls.execute[1].agent.id, secondHelper)
   assert.equal(calls.mountIds[1], 'alternate')
+  assert.deepEqual(calls.disposed, [firstHelper])
 
   const third = responseCapture()
   await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), third)
@@ -314,9 +365,77 @@ function makeContext({
     assert.equal(calls.create.length, 2)
     assert.equal(calls.execute[1].agent.id, secondHelper)
     assert.equal(calls.mountIds.length, 2)
+    assert.deepEqual(calls.disposed, [firstHelper])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+{
+  let releaseResolve
+  const resolveGate = new Promise(resolve => {
+    releaseResolve = resolve
+  })
+  let blockOldResolve = true
+  const expectedNewHelper = expectedCapabilitySessionId('alternate')
+  const { routes, calls, setDefaultId } = makeContext({
+    async resolveHook({ id }) {
+      if (id === 'default' && blockOldResolve) {
+        blockOldResolve = false
+        await resolveGate
+      }
+    },
+  })
+
+  const oldRes = responseCapture()
+  const oldCall = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), oldRes)
+  await new Promise(resolve => setImmediate(resolve))
+
+  setDefaultId('alternate')
+  const newRes = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), newRes)
+  assert.equal(newRes.state.status, 200)
+  assert.equal(calls.execute.at(-1).agent.id, expectedNewHelper)
+
+  releaseResolve()
+  await oldCall
+  assert.equal(oldRes.state.status, 200)
+  assert.equal(calls.execute.at(-1).agent.id, expectedNewHelper)
+  assert.equal(calls.create.filter(call => call.sessionId === expectedNewHelper).length, 1)
+}
+
+{
+  let releaseFirst
+  const firstGate = new Promise(resolve => {
+    releaseFirst = resolve
+  })
+  const firstHelper = expectedCapabilitySessionId('default')
+  const { routes, calls, setDefaultId } = makeContext({
+    async executeHook(input) {
+      if (input.agent.id === firstHelper) {
+        await firstGate
+      }
+      return { isError: false, value: null, content: [{ type: 'text', text: 'ok' }] }
+    },
+  })
+
+  const firstRes = responseCapture()
+  const firstCall = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), firstRes)
+  for (let attempt = 0; attempt < 20 && calls.execute.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.execute.length, 1)
+
+  setDefaultId('alternate')
+  const secondRes = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), secondRes)
+  assert.equal(secondRes.state.status, 200)
+  assert.equal(calls.disposed.includes(firstHelper), false)
+
+  releaseFirst()
+  await firstCall
+  assert.equal(firstRes.state.status, 200)
+  assert.equal(calls.disposed.includes(firstHelper), true)
 }
 
 {

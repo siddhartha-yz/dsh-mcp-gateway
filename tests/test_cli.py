@@ -152,6 +152,24 @@ class CliTests(unittest.TestCase):
                 ]
             )
 
+    def test_transport_security_accepts_equivalent_explicit_default_https_port(self) -> None:
+        security = build_transport_security("https://Gateway.Example.com:443/")
+
+        self.assertIn("Gateway.Example.com:443", security.allowed_hosts)
+        self.assertIn("gateway.example.com:443", security.allowed_hosts)
+        self.assertIn("gateway.example.com", security.allowed_hosts)
+        self.assertIn("https://Gateway.Example.com:443", security.allowed_origins)
+        self.assertIn("https://gateway.example.com:443", security.allowed_origins)
+        self.assertIn("https://gateway.example.com", security.allowed_origins)
+
+    def test_transport_security_keeps_non_default_https_port_exact(self) -> None:
+        security = build_transport_security("https://[2001:db8::1]:8443")
+
+        self.assertIn("[2001:db8::1]:8443", security.allowed_hosts)
+        self.assertNotIn("[2001:db8::1]", security.allowed_hosts)
+        self.assertIn("https://[2001:db8::1]:8443", security.allowed_origins)
+        self.assertNotIn("https://[2001:db8::1]", security.allowed_origins)
+
     def test_public_transport_security_accepts_declared_origin_and_rejects_mismatch(self) -> None:
         from starlette.testclient import TestClient
 

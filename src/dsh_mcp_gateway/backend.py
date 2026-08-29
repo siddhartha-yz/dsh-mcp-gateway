@@ -4,6 +4,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import stat
 import threading
 import uuid
 from collections import deque
@@ -238,6 +239,11 @@ class SessionCatalog:
         finally:
             os.close(parent_fd)
         try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise OSError(f"session catalog lock path is not a regular file: {self.path}")
+            if opened.st_nlink != 1:
+                raise OSError(f"session catalog lock path has unexpected hard links: {self.path}")
             os.fchmod(descriptor, 0o600)
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             yield
@@ -265,6 +271,11 @@ class SessionCatalog:
         finally:
             os.close(parent_fd)
         try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise OSError(f"session catalog path is not a regular file: {self.path}")
+            if opened.st_nlink != 1:
+                raise OSError(f"session catalog path has unexpected hard links: {self.path}")
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, encoding="utf-8") as file:
                 descriptor = -1

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import sqlite3
+import stat
 import threading
 import time
 from collections import deque
@@ -95,15 +96,20 @@ class EmbeddedOAuthConfig:
             raise ValueError("max_pending_per_client must not exceed max_pending_authorizations")
 
 
-class RegistrationBodyLimitMiddleware:
-    """Bound the anonymous DCR request body before the SDK parses it."""
+APPROVAL_FORM_MAX_BYTES = 8 * 1024
+OAUTH_FORM_MAX_BYTES = 16 * 1024
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+
+class _PathBodyLimitMiddleware:
+    """Bound one HTTP POST body before downstream parsing."""
+
+    def __init__(self, app: ASGIApp, *, paths: frozenset[str], max_bytes: int) -> None:
         self.app = app
+        self.paths = paths
         self.max_bytes = max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/register":
+        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") not in self.paths:
             await self.app(scope, receive, send)
             return
 
@@ -148,6 +154,16 @@ class RegistrationBodyLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        raise NotImplementedError
+
+
+class RegistrationBodyLimitMiddleware(_PathBodyLimitMiddleware):
+    """Bound the anonymous DCR request body before the SDK parses it."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        super().__init__(app, paths=frozenset({"/register"}), max_bytes=max_bytes)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
         response = JSONResponse(
             {
                 "error": "invalid_client_metadata",
@@ -162,8 +178,53 @@ class RegistrationBodyLimitMiddleware:
         await response(scope, receive, send)
 
 
+class ApprovalBodyLimitMiddleware(_PathBodyLimitMiddleware):
+    """Bound the unauthenticated approval form before ``request.form()`` parses it."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int = APPROVAL_FORM_MAX_BYTES) -> None:
+        super().__init__(app, paths=frozenset({"/approve"}), max_bytes=max_bytes)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = HTMLResponse(
+            "<h1>Authorization approval request is too large</h1>",
+            status_code=413,
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+        await response(scope, receive, send)
+
+
+class OAuthFormBodyLimitMiddleware(_PathBodyLimitMiddleware):
+    """Bound standard OAuth form endpoints before the pinned SDK parses them."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int = OAUTH_FORM_MAX_BYTES) -> None:
+        super().__init__(
+            app,
+            paths=frozenset({"/authorize", "/token", "/revoke"}),
+            max_bytes=max_bytes,
+        )
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            {
+                "error": "invalid_request",
+                "error_description": "OAuth form request exceeds the configured HTTP body limit",
+            },
+            status_code=413,
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+        await response(scope, receive, send)
+
+
 def install_registration_body_limit(app: Any, *, max_bytes: int) -> None:
     app.add_middleware(RegistrationBodyLimitMiddleware, max_bytes=max_bytes)
+
+
+def install_approval_body_limit(app: Any) -> None:
+    app.add_middleware(ApprovalBodyLimitMiddleware)
+
+
+def install_oauth_form_body_limit(app: Any) -> None:
+    app.add_middleware(OAuthFormBodyLimitMiddleware)
 
 
 class GatewayRefreshToken(RefreshToken):
@@ -222,6 +283,11 @@ class OAuthStore:
         finally:
             os.close(parent_fd)
         try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                raise OSError(f"OAuth SQLite state path is not a regular file: {self.path}")
+            if opened.st_nlink != 1:
+                raise OSError(f"OAuth SQLite state path has unexpected hard links: {self.path}")
             os.fchmod(fd, 0o600)
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=5)
         finally:

@@ -1603,6 +1603,38 @@ class PublicSdkBackendTests(unittest.TestCase):
                 '{"version":1,"sessions":["victim"]}\n',
             )
 
+    def test_catalog_path_rejects_hard_link_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.json"
+            target = root / "target.json"
+            target.write_text('{"version":1,"sessions":[]}\n', encoding="utf-8")
+            target.chmod(0o644)
+            os.link(target, path)
+
+            with self.assertRaisesRegex(OSError, "unexpected hard links"):
+                SessionCatalog(path)
+
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"version":1,"sessions":[]}\n')
+
+    def test_catalog_process_lock_rejects_hard_link_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.json"
+            lock = path.with_name(f".{path.name}.lock")
+            target = root / "target.lock"
+            target.write_text("sentinel\n", encoding="utf-8")
+            target.chmod(0o644)
+            os.link(target, lock)
+
+            with self.assertRaisesRegex(OSError, "unexpected hard links"):
+                SessionCatalog(path).add("s1")
+
+            self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertFalse(path.exists())
+
     def test_catalog_path_rejects_symlinked_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

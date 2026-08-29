@@ -43,13 +43,20 @@ done
 for command in curl python3 tar sha256sum; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
+BACKUP="$(cd "$BACKUP" && pwd)"
+exec {BACKUP_FD}<"$BACKUP"
+BACKUP_IO="/proc/$$/fd/$BACKUP_FD"
+[[ ! -L "$BACKUP" && "$BACKUP" -ef "$BACKUP_IO" ]] || {
+  echo "backup path changed while opening it: $BACKUP" >&2
+  exit 1
+}
 for path in \
-  "$BACKUP/MANIFEST.json" \
-  "$BACKUP/SHA256SUMS" \
-  "$BACKUP/dsh-home.tar.gz" \
-  "$BACKUP/gateway-state.tar.gz" \
-  "$BACKUP/config.tar.gz" \
-  "$BACKUP/workspace-selected.tar.gz" \
+  "$BACKUP_IO/MANIFEST.json" \
+  "$BACKUP_IO/SHA256SUMS" \
+  "$BACKUP_IO/dsh-home.tar.gz" \
+  "$BACKUP_IO/gateway-state.tar.gz" \
+  "$BACKUP_IO/config.tar.gz" \
+  "$BACKUP_IO/workspace-selected.tar.gz" \
   /opt/dsh-runtime/node_modules/.bin/dsh \
   /opt/dsh-runtime/node_modules/.bin/pnpm \
   /srv/dsh-mcp-gateway/.venv/bin/dsh-mcp-gateway \
@@ -57,7 +64,6 @@ for path in \
   [[ -e "$path" ]] || { echo "required restore input is missing: $path" >&2; exit 1; }
 done
 
-BACKUP="$(cd "$BACKUP" && pwd)"
 RESTORE_ROOT="$(python3 - "$RESTORE_ROOT" <<'PY'
 import os, sys
 print(os.path.abspath(sys.argv[1]))
@@ -73,11 +79,11 @@ for port in "$DSH_PORT" "$GATEWAY_PORT"; do
 done
 
 (
-  cd "$BACKUP"
+  cd "$BACKUP_IO"
   sha256sum -c SHA256SUMS
 )
 
-python3 - "$RESTORE_ROOT" create-root <<'PY'
+RESTORE_ROOT_ID="$(python3 - "$RESTORE_ROOT" create-root <<'PY'
 import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 if not path.is_absolute():
@@ -109,25 +115,37 @@ try:
         os.close(fd)
         fd = child
     os.fchmod(fd, 0o700)
+    opened = os.fstat(fd)
+    print(f"{opened.st_dev}:{opened.st_ino}")
 finally:
     os.close(fd)
 PY
-install -d -m 0700 "$RESTORE_ROOT/system" "$RESTORE_ROOT/workspace" "$RESTORE_ROOT/logs"
-tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz" -C "$RESTORE_ROOT/system"
-tar --no-same-owner -xzf "$BACKUP/gateway-state.tar.gz" -C "$RESTORE_ROOT/system"
-tar --no-same-owner -xzf "$BACKUP/config.tar.gz" -C "$RESTORE_ROOT/system"
-tar --no-same-owner -xzf "$BACKUP/workspace-selected.tar.gz" -C "$RESTORE_ROOT/workspace"
-chmod -R u+rwX,go-rwx "$RESTORE_ROOT"
+)"
+exec {RESTORE_FD}<"$RESTORE_ROOT"
+RESTORE_IO="/proc/$$/fd/$RESTORE_FD"
+python3 - "$RESTORE_IO" "${RESTORE_ROOT_ID}" <<'PY'
+import os, sys
+opened = os.stat(sys.argv[1])
+actual = f"{opened.st_dev}:{opened.st_ino}"
+if actual != sys.argv[2]:
+    raise SystemExit("restore root path changed after secure creation")
+PY
+install -d -m 0700 "$RESTORE_IO/system" "$RESTORE_IO/workspace" "$RESTORE_IO/logs"
+tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"
+tar --no-same-owner -xzf "$BACKUP_IO/gateway-state.tar.gz" -C "$RESTORE_IO/system"
+tar --no-same-owner -xzf "$BACKUP_IO/config.tar.gz" -C "$RESTORE_IO/system"
+tar --no-same-owner -xzf "$BACKUP_IO/workspace-selected.tar.gz" -C "$RESTORE_IO/workspace"
+chmod -R u+rwX,go-rwx "$RESTORE_IO"
 
-DSH_HOME_RESTORED="$RESTORE_ROOT/system/var/lib/dsh-harness"
-GATEWAY_STATE_RESTORED="$RESTORE_ROOT/system/var/lib/dsh-mcp-gateway"
+DSH_HOME_RESTORED="$RESTORE_IO/system/var/lib/dsh-harness"
+GATEWAY_STATE_RESTORED="$RESTORE_IO/system/var/lib/dsh-mcp-gateway"
 [[ -f "$DSH_HOME_RESTORED/profiles/web/package.json" ]] || { echo "restored DSH profile missing" >&2; exit 1; }
 [[ -f "$GATEWAY_STATE_RESTORED/oauth.sqlite3" ]] || { echo "restored OAuth database missing" >&2; exit 1; }
-[[ -f "$RESTORE_ROOT/system/etc/dsh-mcp-gateway/gateway.env" ]] || { echo "restored gateway config missing" >&2; exit 1; }
-[[ -f "$RESTORE_ROOT/system/etc/dsh-cloudflared/credentials.json" ]] || { echo "restored tunnel credentials missing" >&2; exit 1; }
+[[ -f "$RESTORE_IO/system/etc/dsh-mcp-gateway/gateway.env" ]] || { echo "restored gateway config missing" >&2; exit 1; }
+[[ -f "$RESTORE_IO/system/etc/dsh-cloudflared/credentials.json" ]] || { echo "restored tunnel credentials missing" >&2; exit 1; }
 
 # Verify the explicitly selected workspace data before starting any process.
-python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<'PY'
+python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<'PY'
 import hashlib, json, os, pathlib, sys
 manifest=json.load(open(sys.argv[1]))
 root=pathlib.Path(sys.argv[2])
@@ -180,18 +198,18 @@ print(f"plugin_artifacts_rebased={count}")
 PY
 rm -rf "$DSH_HOME_RESTORED/profiles/web/node_modules" "$DSH_HOME_RESTORED/profiles/web/pnpm-lock.yaml"
 install -d -m 0700 \
-  "$RESTORE_ROOT/pnpm-home" "$RESTORE_ROOT/pnpm-store" \
-  "$RESTORE_ROOT/xdg-data" "$RESTORE_ROOT/xdg-cache" "$RESTORE_ROOT/xdg-state"
+  "$RESTORE_IO/pnpm-home" "$RESTORE_IO/pnpm-store" \
+  "$RESTORE_IO/xdg-data" "$RESTORE_IO/xdg-cache" "$RESTORE_IO/xdg-state"
 DSH_HOME="$DSH_HOME_RESTORED" \
-PNPM_HOME="$RESTORE_ROOT/pnpm-home" \
-XDG_DATA_HOME="$RESTORE_ROOT/xdg-data" \
-XDG_CACHE_HOME="$RESTORE_ROOT/xdg-cache" \
-XDG_STATE_HOME="$RESTORE_ROOT/xdg-state" \
-npm_config_store_dir="$RESTORE_ROOT/pnpm-store" \
+PNPM_HOME="$RESTORE_IO/pnpm-home" \
+XDG_DATA_HOME="$RESTORE_IO/xdg-data" \
+XDG_CACHE_HOME="$RESTORE_IO/xdg-cache" \
+XDG_STATE_HOME="$RESTORE_IO/xdg-state" \
+npm_config_store_dir="$RESTORE_IO/pnpm-store" \
 PATH="/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin" \
   /opt/dsh-runtime/node_modules/.bin/pnpm install \
     --dir "$DSH_HOME_RESTORED/profiles/web" --offline --no-frozen-lockfile \
-    >"$RESTORE_ROOT/logs/pnpm.log" 2>&1
+    >"$RESTORE_IO/logs/pnpm.log" 2>&1
 echo "offline_profile_rebuild=PASS"
 
 DSH_PID=""
@@ -206,23 +224,23 @@ cleanup() {
 trap cleanup EXIT
 
 (
-  cd "$RESTORE_ROOT/workspace"
+  cd "$RESTORE_IO/workspace"
   export DSH_HOME="$DSH_HOME_RESTORED"
   export DSH_TELEMETRY_DISABLED=1
   export PATH=/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin
   exec /opt/dsh-runtime/node_modules/.bin/dsh web \
     --patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml \
     --host 127.0.0.1 --port "$DSH_PORT"
-) >"$RESTORE_ROOT/logs/dsh.log" 2>&1 &
+) >"$RESTORE_IO/logs/dsh.log" 2>&1 &
 DSH_PID=$!
 
 for _ in $(seq 1 120); do
-  curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/tools" > "$RESTORE_ROOT/tools-restored.json" 2>/dev/null && break
+  curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/tools" > "$RESTORE_IO/tools-restored.json" 2>/dev/null && break
   sleep .25
 done
-curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/skills" > "$RESTORE_ROOT/skills-restored.json"
+curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/skills" > "$RESTORE_IO/skills-restored.json"
 
-python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/tools-restored.json" "$RESTORE_ROOT/skills-restored.json" <<'PY'
+python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/tools-restored.json" "$RESTORE_IO/skills-restored.json" <<'PY'
 import json, sys
 m=json.load(open(sys.argv[1])); tools=json.load(open(sys.argv[2]))['tools']; skills=json.load(open(sys.argv[3]))['skills']
 tool_names=sorted(x['name'] for x in tools); skill_names=sorted(x['name'] for x in skills)
@@ -231,7 +249,7 @@ if skill_names != m['skill_names']: raise SystemExit('restored SkillRegistry dif
 print(f"dsh_restore=PASS tools={len(tool_names)} skills={len(skill_names)}")
 PY
 
-PUBLIC_BASE="$(python3 - "$BACKUP/MANIFEST.json" <<'PY'
+PUBLIC_BASE="$(python3 - "$BACKUP_IO/MANIFEST.json" <<'PY'
 import json,sys
 print(json.load(open(sys.argv[1]))['public_base_url'])
 PY
@@ -250,7 +268,7 @@ PY
     --public-base-url "$PUBLIC_BASE" \
     --state-dir "$GATEWAY_STATE_RESTORED" \
     --bind-host 127.0.0.1 --port "$GATEWAY_PORT"
-) >"$RESTORE_ROOT/logs/gateway.log" 2>&1 &
+) >"$RESTORE_IO/logs/gateway.log" 2>&1 &
 GATEWAY_PID=$!
 
 for _ in $(seq 1 120); do
@@ -261,7 +279,7 @@ curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/ready
 
 # Exercise a cloned real ChatGPT refresh grant against the isolated restored
 # gateway. Token values never leave this Python process or appear in output.
-python3 - "$BACKUP/MANIFEST.json" "$GATEWAY_STATE_RESTORED/oauth.sqlite3" "$GATEWAY_PORT" <<'PY'
+python3 - "$BACKUP_IO/MANIFEST.json" "$GATEWAY_STATE_RESTORED/oauth.sqlite3" "$GATEWAY_PORT" <<'PY'
 import http.client, json, sqlite3, sys, urllib.parse
 from urllib.parse import urlparse
 manifest=json.load(open(sys.argv[1])); db=sys.argv[2]; port=int(sys.argv[3]); public=manifest['public_base_url'].rstrip('/')
@@ -311,6 +329,11 @@ restored_skills=sorted(x['name'] for x in skill_call['structuredContent']['skill
 if restored_skills != manifest['skill_names']: raise SystemExit('restored skill catalog differs from manifest')
 print(f"oauth_mcp_restore=PASS tools={len(names)} catalog={len(manifest['tool_names'])} skills={len(restored_skills)}")
 PY
+
+[[ ! -L "$RESTORE_ROOT" && "$RESTORE_ROOT" -ef "$RESTORE_IO" ]] || {
+  echo "restore root path changed during restore drill: $RESTORE_ROOT" >&2
+  exit 1
+}
 
 echo "RESTORE DRILL PASS: $RESTORE_ROOT"
 echo "Production DSH services were not modified by this verifier."

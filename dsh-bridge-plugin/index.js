@@ -23,6 +23,12 @@ function capabilitySessionId(cwd, presetId, presetPath, stamp) {
   return `${CAPABILITY_SESSION_PREFIX}-${suffix}`
 }
 
+function assertPersistedHelperHeader(header, cwd, presetId) {
+  if (header.cwd !== cwd || header.agentPreset !== presetId) {
+    throw new Error('persisted DSH bridge capability session metadata does not match the current workspace/preset')
+  }
+}
+
 class ExternalChatGPTCapabilityAdapter {
   providerInfo(provider) {
     return { id: provider, name: 'ChatGPT Web (external capability identity)' }
@@ -166,7 +172,7 @@ async function readJson(req) {
 }
 
 export function apply(ctx) {
-  const capabilityHandlePromises = new Map()
+  const capabilityHandles = new Map()
   const instanceId = randomUUID()
   let toolRevision = 1
   let skillRevision = 1
@@ -186,7 +192,37 @@ export function apply(ctx) {
   // inference. ChatGPT remains the sole reasoning/model agent.
   ctx.llm.registerAdapter([EXTERNAL_PROVIDER], new ExternalChatGPTCapabilityAdapter())
 
-  async function capabilityAgent() {
+  function forceDisposeCapabilityEntry(helperSessionId, entry) {
+    if (entry.disposePromise) return entry.disposePromise
+    entry.disposePromise = (async () => {
+      try {
+        const handle = await entry.promise
+        await handle.dispose()
+      } catch {
+        // Creation/resume failures already roll their unpublished scope back.
+      } finally {
+        if (capabilityHandles.get(helperSessionId) === entry) {
+          capabilityHandles.delete(helperSessionId)
+        }
+      }
+    })()
+    return entry.disposePromise
+  }
+
+  function maybeDisposeCapabilityEntry(helperSessionId, entry) {
+    if (!entry.stale || entry.leases !== 0) return undefined
+    return forceDisposeCapabilityEntry(helperSessionId, entry)
+  }
+
+  function retireOtherCapabilityEntries(currentHelperSessionId) {
+    for (const [helperSessionId, entry] of capabilityHandles) {
+      if (helperSessionId === currentHelperSessionId) continue
+      entry.stale = true
+      void maybeDisposeCapabilityEntry(helperSessionId, entry)
+    }
+  }
+
+  async function acquireCapabilityAgent() {
     const agents = ctx.get('agents')
     const presets = ctx.get('agentPresets')
     if (!agents || !presets) {
@@ -196,65 +232,116 @@ export function apply(ctx) {
     const presetId = presets.defaultId
     const preset = await presets.resolve(presetId)
     const stamp = await stat(preset.path)
+    if (presets.defaultId !== presetId) return acquireCapabilityAgent()
     const helperSessionId = capabilitySessionId(process.cwd(), presetId, preset.path, stamp)
-    const existing = capabilityHandlePromises.get(helperSessionId)
-    if (existing) return (await existing).agent
-    const agentOptions = {
-      provider: EXTERNAL_PROVIDER,
-      model: EXTERNAL_MODEL,
+
+    let entry = capabilityHandles.get(helperSessionId)
+    if (entry?.disposePromise) {
+      await entry.disposePromise
+      entry = capabilityHandles.get(helperSessionId)
     }
-    const setup = async agentCtx => {
-      const mountedPreset = await presets.mount(agentCtx, presetId)
-      const mountedStamp = await stat(mountedPreset.path)
-      if (mountedPreset.path !== preset.path || !samePresetStamp(stamp, mountedStamp)) {
-        throw new Error('DSH preset composition changed while creating the bridge capability agent')
+    if (!entry) {
+      const agentOptions = {
+        provider: EXTERNAL_PROVIDER,
+        model: EXTERNAL_MODEL,
       }
-    }
-    let capabilityHandlePromise
-    capabilityHandlePromise = (async () => {
-      const persistence = ctx.get('sessionPersistence')
-      if (persistence) {
-        const persisted = await persistence.list()
-        if (persisted.some(header => header.id === helperSessionId)) {
-          return agents.resume({
-            resumeSessionId: helperSessionId,
-            agentOptions,
-            setup,
-          })
+      const setup = async agentCtx => {
+        const mountedPreset = await presets.mount(agentCtx, presetId)
+        const mountedStamp = await stat(mountedPreset.path)
+        if (mountedPreset.path !== preset.path || !samePresetStamp(stamp, mountedStamp)) {
+          throw new Error('DSH preset composition changed while creating the bridge capability agent')
         }
       }
-      return agents.create({
-        sessionId: helperSessionId,
-        agentOptions,
-        meta: {
-          cwd: process.cwd(),
-          agentPreset: presetId,
-        },
-        // This Agent is only DSH's native execution identity. The bridge never
-        // submits a prompt to it. Its metadata-only route cannot perform
-        // inference; a workspace+preset+composition-generation id lets
-        // persistence reuse the same helper across DSH restarts without
-        // colliding with another workspace or pinning execution to stale scope.
-        setup,
-      })
-    })().catch((error) => {
-      if (capabilityHandlePromises.get(helperSessionId) === capabilityHandlePromise) {
-        capabilityHandlePromises.delete(helperSessionId)
+      const promise = (async () => {
+        const persistence = ctx.get('sessionPersistence')
+        if (persistence) {
+          const persisted = await persistence.list()
+          const persistedHelper = persisted.find(header => header.id === helperSessionId)
+          if (persistedHelper) {
+            assertPersistedHelperHeader(persistedHelper, process.cwd(), presetId)
+            return agents.resume({
+              resumeSessionId: helperSessionId,
+              agentOptions,
+              setup,
+            })
+          }
+        }
+        return agents.create({
+          sessionId: helperSessionId,
+          agentOptions,
+          meta: {
+            cwd: process.cwd(),
+            agentPreset: presetId,
+          },
+          // This Agent is only DSH's native execution identity. The bridge never
+          // submits a prompt to it. Its metadata-only route cannot perform
+          // inference; a workspace+preset+composition-generation id lets
+          // persistence reuse the same helper across DSH restarts without
+          // colliding with another workspace or pinning execution to stale scope.
+          setup,
+        })
+      })()
+      entry = {
+        promise,
+        leases: 0,
+        stale: false,
+        disposePromise: undefined,
       }
+      capabilityHandles.set(helperSessionId, entry)
+      promise.catch(() => {
+        if (capabilityHandles.get(helperSessionId) === entry) {
+          capabilityHandles.delete(helperSessionId)
+        }
+      })
+    }
+
+    entry.leases += 1
+    let verified = false
+    try {
+      const handle = await entry.promise
+      if (presets.defaultId !== presetId) {
+        entry.stale = true
+        entry.leases -= 1
+        await maybeDisposeCapabilityEntry(helperSessionId, entry)
+        return acquireCapabilityAgent()
+      }
+      const currentPreset = await presets.resolve(presetId)
+      const currentStamp = await stat(currentPreset.path)
+      if (
+        presets.defaultId !== presetId
+        || currentPreset.path !== preset.path
+        || !samePresetStamp(stamp, currentStamp)
+      ) {
+        entry.stale = true
+        entry.leases -= 1
+        await maybeDisposeCapabilityEntry(helperSessionId, entry)
+        return acquireCapabilityAgent()
+      }
+      entry.stale = false
+      retireOtherCapabilityEntries(helperSessionId)
+      verified = true
+      let released = false
+      return {
+        agent: handle.agent,
+        async release() {
+          if (released) return
+          released = true
+          entry.leases -= 1
+          await maybeDisposeCapabilityEntry(helperSessionId, entry)
+        },
+      }
+    } catch (error) {
+      if (!verified) entry.stale = true
+      entry.leases -= 1
+      await maybeDisposeCapabilityEntry(helperSessionId, entry)
       throw error
-    })
-    capabilityHandlePromises.set(helperSessionId, capabilityHandlePromise)
-    return (await capabilityHandlePromise).agent
+    }
   }
 
   ctx.effect(() => async () => {
-    const pending = [...capabilityHandlePromises.values()]
-    capabilityHandlePromises.clear()
-    const settled = await Promise.allSettled(pending)
+    const entries = [...capabilityHandles.entries()]
     await Promise.allSettled(
-      settled
-        .filter(result => result.status === 'fulfilled')
-        .map(result => result.value.dispose()),
+      entries.map(([helperSessionId, entry]) => forceDisposeCapabilityEntry(helperSessionId, entry)),
     )
   }, 'dsh-chatgpt-bridge.capability-agent')
 
@@ -375,6 +462,7 @@ export function apply(ctx) {
         return
       }
       let lifetime
+      let capability
       try {
         const payload = await readJson(req)
         const toolName = typeof payload?.name === 'string' ? payload.name.trim() : ''
@@ -387,14 +475,14 @@ export function apply(ctx) {
         if (typeof toolArguments !== 'object' || toolArguments === null || Array.isArray(toolArguments)) {
           throw new BridgeRequestError(400, 'invalid_request', 'arguments must be an object when supplied')
         }
-        const agent = await capabilityAgent()
+        capability = await acquireCapabilityAgent()
         if (lifetime.disconnected.aborted) return
         const result = await ctx.tools.execute({
           callId: `chatgpt-${randomUUID()}`,
           name: toolName,
           arguments: toolArguments,
           signal: lifetime.signal,
-          ...(agent ? { agent } : {}),
+          agent: capability.agent,
         })
         if (lifetime.disconnected.aborted) return
         const materialized = await materializeToolContent(ctx, result)
@@ -404,6 +492,7 @@ export function apply(ctx) {
           replyBridgeFailure(ctx, res, 'tool call', error)
         }
       } finally {
+        await capability?.release()
         lifetime?.dispose()
       }
     },

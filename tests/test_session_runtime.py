@@ -225,6 +225,29 @@ class DurableSessionRuntimeTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
 
+    def test_sqlite_database_rejects_hard_linked_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.sqlite3"
+            target.write_text("sentinel\n", encoding="utf-8")
+            target.chmod(0o640)
+            path = root / "sessions.sqlite3"
+            os.link(target, path)
+
+            with self.assertRaisesRegex(OSError, "unexpected hard links"):
+                DurableSessionRuntime(path)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
+
+    def test_sqlite_database_rejects_non_regular_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.sqlite3"
+            os.mkfifo(path, mode=0o600)
+
+            with self.assertRaisesRegex(OSError, "not a regular file"):
+                DurableSessionRuntime(path)
+
     def test_sqlite_database_rejects_symlinked_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -252,6 +275,29 @@ class DurableSessionRuntimeTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
             self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+
+    def test_sqlite_database_rejects_hard_linked_sidecar_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.txt"
+            target.write_text("sentinel\n", encoding="utf-8")
+            target.chmod(0o640)
+            path = root / "sessions.sqlite3"
+            os.link(target, Path(f"{path}-wal"))
+
+            with self.assertRaisesRegex(OSError, "sidecar path has unexpected hard links"):
+                DurableSessionRuntime(path)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
+
+    def test_sqlite_database_rejects_non_regular_sidecar_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.sqlite3"
+            os.mkfifo(Path(f"{path}-wal"), mode=0o600)
+
+            with self.assertRaisesRegex(OSError, "sidecar path is not a regular file"):
+                DurableSessionRuntime(path)
 
     def test_sqlite_parent_creation_tolerates_concurrent_creator(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

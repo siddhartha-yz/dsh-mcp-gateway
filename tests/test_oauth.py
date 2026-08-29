@@ -31,6 +31,7 @@ if MCP_AVAILABLE:
     from starlette.testclient import TestClient
 
     from dsh_mcp_gateway.oauth import (
+        ApprovalBodyLimitMiddleware,
         EmbeddedOAuthConfig,
         EmbeddedOAuthProvider,
         OAuthStore,
@@ -145,6 +146,29 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 OAuthStore(path)._connect()
 
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+
+    def test_sqlite_database_rejects_hard_linked_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.sqlite3"
+            target.write_text("sentinel\n", encoding="utf-8")
+            target.chmod(0o640)
+            path = root / "oauth.sqlite3"
+            os.link(target, path)
+
+            with self.assertRaisesRegex(OSError, "unexpected hard links"):
+                OAuthStore(path)._connect()
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
+
+    def test_sqlite_database_rejects_non_regular_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "oauth.sqlite3"
+            os.mkfifo(path, mode=0o600)
+
+            with self.assertRaisesRegex(OSError, "not a regular file"):
+                OAuthStore(path)._connect()
 
     def test_sqlite_database_rejects_symlinked_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -290,6 +314,36 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 admin_pin="test-admin-pin",
                 max_registration_request_bytes=0,
             )
+
+    async def test_approval_body_limit_counts_streamed_bytes_without_content_length(self) -> None:
+        app_called = False
+
+        async def downstream(_scope, _receive, _send):
+            nonlocal app_called
+            app_called = True
+
+        middleware = ApprovalBodyLimitMiddleware(downstream, max_bytes=5)
+        messages = [
+            {"type": "http.request", "body": b"abc", "more_body": True},
+            {"type": "http.request", "body": b"def", "more_body": False},
+        ]
+        sent: list[dict[str, object]] = []
+
+        async def receive():
+            return messages.pop(0)
+
+        async def send(message):
+            sent.append(message)
+
+        await middleware(
+            {"type": "http", "method": "POST", "path": "/approve", "headers": []},
+            receive,
+            send,
+        )
+
+        self.assertFalse(app_called)
+        starts = [message for message in sent if message["type"] == "http.response.start"]
+        self.assertEqual(starts[0]["status"], 413)
 
     async def test_registration_body_limit_counts_streamed_bytes_without_content_length(self) -> None:
         app_called = False
@@ -1103,6 +1157,42 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(registration.json()["error"], "invalid_client_metadata")
                 self.assertIn("HTTP body limit", registration.json()["error_description"])
                 self.assertEqual(registration.headers["cache-control"], "no-store")
+
+            self.assertFalse(config.state_db.exists())
+
+    def test_oversized_approval_request_is_rejected_before_form_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
+
+            with TestClient(app) as client:
+                response = client.post(
+                    "/approve",
+                    data={"request": "x" * 9000, "action": "approve", "pin": "bad"},
+                )
+
+            self.assertEqual(response.status_code, 413)
+            self.assertIn("request is too large", response.text)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertEqual(response.headers["pragma"], "no-cache")
+            self.assertFalse(config.state_db.exists())
+
+    def test_oversized_standard_oauth_form_requests_are_rejected_before_sdk_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
+
+            with TestClient(app) as client:
+                for path in ("/authorize", "/token", "/revoke"):
+                    with self.subTest(path=path):
+                        response = client.post(path, data={"padding": "x" * 20_000})
+                        self.assertEqual(response.status_code, 413)
+                        self.assertEqual(response.json()["error"], "invalid_request")
+                        self.assertIn("HTTP body limit", response.json()["error_description"])
+                        self.assertEqual(response.headers["cache-control"], "no-store")
+                        self.assertEqual(response.headers["pragma"], "no-cache")
 
             self.assertFalse(config.state_db.exists())
 

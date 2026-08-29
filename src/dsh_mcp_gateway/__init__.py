@@ -370,7 +370,9 @@ def build_embedded_oauth_server(
     from .oauth import (
         EmbeddedOAuthProvider,
         advertise_public_client_auth_methods,
+        install_approval_body_limit,
         install_approval_route,
+        install_oauth_form_body_limit,
         install_registration_body_limit,
     )
 
@@ -382,6 +384,8 @@ def build_embedded_oauth_server(
                 app,
                 max_bytes=config.max_registration_request_bytes,
             )
+            install_approval_body_limit(app)
+            install_oauth_form_body_limit(app)
             return app
 
     provider = EmbeddedOAuthProvider(config)

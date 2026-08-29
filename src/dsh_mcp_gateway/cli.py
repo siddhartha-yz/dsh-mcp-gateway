@@ -33,20 +33,30 @@ def build_transport_security(public_base: str):
     except ValueError as exc:
         raise ValueError("public_base must contain a valid port") from exc
     canonical_public_base = public_base[:-1] if parsed_public.path == "/" else public_base
-    public_host = parsed_public.netloc
-    allowed_hosts = [public_host, "127.0.0.1:*", "localhost:*", "[::1]:*"]
-    if public_port is None:
-        host_for_port = f"[{parsed_public.hostname}]" if ":" in parsed_public.hostname else parsed_public.hostname
-        allowed_hosts.append(f"{host_for_port}:443")
-    return TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=list(dict.fromkeys(allowed_hosts)),
-        allowed_origins=[
-            canonical_public_base,
+    normalized_host = f"[{parsed_public.hostname}]" if ":" in parsed_public.hostname else parsed_public.hostname
+    normalized_authority = normalized_host if public_port is None else f"{normalized_host}:{public_port}"
+    allowed_hosts = [
+        parsed_public.netloc,
+        normalized_authority,
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+    ]
+    allowed_origins = [canonical_public_base, f"https://{normalized_authority}"]
+    if public_port in {None, 443}:
+        allowed_hosts.extend([normalized_host, f"{normalized_host}:443"])
+        allowed_origins.extend([f"https://{normalized_host}", f"https://{normalized_host}:443"])
+    allowed_origins.extend(
+        [
             "http://127.0.0.1:*",
             "http://localhost:*",
             "http://[::1]:*",
-        ],
+        ]
+    )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(dict.fromkeys(allowed_hosts)),
+        allowed_origins=list(dict.fromkeys(allowed_origins)),
     )
 
 

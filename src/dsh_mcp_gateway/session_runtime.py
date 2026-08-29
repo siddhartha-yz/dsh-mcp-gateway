@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import sqlite3
+import stat
 import threading
 import time
 from contextlib import contextmanager
@@ -68,6 +69,11 @@ class DurableSessionRuntime:
                 except FileNotFoundError:
                     continue
                 try:
+                    opened = os.fstat(fd)
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise OSError(f"SQLite sidecar path is not a regular file: {self.database}{suffix}")
+                    if opened.st_nlink != 1:
+                        raise OSError(f"SQLite sidecar path has unexpected hard links: {self.database}{suffix}")
                     os.fchmod(fd, 0o600)
                 finally:
                     os.close(fd)
@@ -87,6 +93,11 @@ class DurableSessionRuntime:
         finally:
             os.close(parent_fd)
         try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                raise OSError(f"SQLite database path is not a regular file: {self.database}")
+            if opened.st_nlink != 1:
+                raise OSError(f"SQLite database path has unexpected hard links: {self.database}")
             os.fchmod(fd, 0o600)
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=10.0)
         finally:

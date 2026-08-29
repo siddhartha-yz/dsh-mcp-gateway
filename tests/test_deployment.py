@@ -409,6 +409,55 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o755)
             self.assertEqual(list(target.iterdir()), [])
 
+    def test_backup_and_restore_reject_directory_replacement_before_fd_handoff(self) -> None:
+        cases = (
+            (
+                BACKUP_HOST,
+                'python3 - "$OUTPUT" create-output <<\'PY\'',
+                'python3 - "$OUTPUT_IO" "${OUTPUT_ID}" <<\'PY\'',
+                "backup-output",
+            ),
+            (
+                VERIFY_BACKUP,
+                'python3 - "$RESTORE_ROOT" create-root <<\'PY\'',
+                'python3 - "$RESTORE_IO" "${RESTORE_ROOT_ID}" <<\'PY\'',
+                "restore-root",
+            ),
+        )
+        for script, create_marker, guard_marker, leaf in cases:
+            with self.subTest(script=script.name):
+                creation = extract_python_heredoc(script, create_marker)
+                guard = extract_python_heredoc(script, guard_marker)
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    target = root / leaf
+                    created = subprocess.run(
+                        [sys.executable, "-c", creation, str(target), "create"],
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                    )
+                    expected_identity = created.stdout.strip()
+                    original = root / "original-created-directory"
+                    target.rename(original)
+                    replacement = root / "replacement"
+                    replacement.mkdir()
+                    replacement.rename(target)
+                    fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        completed = subprocess.run(
+                            [sys.executable, "-c", guard, f"/proc/self/fd/{fd}", expected_identity],
+                            pass_fds=(fd,),
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                    finally:
+                        os.close(fd)
+
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn("path changed after secure creation", completed.stdout + completed.stderr)
+
     def test_backup_and_restore_creation_tolerate_concurrent_parent_creator(self) -> None:
         cases = (
             (BACKUP_HOST, 'python3 - "$OUTPUT" create-output <<\'PY\'', "backup-output"),
@@ -515,6 +564,92 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(output.exists(), "failed backup snapshot must not leave an unusable output directory")
 
+    def test_backup_pins_output_directory_after_creation(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+        self.assertIn('exec {OUTPUT_FD}<"$OUTPUT"', backup)
+        self.assertIn('OUTPUT_IO="/proc/self/fd/$OUTPUT_FD"', backup)
+        self.assertIn('> "$OUTPUT_IO/tools-before.json"', backup)
+        self.assertNotIn('> "$OUTPUT/tools-before.json"', backup)
+        self.assertIn('[[ ! -L "$OUTPUT" && "$OUTPUT" -ef "$OUTPUT_IO" ]]', backup)
+
+    def test_workspace_archive_rejects_symlinked_selected_ancestor(self) -> None:
+        archiver = extract_python_heredoc(
+            BACKUP_HOST,
+            'python3 - "$OUTPUT_IO/workspace-selected.tar.gz" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<\'PY\'',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "selected.txt").write_text("outside\n", encoding="utf-8")
+            (workspace / "parent").symlink_to(outside, target_is_directory=True)
+            archive = root / "workspace.tar.gz"
+
+            result = subprocess.run(
+                [sys.executable, "-", str(archive), str(workspace), "parent/selected.txt"],
+                input=archiver,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            if archive.exists():
+                listing = subprocess.check_output(["tar", "-tzf", str(archive)], text=True)
+                self.assertNotIn("selected.txt", listing)
+
+    def test_workspace_archive_preserves_selected_tree_without_following_nested_symlink(self) -> None:
+        archiver = extract_python_heredoc(
+            BACKUP_HOST,
+            'python3 - "$OUTPUT_IO/workspace-selected.tar.gz" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<\'PY\'',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            selected = workspace / "selected"
+            selected.mkdir(parents=True)
+            (selected / "data.txt").write_text("inside\n", encoding="utf-8")
+            outside = root / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            (selected / "outside-link").symlink_to(outside)
+            archive = root / "workspace.tar.gz"
+
+            result = subprocess.run(
+                [sys.executable, "-", str(archive), str(workspace), "selected"],
+                input=archiver,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            listing = subprocess.check_output(["tar", "-tzf", str(archive)], text=True).splitlines()
+            self.assertIn("selected/data.txt", listing)
+            self.assertIn("selected/outside-link", listing)
+            extracted = subprocess.check_output(["tar", "-xOzf", str(archive), "selected/data.txt"], text=True)
+            self.assertEqual(extracted, "inside\n")
+
+    def test_restore_pins_backup_directory_before_checksum_and_extraction(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+        self.assertIn('exec {BACKUP_FD}<"$BACKUP"', restore)
+        self.assertIn('BACKUP_IO="/proc/$$/fd/$BACKUP_FD"', restore)
+        self.assertIn('[[ ! -L "$BACKUP" && "$BACKUP" -ef "$BACKUP_IO" ]]', restore)
+        self.assertIn('cd "$BACKUP_IO"', restore)
+        self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
+        self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz"', restore)
+
+    def test_restore_pins_root_directory_after_creation(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+        self.assertIn('exec {RESTORE_FD}<"$RESTORE_ROOT"', restore)
+        self.assertIn('RESTORE_IO="/proc/$$/fd/$RESTORE_FD"', restore)
+        self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"', restore)
+        self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz" -C "$RESTORE_ROOT/system"', restore)
+        self.assertIn('[[ ! -L "$RESTORE_ROOT" && "$RESTORE_ROOT" -ef "$RESTORE_IO" ]]', restore)
+
     def test_workspace_backup_and_restore_reject_selected_symlinks(self) -> None:
         backup_validation = extract_python_heredoc(
             BACKUP_HOST,
@@ -522,7 +657,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         )
         restore_validation = extract_python_heredoc(
             VERIFY_BACKUP,
-            'python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<\'PY\'',
+            'python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<\'PY\'',
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -600,7 +735,7 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_workspace_restore_rejects_broken_nested_symlinks(self) -> None:
         restore_validation = extract_python_heredoc(
             VERIFY_BACKUP,
-            'python3 - "$BACKUP/MANIFEST.json" "$RESTORE_ROOT/workspace" <<\'PY\'',
+            'python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<\'PY\'',
         )
 
         with tempfile.TemporaryDirectory() as tmp:

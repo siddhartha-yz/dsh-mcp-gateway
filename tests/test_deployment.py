@@ -1193,6 +1193,10 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('[[ ! -L "$BACKUP" && "$BACKUP" -ef "$BACKUP_IO" ]]', restore)
         self.assertIn('python3 - "$BACKUP_IO" <<\'PY\'', restore)
         self.assertIn('os.open(root, os.O_RDONLY | os.O_DIRECTORY)', restore)
+        self.assertIn(
+            'os.open("SHA256SUMS", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)', restore
+        )
+        self.assertNotIn('checksum_path.read_text', restore)
         self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz"', restore)
 

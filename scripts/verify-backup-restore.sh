@@ -97,30 +97,34 @@ expected = (
     "config.tar.gz",
     "workspace-selected.tar.gz",
 )
-checksum_path = root / "SHA256SUMS"
-try:
-    checksum_stat = checksum_path.stat(follow_symlinks=False)
-except OSError as exc:
-    raise SystemExit(f"backup checksum manifest is unavailable: {exc}") from exc
-if (
-    checksum_path.is_symlink()
-    or not stat.S_ISREG(checksum_stat.st_mode)
-    or checksum_stat.st_nlink != 1
-    or checksum_stat.st_size > 4096
-):
-    raise SystemExit("backup checksum manifest is not a bounded private regular file")
-
-rows = {}
-for line in checksum_path.read_text(encoding="utf-8").splitlines():
-    match = re.fullmatch(r"([0-9a-f]{64})  ([^/]+)", line)
-    if not match or match.group(2) not in expected or match.group(2) in rows:
-        raise SystemExit("backup checksum manifest contains an invalid or duplicate entry")
-    rows[match.group(2)] = match.group(1)
-if set(rows) != set(expected):
-    raise SystemExit("backup checksum manifest does not contain the expected files")
-
 root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
 try:
+    try:
+        checksum_fd = os.open("SHA256SUMS", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
+    except OSError as exc:
+        raise SystemExit(f"backup checksum manifest is unavailable or linked: {exc}") from exc
+    try:
+        checksum_stat = os.fstat(checksum_fd)
+        if (
+            not stat.S_ISREG(checksum_stat.st_mode)
+            or checksum_stat.st_nlink != 1
+            or checksum_stat.st_size > 4096
+        ):
+            raise SystemExit("backup checksum manifest is not a bounded private regular file")
+        with os.fdopen(os.dup(checksum_fd), encoding="utf-8") as checksum_stream:
+            checksum_lines = checksum_stream.read().splitlines()
+    finally:
+        os.close(checksum_fd)
+
+    rows = {}
+    for line in checksum_lines:
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^/]+)", line)
+        if not match or match.group(2) not in expected or match.group(2) in rows:
+            raise SystemExit("backup checksum manifest contains an invalid or duplicate entry")
+        rows[match.group(2)] = match.group(1)
+    if set(rows) != set(expected):
+        raise SystemExit("backup checksum manifest does not contain the expected files")
+
     for name in expected:
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)

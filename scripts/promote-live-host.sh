@@ -76,7 +76,7 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-for command in python3 git curl runuser systemctl systemd-analyze sha256sum mktemp; do
+for command in python3 git curl runuser systemctl systemd-analyze sha256sum mktemp timeout; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
 PROMOTE_TMP="$(mktemp -d)"
@@ -330,8 +330,9 @@ runuser -u "$WORKSPACE_USER" -- env \
   npm_config_store_dir=/var/lib/dsh-harness/pnpm-store \
   npm_config_registry=https://registry.npmjs.org/ \
   PATH=/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin \
-  /opt/dsh-runtime/node_modules/.bin/pnpm install \
-    --dir /var/lib/dsh-harness/profiles/web --no-frozen-lockfile
+  timeout --signal=TERM --kill-after=10s 600s \
+    /opt/dsh-runtime/node_modules/.bin/pnpm install \
+      --dir /var/lib/dsh-harness/profiles/web --no-frozen-lockfile
 
 if grep -R -F -- "$LIVE_DSH_HOME" \
   /var/lib/dsh-harness/profiles/web/package.json \

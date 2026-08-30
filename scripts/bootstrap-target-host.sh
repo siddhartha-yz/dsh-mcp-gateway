@@ -154,7 +154,7 @@ install_node() {
   local node=/opt/dsh-runtime/node/bin/node
   if [[ -x "$node" ]]; then
     local current
-    current="$($node --version)"
+    current="$(timeout --signal=TERM --kill-after=2s 5s "$node" --version)"
     if [[ "$current" == "v$NODE_VERSION" ]]; then
       echo "Node $NODE_VERSION already installed; reusing it."
       return
@@ -193,7 +193,7 @@ timeout --signal=TERM --kill-after=10s 600s \
   --omit=dev \
   --no-audit \
   --no-fund
-ACTUAL_DSH_VERSION="$(/opt/dsh-runtime/node/bin/node -p "require('/opt/dsh-runtime/node_modules/@deepseek-ai/dsh/package.json').version")"
+ACTUAL_DSH_VERSION="$(timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/node/bin/node -p "require('/opt/dsh-runtime/node_modules/@deepseek-ai/dsh/package.json').version")"
 [[ "$ACTUAL_DSH_VERSION" == "$DSH_VERSION" ]] || {
   echo "installed DSH version $ACTUAL_DSH_VERSION does not match $DSH_VERSION" >&2
   exit 1

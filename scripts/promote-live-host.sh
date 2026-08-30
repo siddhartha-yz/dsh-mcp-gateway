@@ -209,6 +209,21 @@ def validate_artifact_file(path: Path, *, label: str) -> None:
         raise SystemExit(f'{label} is not a private regular file in plugin-artifacts: {path}')
 
 
+def open_private_regular(path: Path, *, label: str):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise SystemExit(f'{label} is unavailable or symlinked: {path}: {exc}') from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise SystemExit(f'{label} is not a private regular file: {path}')
+        return os.fdopen(descriptor, 'rb')
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 rewritten = 0
 manifest = []
 for name, spec in list(dependencies.items()):
@@ -218,16 +233,22 @@ for name, spec in list(dependencies.items()):
     destination = None
     if spec.startswith('file:'):
         source = Path(spec[5:])
-        if not source.is_file():
-            raise SystemExit(f'local plugin artifact is missing for {name}: {source}')
         destination = artifacts / source.name
         if destination.is_symlink():
             raise SystemExit(f'localized plugin artifact for {name} is not a private regular file in plugin-artifacts: {destination}')
-        if destination.exists():
-            if hashlib.sha256(destination.read_bytes()).digest() != hashlib.sha256(source.read_bytes()).digest():
-                raise SystemExit(f'plugin artifact basename collision: {destination.name}')
-        else:
-            shutil.copy2(source, destination)
+        with open_private_regular(source, label=f'local plugin artifact for {name}') as source_file:
+            source_digest = hashlib.file_digest(source_file, 'sha256').digest()
+            source_file.seek(0)
+            if destination.exists():
+                validate_artifact_file(destination, label=f'localized plugin artifact for {name}')
+                if hashlib.sha256(destination.read_bytes()).digest() != source_digest:
+                    raise SystemExit(f'plugin artifact basename collision: {destination.name}')
+            else:
+                try:
+                    with destination.open('xb') as destination_file:
+                        shutil.copyfileobj(source_file, destination_file)
+                except FileExistsError as exc:
+                    raise SystemExit(f'localized plugin artifact appeared during publication: {destination}') from exc
     elif spec.startswith(('github:', 'git+https://github.com/', 'https://github.com/')):
         installed = root / 'profiles/web/node_modules' / Path(name)
         try:

@@ -313,6 +313,71 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn("localized plugin artifact", completed.stdout + completed.stderr)
             self.assertTrue((artifacts / source.name).is_symlink())
 
+    def test_live_promotion_rejects_symlinked_file_dependency_source(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            outside = base / "sensitive.tgz"
+            outside.write_bytes(b"sensitive-outside-data")
+            source = base / "plugin.tgz"
+            source.symlink_to(outside)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": f"file:{source}"}}),
+                encoding="utf-8",
+            )
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            destination = root / "plugin-artifacts" / source.name
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("local plugin artifact", completed.stdout + completed.stderr)
+            self.assertFalse(destination.exists())
+            self.assertEqual(outside.read_bytes(), b"sensitive-outside-data")
+
+    def test_live_promotion_rejects_hardlinked_file_dependency_source(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            outside = base / "sensitive.tgz"
+            outside.write_bytes(b"sensitive-outside-data")
+            source = base / "plugin.tgz"
+            os.link(outside, source)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": f"file:{source}"}}),
+                encoding="utf-8",
+            )
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            destination = root / "plugin-artifacts" / source.name
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("private regular file", completed.stdout + completed.stderr)
+            self.assertFalse(destination.exists())
+
     def test_live_promotion_rejects_dangling_symlinked_plugin_artifact_without_writing_outside(self) -> None:
         localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
         with tempfile.TemporaryDirectory() as tmp:

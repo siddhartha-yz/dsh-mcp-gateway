@@ -411,6 +411,43 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertEqual(outside.read_bytes(), b"sentinel")
             self.assertTrue(destination.is_symlink())
 
+    def test_live_promotion_bounds_git_dependency_pack_time(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            installed = web / "node_modules" / "plugin"
+            installed.mkdir(parents=True)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": "github:owner/repo"}}),
+                encoding="utf-8",
+            )
+            fake_npm = base / "npm"
+            fake_npm.write_text("#!/bin/sh\nsleep 2\n", encoding="utf-8")
+            fake_npm.chmod(0o755)
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            ).replace(
+                "'/opt/dsh-runtime/node/bin/npm'",
+                repr(str(fake_npm)),
+            ).replace(
+                "timeout=60,",
+                "timeout=0.05,",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("npm pack timed out while localizing plugin", completed.stdout + completed.stderr)
+
     def test_live_promotion_rejects_symlinked_installed_git_dependency_before_pack(self) -> None:
         localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
         with tempfile.TemporaryDirectory() as tmp:

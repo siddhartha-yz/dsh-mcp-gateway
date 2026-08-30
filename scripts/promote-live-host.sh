@@ -247,21 +247,25 @@ for name, spec in list(dependencies.items()):
             'npm_config_cache': '/var/lib/dsh-harness/npm-pack-cache',
         }
         with tempfile.TemporaryDirectory(prefix='.npm-pack-', dir=artifacts) as pack_tmp:
-            packed = subprocess.run(
-                [
-                    '/opt/dsh-runtime/node/bin/npm',
-                    'pack',
-                    '--ignore-scripts',
-                    '--json',
-                    '--pack-destination',
-                    pack_tmp,
-                    str(installed),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
+            try:
+                packed = subprocess.run(
+                    [
+                        '/opt/dsh-runtime/node/bin/npm',
+                        'pack',
+                        '--ignore-scripts',
+                        '--json',
+                        '--pack-destination',
+                        pack_tmp,
+                        str(installed),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=60,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SystemExit(f'npm pack timed out while localizing {name}') from exc
             payload = json.loads(packed.stdout)
             if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
                 raise SystemExit(f'unexpected npm pack response while localizing {name}')

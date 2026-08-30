@@ -162,7 +162,9 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 root = Path('/var/lib/dsh-harness')
@@ -172,10 +174,14 @@ try:
     package_resolved = package_path.resolve(strict=True)
 except OSError as exc:
     raise SystemExit(f'DSH web package.json is unavailable: {exc}') from exc
-if package_path.is_symlink() or not package_resolved.is_relative_to(root_resolved):
-    raise SystemExit('refusing symlinked or escaping DSH web package.json')
-if not package_resolved.is_file():
-    raise SystemExit('DSH web package.json is not a regular file')
+package_opened = package_path.stat(follow_symlinks=False)
+if (
+    package_path.is_symlink()
+    or not package_resolved.is_relative_to(root_resolved)
+    or not stat.S_ISREG(package_opened.st_mode)
+    or package_opened.st_nlink != 1
+):
+    raise SystemExit('refusing non-private, symlinked, or escaping DSH web package.json')
 package = json.loads(package_resolved.read_text(encoding='utf-8'))
 dependencies = package.get('dependencies')
 if not isinstance(dependencies, dict):
@@ -185,6 +191,24 @@ artifacts = root / 'plugin-artifacts'
 if artifacts.is_symlink():
     raise SystemExit('refusing symlinked DSH plugin-artifacts directory')
 artifacts.mkdir(parents=True, exist_ok=True)
+artifacts_resolved = artifacts.resolve(strict=True)
+
+
+def validate_artifact_file(path: Path, *, label: str) -> None:
+    try:
+        opened = path.stat(follow_symlinks=False)
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f'{label} is unavailable: {path}: {exc}') from exc
+    if (
+        path.is_symlink()
+        or not resolved.is_relative_to(artifacts_resolved)
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+    ):
+        raise SystemExit(f'{label} is not a private regular file in plugin-artifacts: {path}')
+
+
 rewritten = 0
 manifest = []
 for name, spec in list(dependencies.items()):
@@ -197,6 +221,8 @@ for name, spec in list(dependencies.items()):
         if not source.is_file():
             raise SystemExit(f'local plugin artifact is missing for {name}: {source}')
         destination = artifacts / source.name
+        if destination.is_symlink():
+            raise SystemExit(f'localized plugin artifact for {name} is not a private regular file in plugin-artifacts: {destination}')
         if destination.exists():
             if hashlib.sha256(destination.read_bytes()).digest() != hashlib.sha256(source.read_bytes()).digest():
                 raise SystemExit(f'plugin artifact basename collision: {destination.name}')
@@ -211,33 +237,46 @@ for name, spec in list(dependencies.items()):
             'PATH': '/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin',
             'npm_config_cache': '/var/lib/dsh-harness/npm-pack-cache',
         }
-        packed = subprocess.run(
-            [
-                '/opt/dsh-runtime/node/bin/npm',
-                'pack',
-                '--ignore-scripts',
-                '--json',
-                '--pack-destination',
-                str(artifacts),
-                str(installed),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        payload = json.loads(packed.stdout)
-        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
-            raise SystemExit(f'unexpected npm pack response while localizing {name}')
-        filename = payload[0].get('filename')
-        if not isinstance(filename, str) or not filename:
-            raise SystemExit(f'npm pack did not return a filename while localizing {name}')
-        destination = artifacts / filename
-        if not destination.is_file():
-            raise SystemExit(f'npm pack output is missing for {name}: {destination}')
+        with tempfile.TemporaryDirectory(prefix='.npm-pack-', dir=artifacts) as pack_tmp:
+            packed = subprocess.run(
+                [
+                    '/opt/dsh-runtime/node/bin/npm',
+                    'pack',
+                    '--ignore-scripts',
+                    '--json',
+                    '--pack-destination',
+                    pack_tmp,
+                    str(installed),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(packed.stdout)
+            if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+                raise SystemExit(f'unexpected npm pack response while localizing {name}')
+            filename = payload[0].get('filename')
+            if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+                raise SystemExit(f'npm pack did not return a safe filename while localizing {name}')
+            packed_source = Path(pack_tmp) / filename
+            if not packed_source.is_file() or packed_source.is_symlink():
+                raise SystemExit(f'npm pack output is missing or unsafe for {name}: {packed_source}')
+            destination = artifacts / filename
+            if destination.exists() or destination.is_symlink():
+                validate_artifact_file(destination, label=f'localized plugin artifact for {name}')
+                if hashlib.sha256(destination.read_bytes()).digest() != hashlib.sha256(packed_source.read_bytes()).digest():
+                    raise SystemExit(f'plugin artifact basename collision: {destination.name}')
+            else:
+                try:
+                    with packed_source.open('rb') as source_file, destination.open('xb') as destination_file:
+                        shutil.copyfileobj(source_file, destination_file)
+                except FileExistsError as exc:
+                    raise SystemExit(f'localized plugin artifact appeared during publication: {destination}') from exc
     else:
         continue
 
+    validate_artifact_file(destination, label=f'localized plugin artifact for {name}')
     dependencies[name] = f'file:{destination}'
     rewritten += 1
     manifest.append(
@@ -251,7 +290,10 @@ for name, spec in list(dependencies.items()):
 
 package_resolved.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
 manifest.sort(key=lambda item: item['name'])
-(artifacts / 'source-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+manifest_path = artifacts / 'source-manifest.json'
+if manifest_path.exists() or manifest_path.is_symlink():
+    validate_artifact_file(manifest_path, label='plugin source manifest')
+manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 print(f'rebound {rewritten} local plugin artifact(s) into {artifacts}')
 PY
 

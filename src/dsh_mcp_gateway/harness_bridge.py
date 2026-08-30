@@ -16,6 +16,7 @@ class HarnessBridgeError(RuntimeError):
     """The local DSH ChatGPT bridge could not serve a capability request."""
 
 
+MAX_BRIDGE_REQUEST_BYTES = 1_000_000
 MAX_BRIDGE_RESPONSE_BYTES = 16 * 1024 * 1024
 DEFAULT_TOOL_CALL_TRANSPORT_TIMEOUT_S = 125.0
 
@@ -343,6 +344,8 @@ class HarnessBridgeClient:
         timeout_s: float | None = None,
     ) -> dict[str, Any]:
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if data is not None and len(data) > MAX_BRIDGE_REQUEST_BYTES:
+            raise HarnessBridgeError(f"DSH bridge request exceeds {MAX_BRIDGE_REQUEST_BYTES} bytes")
         request = Request(
             f"{self.base_url}{path}",
             data=data,

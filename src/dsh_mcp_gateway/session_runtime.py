@@ -22,6 +22,7 @@ SESSION_TEXT_LIMIT = 20_000
 SESSION_LIST_TEXT_LIMIT = 500
 SESSION_REPORT_LIST_LIMIT = 50
 SESSION_LIST_LIMIT = 100
+SESSION_RUN_HISTORY_LIMIT = 20
 
 
 class SessionRuntimeError(ValueError):
@@ -201,13 +202,12 @@ class DurableSessionRuntime:
         return row
 
     def _run_rows(self, connection: sqlite3.Connection, session_id: str) -> list[sqlite3.Row]:
-        return list(
-            connection.execute(
-                "SELECT run_id, status, created_at, updated_at FROM agent_runs "
-                "WHERE session_id = ? ORDER BY created_at ASC",
-                (session_id,),
-            ).fetchall()
-        )
+        rows = connection.execute(
+            "SELECT run_id, status, created_at, updated_at FROM agent_runs "
+            "WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (session_id, SESSION_RUN_HISTORY_LIMIT),
+        ).fetchall()
+        return list(reversed(rows))
 
     def _public_state(self, connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         runs = self._run_rows(connection, str(row["session_id"]))
@@ -237,7 +237,7 @@ class DurableSessionRuntime:
                     "created_at": run["created_at"],
                     "updated_at": run["updated_at"],
                 }
-                for run in runs[-20:]
+                for run in runs
             ],
             "progress": {
                 "summary": row["summary"],

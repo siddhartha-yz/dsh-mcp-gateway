@@ -71,12 +71,18 @@ PY
 )"
 [[ ! -e "$RESTORE_ROOT" ]] || { echo "restore root already exists: $RESTORE_ROOT" >&2; exit 1; }
 
-for port in "$DSH_PORT" "$GATEWAY_PORT"; do
-  if curl -fsS --max-time 1 "http://127.0.0.1:$port/" >/dev/null 2>&1; then
-    echo "temporary port is already serving HTTP: $port" >&2
-    exit 1
-  fi
-done
+python3 - "$DSH_PORT" "$GATEWAY_PORT" <<'PY'
+import socket, sys
+for raw in sys.argv[1:]:
+    port = int(raw)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise SystemExit(f"temporary port is unavailable: {port}: {exc}") from exc
+    finally:
+        sock.close()
+PY
 
 (
   cd "$BACKUP_IO"
@@ -139,6 +145,38 @@ chmod -R u+rwX,go-rwx "$RESTORE_IO"
 
 DSH_HOME_RESTORED="$RESTORE_IO/system/var/lib/dsh-harness"
 GATEWAY_STATE_RESTORED="$RESTORE_IO/system/var/lib/dsh-mcp-gateway"
+python3 - "$RESTORE_IO/system" \
+  "$DSH_HOME_RESTORED" \
+  "$GATEWAY_STATE_RESTORED" \
+  "$DSH_HOME_RESTORED/profiles/web/package.json" \
+  "$GATEWAY_STATE_RESTORED/oauth.sqlite3" \
+  "$RESTORE_IO/system/etc/dsh-mcp-gateway/gateway.env" \
+  "$RESTORE_IO/system/etc/dsh-cloudflared/credentials.json" <<'PY'
+import pathlib, stat, sys
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+for raw in sys.argv[2:4]:
+    path = pathlib.Path(raw)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"restored state root is unavailable: {path}: {exc}") from exc
+    if path.is_symlink() or not resolved.is_relative_to(root) or not resolved.is_dir():
+        raise SystemExit(f"restored state root escapes isolated restore tree: {path}")
+for raw in sys.argv[4:]:
+    path = pathlib.Path(raw)
+    try:
+        opened = path.stat(follow_symlinks=False)
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"restored state file is unavailable: {path}: {exc}") from exc
+    if (
+        path.is_symlink()
+        or not resolved.is_relative_to(root)
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+    ):
+        raise SystemExit(f"restored state file is not a private regular file: {path}")
+PY
 [[ -f "$DSH_HOME_RESTORED/profiles/web/package.json" ]] || { echo "restored DSH profile missing" >&2; exit 1; }
 [[ -f "$GATEWAY_STATE_RESTORED/oauth.sqlite3" ]] || { echo "restored OAuth database missing" >&2; exit 1; }
 [[ -f "$RESTORE_IO/system/etc/dsh-mcp-gateway/gateway.env" ]] || { echo "restored gateway config missing" >&2; exit 1; }
@@ -191,7 +229,12 @@ for name,spec in list(deps.items()):
         raise SystemExit(f"dependency is not a backed-up local artifact: {name} -> {spec}")
     deps[name]=new+spec[len(old):]
     artifact=pathlib.Path(deps[name][5:])
-    if not artifact.is_file(): raise SystemExit(f"restored plugin artifact missing: {artifact.name}")
+    try:
+        resolved_artifact=artifact.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"restored plugin artifact missing: {artifact.name}") from exc
+    if artifact.is_symlink() or not resolved_artifact.is_relative_to(root) or not resolved_artifact.is_file():
+        raise SystemExit(f"restored plugin artifact escapes isolated restore tree: {artifact.name}")
     count+=1
 p.write_text(json.dumps(data,indent=2)+'\n')
 print(f"plugin_artifacts_rebased={count}")

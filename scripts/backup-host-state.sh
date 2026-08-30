@@ -58,6 +58,46 @@ for path in \
   [[ -e "$path" ]] || { echo "required production path is missing: $path" >&2; exit 1; }
 done
 
+python3 - \
+  /var/lib/dsh-harness \
+  /var/lib/dsh-mcp-gateway \
+  /etc/dsh-mcp-gateway \
+  /etc/dsh-cloudflared \
+  /srv/dsh-mcp-gateway \
+  /var/lib/dsh-harness/profiles/web/package.json \
+  /var/lib/dsh-mcp-gateway/oauth.sqlite3 \
+  /etc/dsh-mcp-gateway/gateway.env \
+  /etc/dsh-cloudflared/credentials.json \
+  /srv/dsh-mcp-gateway/.deployed-git-commit <<'PY'
+import pathlib, stat, sys
+
+roots = [pathlib.Path(raw) for raw in sys.argv[1:6]]
+for path in roots:
+    try:
+        opened = path.stat(follow_symlinks=False)
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"required production state root is unavailable: {path}: {exc}") from exc
+    if path.is_symlink() or resolved != path or not stat.S_ISDIR(opened.st_mode):
+        raise SystemExit(f"required production state root is not a real directory: {path}")
+
+for raw, root in zip(sys.argv[6:], roots, strict=True):
+    path = pathlib.Path(raw)
+    try:
+        opened = path.stat(follow_symlinks=False)
+        resolved = path.resolve(strict=True)
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"required production state file is unavailable: {path}: {exc}") from exc
+    if (
+        path.is_symlink()
+        or not resolved.is_relative_to(resolved_root)
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+    ):
+        raise SystemExit(f"required production state file is not a private regular file: {path}")
+PY
+
 OUTPUT="$(python3 - "$OUTPUT" <<'PY'
 import os, sys
 print(os.path.abspath(sys.argv[1]))

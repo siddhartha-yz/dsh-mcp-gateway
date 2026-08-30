@@ -46,6 +46,27 @@ class DurableSessionRuntimeTests(unittest.TestCase):
             self.assertEqual(statuses[run_id], "superseded")
             self.assertEqual(statuses[new_run_id], "active")
 
+    def test_get_fetches_only_bounded_recent_run_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = self.make_runtime(tmp)
+            state = runtime.manage(action="start", objective="bounded history")
+            session_id = state["session_id"]
+            first_run_id = state["active_run"]["run_id"]
+            for _ in range(29):
+                state = runtime.manage(action="resume", session_id=session_id, takeover=True)
+
+            with runtime._connection() as connection:
+                fetched = runtime._run_rows(connection, session_id)
+
+            self.assertEqual(len(fetched), 20)
+            self.assertNotIn(first_run_id, {row["run_id"] for row in fetched})
+            public = runtime.manage(action="get", session_id=session_id)
+            self.assertEqual([row["run_id"] for row in fetched], [run["run_id"] for run in public["runs"]])
+            self.assertEqual(
+                public["active_run"]["run_id"],
+                state["active_run"]["run_id"],
+            )
+
     def test_resume_requires_explicit_takeover_of_active_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = self.make_runtime(tmp)

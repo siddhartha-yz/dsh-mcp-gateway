@@ -339,6 +339,16 @@ class HarnessBridgeClientTests(unittest.TestCase):
         ):
             client.tools()
 
+    def test_oversized_bridge_request_is_rejected_before_transport(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen") as mocked,
+            self.assertRaisesRegex(HarnessBridgeError, "request exceeds 1000000 bytes"),
+        ):
+            client.call("community_echo", {"text": "x" * 1_000_000})
+
+        mocked.assert_not_called()
+
     def test_oversized_bridge_response_is_rejected_before_full_read(self) -> None:
         class OversizedResponse:
             def __enter__(self):

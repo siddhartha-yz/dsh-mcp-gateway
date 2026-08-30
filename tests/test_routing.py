@@ -1787,6 +1787,22 @@ class PublicSdkBackendTests(unittest.TestCase):
             self.assertEqual(after, before)
             self.assertFalse(path.exists())
 
+    def test_catalog_save_fsyncs_file_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sessions.json"
+            calls: list[int] = []
+            original_fsync = os.fsync
+
+            def recording_fsync(fd: int) -> None:
+                calls.append(fd)
+                original_fsync(fd)
+
+            with patch("dsh_mcp_gateway.backend.os.fsync", side_effect=recording_fsync):
+                SessionCatalog(path).add("s1")
+
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(SessionCatalog(path).contains("s1"))
+
     def test_catalog_rolls_back_memory_when_persistence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sessions.json"

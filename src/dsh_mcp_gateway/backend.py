@@ -328,6 +328,7 @@ class SessionCatalog:
                 if written <= 0:
                     raise OSError("failed to write session catalog temp file")
                 offset += written
+            os.fsync(descriptor)
             opened = os.fstat(descriptor)
             linked = os.stat(tmp_name, dir_fd=parent_fd, follow_symlinks=False)
             if (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino):
@@ -342,6 +343,7 @@ class SessionCatalog:
             if (opened.st_dev, opened.st_ino) != (published.st_dev, published.st_ino):
                 os.unlink(self.path.name, dir_fd=parent_fd)
                 raise OSError("session catalog changed during publication")
+            os.fsync(parent_fd)
         except (OSError, UnicodeError):
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)

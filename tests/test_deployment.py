@@ -8,6 +8,7 @@ import os
 import pwd
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -212,7 +213,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("ReadWritePaths=$WORKSPACE /var/lib/dsh-harness", script)
         self.assertIn("artifacts = root / 'plugin-artifacts'", script)
         self.assertIn("source-manifest.json", script)
-        self.assertIn("npm',\n                'pack'", script)
+        self.assertRegex(script, r"'/opt/dsh-runtime/node/bin/npm',\s+'pack',")
         self.assertIn("--ignore-scripts", script)
         self.assertIn("network git dependency instead of a local artifact", script)
         self.assertIn("npm_config_store_dir=/var/lib/dsh-harness/pnpm-store", script)
@@ -259,6 +260,151 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn("plugin-artifacts", completed.stdout + completed.stderr)
             self.assertFalse((outside / "source-manifest.json").exists())
 
+    def test_live_promotion_rejects_symlinked_plugin_artifact_entry(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            source = base / "plugin.tgz"
+            source.write_bytes(b"artifact")
+            outside = base / "outside.tgz"
+            outside.write_bytes(b"artifact")
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            (artifacts / source.name).symlink_to(outside)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": f"file:{source}"}}),
+                encoding="utf-8",
+            )
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("localized plugin artifact", completed.stdout + completed.stderr)
+            self.assertTrue((artifacts / source.name).is_symlink())
+
+    def test_live_promotion_rejects_dangling_symlinked_plugin_artifact_without_writing_outside(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            source = base / "plugin.tgz"
+            source.write_bytes(b"artifact")
+            outside = base / "outside-created.tgz"
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            (artifacts / source.name).symlink_to(outside)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": f"file:{source}"}}),
+                encoding="utf-8",
+            )
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("localized plugin artifact", completed.stdout + completed.stderr)
+            self.assertFalse(outside.exists())
+
+    def test_live_promotion_rejects_symlinked_plugin_source_manifest(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            (web / "package.json").write_text(json.dumps({"dependencies": {}}), encoding="utf-8")
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            outside = base / "outside.json"
+            outside.write_text("sentinel\n", encoding="utf-8")
+            (artifacts / "source-manifest.json").symlink_to(outside)
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("plugin source manifest", completed.stdout + completed.stderr)
+            self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel\n")
+
+    def test_live_promotion_git_pack_cannot_overwrite_preseeded_artifact_symlink(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            installed = web / "node_modules" / "plugin"
+            installed.mkdir(parents=True)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": "github:owner/repo"}}),
+                encoding="utf-8",
+            )
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            outside = base / "outside.tgz"
+            outside.write_bytes(b"sentinel")
+            destination = artifacts / "plugin-1.0.0.tgz"
+            destination.symlink_to(outside)
+            fake_npm = base / "npm"
+            fake_npm.write_text(
+                "#!/usr/bin/python3\n"
+                "import json, pathlib, sys\n"
+                "args=sys.argv[1:]\n"
+                "out=pathlib.Path(args[args.index('--pack-destination')+1])\n"
+                "(out/'plugin-1.0.0.tgz').write_bytes(b'packed')\n"
+                "print(json.dumps([{'filename':'plugin-1.0.0.tgz'}]))\n",
+                encoding="utf-8",
+            )
+            fake_npm.chmod(0o755)
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            ).replace(
+                "'/opt/dsh-runtime/node/bin/npm'",
+                repr(str(fake_npm)),
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("localized plugin artifact", completed.stdout + completed.stderr)
+            self.assertEqual(outside.read_bytes(), b"sentinel")
+            self.assertTrue(destination.is_symlink())
+
     def test_live_promotion_rejects_symlinked_web_package_path(self) -> None:
         localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
         with tempfile.TemporaryDirectory() as tmp:
@@ -285,6 +431,34 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("package.json", completed.stdout + completed.stderr)
             self.assertEqual(outside.read_text(encoding="utf-8"), original)
+
+    def test_live_promotion_rejects_hardlinked_web_package_path(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            package = web / "package.json"
+            original = json.dumps({"dependencies": {}}) + "\n"
+            package.write_text(original, encoding="utf-8")
+            alias = base / "package-alias.json"
+            os.link(package, alias)
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("package.json", completed.stdout + completed.stderr)
+            self.assertEqual(alias.read_text(encoding="utf-8"), original)
 
     def test_live_promotion_fails_closed_when_readiness_poll_never_succeeds(self) -> None:
         script = PROMOTE_LIVE.read_text(encoding="utf-8")
@@ -352,6 +526,106 @@ class DeploymentTemplateTests(unittest.TestCase):
             'curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/readyz"',
             restore,
         )
+
+    def test_restore_port_preflight_rejects_non_http_listener(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+        preflight = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$DSH_PORT" "$GATEWAY_PORT" <<\'PY\'',
+        )
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            occupied = listener.getsockname()[1]
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                free_port = probe.getsockname()[1]
+
+            result = subprocess.run(
+                [sys.executable, "-", str(occupied), str(free_port)],
+                input=preflight,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"temporary port is unavailable: {occupied}", result.stdout + result.stderr)
+        self.assertNotIn("temporary port is already serving HTTP", restore)
+
+    def test_backup_rejects_unrestorable_production_state_paths_before_output_creation(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+        marker = 'python3 - \\\n  /var/lib/dsh-harness \\\n  /var/lib/dsh-mcp-gateway \\\n  /etc/dsh-mcp-gateway \\\n  /etc/dsh-cloudflared \\\n  /srv/dsh-mcp-gateway \\\n  /var/lib/dsh-harness/profiles/web/package.json \\\n  /var/lib/dsh-mcp-gateway/oauth.sqlite3 \\\n  /etc/dsh-mcp-gateway/gateway.env \\\n  /etc/dsh-cloudflared/credentials.json \\\n  /srv/dsh-mcp-gateway/.deployed-git-commit <<\'PY\''
+        validation = extract_python_heredoc(BACKUP_HOST, marker)
+        create_output = 'python3 - "$OUTPUT" create-output <<\'PY\''
+        self.assertLess(backup.index(marker), backup.index(create_output))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roots = [root / name for name in ("dsh", "gateway", "config", "tunnel", "deploy")]
+            for item in roots:
+                item.mkdir()
+            files = [
+                roots[0] / "package.json",
+                roots[1] / "oauth.sqlite3",
+                roots[2] / "gateway.env",
+                roots[3] / "credentials.json",
+                roots[4] / "commit",
+            ]
+            for item in files:
+                item.write_text("sentinel\n", encoding="utf-8")
+
+            outside = root / "outside"
+            outside.mkdir()
+            alias = root / "dsh-alias"
+            alias.symlink_to(outside, target_is_directory=True)
+            result = subprocess.run(
+                [sys.executable, "-", str(alias), *(str(item) for item in roots[1:]), *(str(item) for item in files)],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("state root is not a real directory", result.stdout + result.stderr)
+
+            nested = roots[0] / "nested"
+            nested.mkdir()
+            outside_file_root = root / "outside-file-root"
+            outside_file_root.mkdir()
+            (outside_file_root / "package.json").write_text("{}\n", encoding="utf-8")
+            (nested / "web").symlink_to(outside_file_root, target_is_directory=True)
+            files[0].unlink()
+            files[0] = nested / "web/package.json"
+            result = subprocess.run(
+                [sys.executable, "-", *(str(item) for item in roots), *(str(item) for item in files)],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("state file is not a private regular file", result.stdout + result.stderr)
+
+            files[0] = roots[0] / "package.json"
+            files[0].write_text("sentinel\n", encoding="utf-8")
+            hardlink_target = root / "oauth-target"
+            hardlink_target.write_text("sqlite\n", encoding="utf-8")
+            files[1].unlink()
+            os.link(hardlink_target, files[1])
+            result = subprocess.run(
+                [sys.executable, "-", *(str(item) for item in roots), *(str(item) for item in files)],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("state file is not a private regular file", result.stdout + result.stderr)
 
     def test_backup_validates_workspace_selection_before_creating_output(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
@@ -649,6 +923,137 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz" -C "$RESTORE_ROOT/system"', restore)
         self.assertIn('[[ ! -L "$RESTORE_ROOT" && "$RESTORE_ROOT" -ef "$RESTORE_IO" ]]', restore)
+
+    def test_restore_rejects_system_state_root_symlink_escape(self) -> None:
+        validation = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$RESTORE_IO/system" \\\n  "$DSH_HOME_RESTORED" \\\n  "$GATEWAY_STATE_RESTORED" \\\n  "$DSH_HOME_RESTORED/profiles/web/package.json" \\\n  "$GATEWAY_STATE_RESTORED/oauth.sqlite3" \\\n  "$RESTORE_IO/system/etc/dsh-mcp-gateway/gateway.env" \\\n  "$RESTORE_IO/system/etc/dsh-cloudflared/credentials.json" <<\'PY\'',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            system = root / "restore" / "system"
+            external = root / "external-dsh"
+            (external / "profiles/web").mkdir(parents=True)
+            (external / "profiles/web/package.json").write_text("{}\n", encoding="utf-8")
+            gateway = system / "var/lib/dsh-mcp-gateway"
+            gateway.mkdir(parents=True)
+            (gateway / "oauth.sqlite3").write_bytes(b"sqlite")
+            config = system / "etc/dsh-mcp-gateway"
+            config.mkdir(parents=True)
+            (config / "gateway.env").write_text("PUBLIC=example\n", encoding="utf-8")
+            tunnel = system / "etc/dsh-cloudflared"
+            tunnel.mkdir(parents=True)
+            (tunnel / "credentials.json").write_text("{}\n", encoding="utf-8")
+            dsh = system / "var/lib/dsh-harness"
+            dsh.symlink_to(external, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(system),
+                    str(dsh),
+                    str(gateway),
+                    str(dsh / "profiles/web/package.json"),
+                    str(gateway / "oauth.sqlite3"),
+                    str(config / "gateway.env"),
+                    str(tunnel / "credentials.json"),
+                ],
+                input=validation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("escapes isolated restore tree", result.stdout + result.stderr)
+
+    def test_restore_rejects_hardlinked_mutable_state_files(self) -> None:
+        validation = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$RESTORE_IO/system" \\\n  "$DSH_HOME_RESTORED" \\\n  "$GATEWAY_STATE_RESTORED" \\\n  "$DSH_HOME_RESTORED/profiles/web/package.json" \\\n  "$GATEWAY_STATE_RESTORED/oauth.sqlite3" \\\n  "$RESTORE_IO/system/etc/dsh-mcp-gateway/gateway.env" \\\n  "$RESTORE_IO/system/etc/dsh-cloudflared/credentials.json" <<\'PY\'',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            system = root / "restore/system"
+            dsh = system / "var/lib/dsh-harness"
+            profile = dsh / "profiles/web"
+            profile.mkdir(parents=True)
+            package = profile / "package.json"
+            package.write_text("{}\n", encoding="utf-8")
+            os.link(package, profile / "package-alias.json")
+            gateway = system / "var/lib/dsh-mcp-gateway"
+            gateway.mkdir(parents=True)
+            oauth = gateway / "oauth.sqlite3"
+            oauth.write_bytes(b"sqlite")
+            config = system / "etc/dsh-mcp-gateway"
+            config.mkdir(parents=True)
+            gateway_env = config / "gateway.env"
+            gateway_env.write_text("PUBLIC=example\n", encoding="utf-8")
+            tunnel = system / "etc/dsh-cloudflared"
+            tunnel.mkdir(parents=True)
+            credentials = tunnel / "credentials.json"
+            credentials.write_text("{}\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(system),
+                    str(dsh),
+                    str(gateway),
+                    str(package),
+                    str(oauth),
+                    str(gateway_env),
+                    str(credentials),
+                ],
+                input=validation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("restored state file is not a private regular file", result.stdout + result.stderr)
+
+    def test_restore_rejects_plugin_artifact_symlink_escape(self) -> None:
+        rebase = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$DSH_HOME_RESTORED" <<\'PY\'',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "restore/var/lib/dsh-harness"
+            profile = root / "profiles/web"
+            profile.mkdir(parents=True)
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            outside = Path(tmp) / "outside.tgz"
+            outside.write_bytes(b"outside-sentinel")
+            (artifacts / "plugin.tgz").symlink_to(outside)
+            (profile / "package.json").write_text(
+                json.dumps(
+                    {
+                        "dependencies": {
+                            "plugin": "file:/var/lib/dsh-harness/plugin-artifacts/plugin.tgz"
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-", str(root)],
+                input=rebase,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("restored plugin artifact escapes isolated restore tree", result.stdout + result.stderr)
 
     def test_workspace_backup_and_restore_reject_selected_symlinks(self) -> None:
         backup_validation = extract_python_heredoc(

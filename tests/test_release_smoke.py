@@ -343,6 +343,23 @@ class PublicReleaseSmokeTests(unittest.TestCase):
         ):
             client.get("https://gateway.example.com/readyz")
 
+    def test_pin_file_must_be_single_link_regular_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin_file = root / "gateway.env"
+            pin_file.write_text("DSH_MCP_GATEWAY_ADMIN_PIN=fixture-long-enough-pin\n", encoding="utf-8")
+            pin_file.chmod(0o600)
+
+            linked = root / "linked.env"
+            linked.symlink_to(pin_file)
+            with self.assertRaisesRegex(smoke_module.SmokeError, "single-link regular file"):
+                smoke_module.read_env_value(linked, "DSH_MCP_GATEWAY_ADMIN_PIN")
+
+            hardlinked = root / "hardlinked.env"
+            hardlinked.hardlink_to(pin_file)
+            with self.assertRaisesRegex(smoke_module.SmokeError, "single-link regular file"):
+                smoke_module.read_env_value(pin_file, "DSH_MCP_GATEWAY_ADMIN_PIN")
+
     def test_public_smoke_rejects_non_https_non_loopback_before_reading_pin(self) -> None:
         result = subprocess.run(
             [

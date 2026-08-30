@@ -155,9 +155,12 @@ def normalize_origin(value: str, *, allow_http_loopback: bool) -> str:
 
 def read_env_value(path: Path, key: str) -> str:
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
+        metadata = path.lstat()
     except OSError as exc:
         raise SmokeError(f"cannot stat PIN file: {type(exc).__name__}") from exc
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise SmokeError("PIN file must be a single-link regular file")
+    mode = stat.S_IMODE(metadata.st_mode)
     if mode & 0o077:
         raise SmokeError("PIN file must not be readable or writable by group/other")
     try:

@@ -84,10 +84,62 @@ for raw in sys.argv[1:]:
         sock.close()
 PY
 
-(
-  cd "$BACKUP_IO"
-  sha256sum -c SHA256SUMS
+python3 - "$BACKUP_IO" <<'PY'
+import hashlib, os, pathlib, re, stat, sys
+
+root = pathlib.Path(sys.argv[1])
+expected = (
+    "MANIFEST.json",
+    "tools-before.json",
+    "skills-before.json",
+    "dsh-home.tar.gz",
+    "gateway-state.tar.gz",
+    "config.tar.gz",
+    "workspace-selected.tar.gz",
 )
+checksum_path = root / "SHA256SUMS"
+try:
+    checksum_stat = checksum_path.stat(follow_symlinks=False)
+except OSError as exc:
+    raise SystemExit(f"backup checksum manifest is unavailable: {exc}") from exc
+if (
+    checksum_path.is_symlink()
+    or not stat.S_ISREG(checksum_stat.st_mode)
+    or checksum_stat.st_nlink != 1
+    or checksum_stat.st_size > 4096
+):
+    raise SystemExit("backup checksum manifest is not a bounded private regular file")
+
+rows = {}
+for line in checksum_path.read_text(encoding="utf-8").splitlines():
+    match = re.fullmatch(r"([0-9a-f]{64})  ([^/]+)", line)
+    if not match or match.group(2) not in expected or match.group(2) in rows:
+        raise SystemExit("backup checksum manifest contains an invalid or duplicate entry")
+    rows[match.group(2)] = match.group(1)
+if set(rows) != set(expected):
+    raise SystemExit("backup checksum manifest does not contain the expected files")
+
+root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    for name in expected:
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
+        except OSError as exc:
+            raise SystemExit(f"backup input is unavailable or linked: {name}: {exc}") from exc
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise SystemExit(f"backup input is not a private regular file: {name}")
+            with os.fdopen(os.dup(fd), "rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        finally:
+            os.close(fd)
+        if digest != rows[name]:
+            raise SystemExit(f"backup checksum mismatch: {name}")
+finally:
+    os.close(root_fd)
+print("backup_checksums=PASS")
+PY
 
 RESTORE_ROOT_ID="$(python3 - "$RESTORE_ROOT" create-root <<'PY'
 import os, pathlib, sys

@@ -742,6 +742,70 @@ class DeploymentTemplateTests(unittest.TestCase):
             restore,
         )
 
+    def test_restore_checksum_validation_rejects_linked_inputs_and_unsafe_manifest_entries(self) -> None:
+        validation = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$BACKUP_IO" <<\'PY\'',
+        )
+        expected = (
+            "MANIFEST.json",
+            "tools-before.json",
+            "skills-before.json",
+            "dsh-home.tar.gz",
+            "gateway-state.tar.gz",
+            "config.tar.gz",
+            "workspace-selected.tar.gz",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in expected:
+                (root / name).write_bytes(name.encode())
+            sums = "".join(
+                f"{hashlib.sha256((root / name).read_bytes()).hexdigest()}  {name}\n"
+                for name in expected
+            )
+            (root / "SHA256SUMS").write_text(sums, encoding="utf-8")
+
+            ok = subprocess.run(
+                [sys.executable, "-", str(root)],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
+            target = root / "outside.tar.gz"
+            target.write_bytes(b"outside")
+            linked = root / "config.tar.gz"
+            linked.unlink()
+            linked.symlink_to(target)
+            result = subprocess.run(
+                [sys.executable, "-", str(root)],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unavailable or linked", result.stdout + result.stderr)
+
+            linked.unlink()
+            linked.write_bytes(b"config.tar.gz")
+            (root / "SHA256SUMS").write_text(sums + f"{'0' * 64}  ../outside\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-", str(root)],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid or duplicate entry", result.stdout + result.stderr)
+
     def test_restore_port_preflight_rejects_non_http_listener(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
         preflight = extract_python_heredoc(
@@ -1127,7 +1191,8 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('exec {BACKUP_FD}<"$BACKUP"', restore)
         self.assertIn('BACKUP_IO="/proc/$$/fd/$BACKUP_FD"', restore)
         self.assertIn('[[ ! -L "$BACKUP" && "$BACKUP" -ef "$BACKUP_IO" ]]', restore)
-        self.assertIn('cd "$BACKUP_IO"', restore)
+        self.assertIn('python3 - "$BACKUP_IO" <<\'PY\'', restore)
+        self.assertIn('os.open(root, os.O_RDONLY | os.O_DIRECTORY)', restore)
         self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz"', restore)
 

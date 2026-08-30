@@ -13,6 +13,7 @@ import argparse
 import ipaddress
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import urllib.error
@@ -28,6 +29,15 @@ DEFAULT_CONFIGS = (
 def tracked_files(root: pathlib.Path) -> list[pathlib.Path]:
     raw = subprocess.check_output(["git", "ls-files", "-z"], cwd=root)
     return [root / item.decode(errors="surrogateescape") for item in raw.split(b"\0") if item]
+
+
+def read_tracked_bytes(path: pathlib.Path) -> bytes:
+    mode = path.lstat().st_mode
+    if stat.S_ISLNK(mode):
+        return path.readlink().as_posix().encode(errors="surrogateescape")
+    if not stat.S_ISREG(mode):
+        raise OSError(f"tracked path is not a regular file: {path}")
+    return path.read_bytes()
 
 
 def read_production_config(paths: tuple[pathlib.Path, ...]) -> tuple[str, str]:
@@ -99,7 +109,7 @@ def main() -> int:
 
     for path in files:
         try:
-            data = path.read_bytes()
+            data = read_tracked_bytes(path)
         except OSError:
             continue
         rel = path.relative_to(root).as_posix()

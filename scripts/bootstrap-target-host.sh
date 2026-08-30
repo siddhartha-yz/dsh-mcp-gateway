@@ -102,7 +102,7 @@ need_command() {
 
 install_base_prereqs() {
   local missing=0
-  for cmd in curl git tar sha256sum python3; do
+  for cmd in curl git tar sha256sum python3 timeout; do
     if ! need_command "$cmd"; then
       echo "missing prerequisite command: $cmd" >&2
       missing=1
@@ -187,7 +187,8 @@ install -m 0644 "$SOURCE_ROOT/deploy/dsh-runtime/package.json" /opt/dsh-runtime/
 install -m 0644 "$SOURCE_ROOT/deploy/dsh-runtime/package-lock.json" /opt/dsh-runtime/package-lock.json
 export PATH="/opt/dsh-runtime/node/bin:$PATH"
 export npm_config_registry="https://registry.npmjs.org/"
-/opt/dsh-runtime/node/bin/npm ci \
+timeout --signal=TERM --kill-after=10s 600s \
+  /opt/dsh-runtime/node/bin/npm ci \
   --prefix /opt/dsh-runtime \
   --omit=dev \
   --no-audit \

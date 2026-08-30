@@ -40,7 +40,7 @@ done
 [[ "$DSH_PORT" =~ ^[0-9]+$ && "$GATEWAY_PORT" =~ ^[0-9]+$ ]] || { echo "ports must be integers" >&2; exit 2; }
 ((DSH_PORT > 0 && DSH_PORT <= 65535 && GATEWAY_PORT > 0 && GATEWAY_PORT <= 65535 && DSH_PORT != GATEWAY_PORT)) || { echo "invalid or duplicate ports" >&2; exit 2; }
 
-for command in curl python3 tar sha256sum; do
+for command in curl python3 tar sha256sum timeout; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
 BACKUP="$(cd "$BACKUP" && pwd)"
@@ -250,9 +250,10 @@ XDG_CACHE_HOME="$RESTORE_IO/xdg-cache" \
 XDG_STATE_HOME="$RESTORE_IO/xdg-state" \
 npm_config_store_dir="$RESTORE_IO/pnpm-store" \
 PATH="/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin" \
-  /opt/dsh-runtime/node_modules/.bin/pnpm install \
-    --dir "$DSH_HOME_RESTORED/profiles/web" --offline --no-frozen-lockfile \
-    >"$RESTORE_IO/logs/pnpm.log" 2>&1
+  timeout --signal=TERM --kill-after=10s 600s \
+    /opt/dsh-runtime/node_modules/.bin/pnpm install \
+      --dir "$DSH_HOME_RESTORED/profiles/web" --offline --no-frozen-lockfile \
+      >"$RESTORE_IO/logs/pnpm.log" 2>&1
 echo "offline_profile_rebuild=PASS"
 
 DSH_PID=""

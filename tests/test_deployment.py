@@ -1463,6 +1463,34 @@ class DeploymentPreflightTests(unittest.TestCase):
             result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_preflight_rejects_symlinked_state_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            state = paths["gateway_state"]
+            real_state = state.with_name("gateway-state-real")
+            state.rename(real_state)
+            state.symlink_to(real_state, target_is_directory=True)
+
+            result = self.run_preflight(paths)
+            self.assertEqual(result.returncode, 1)
+            report = json.loads(result.stdout)
+            failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("gateway state directory", failed)
+            self.assertIn("gateway state ownership/mode", failed)
+
+    def test_preflight_rejects_symlinked_installed_runtime_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            installed = paths["dsh_runtime"] / "package-lock.json"
+            installed.unlink()
+            installed.symlink_to(ROOT / "deploy" / "dsh-runtime" / "package-lock.json")
+
+            result = self.run_preflight(paths)
+            self.assertEqual(result.returncode, 1)
+            report = json.loads(result.stdout)
+            failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("installed DSH package-lock.json", failed)
+
     def test_preflight_reports_secret_file_mode_and_rejects_legacy_model_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self.build_layout(Path(tmp))

@@ -52,16 +52,17 @@ class Preflight:
 
     def require_path(self, name: str, path: Path, *, kind: str) -> bool:
         try:
+            info = path.stat(follow_symlinks=False)
             if kind == "dir":
-                ok = path.is_dir()
+                ok = stat.S_ISDIR(info.st_mode)
             elif kind == "file":
-                ok = path.is_file()
+                ok = stat.S_ISREG(info.st_mode)
             else:  # pragma: no cover - internal programming error
                 raise ValueError(f"unknown path kind: {kind}")
         except OSError as exc:
             self.add(name, False, f"{path} (cannot inspect: {type(exc).__name__})")
             return False
-        self.add(name, ok, f"{path} ({'present' if ok else 'missing'})")
+        self.add(name, ok, f"{path} ({'present' if ok else f'not a real {kind}'})")
         return ok
 
     def require_user(self, name: str, username: str) -> pwd.struct_passwd | None:
@@ -92,20 +93,18 @@ class Preflight:
         expected_mode: int,
     ) -> None:
         try:
-            if not path.exists():
-                self.add(name, False, f"{path} is missing")
-                return
-            info = path.stat()
+            info = path.stat(follow_symlinks=False)
         except OSError as exc:
             self.add(name, False, f"{path} cannot be inspected: {type(exc).__name__}")
             return
         mode = stat.S_IMODE(info.st_mode)
+        real_path_ok = not stat.S_ISLNK(info.st_mode)
         owner_ok = uid is not None and info.st_uid == uid
         group_ok = gid is not None and info.st_gid == gid
         mode_ok = mode == expected_mode
         self.add(
             name,
-            owner_ok and group_ok and mode_ok,
+            real_path_ok and owner_ok and group_ok and mode_ok,
             f"{path}: uid={info.st_uid} gid={info.st_gid} mode={mode:04o}; expected uid={uid} gid={gid} mode={expected_mode:04o}",
         )
 
@@ -198,8 +197,8 @@ def check_executable(preflight: Preflight, name: str, path: Path) -> None:
 
 def check_file_matches(preflight: Preflight, name: str, installed: Path, template: Path) -> None:
     try:
-        installed_is_file = installed.is_file()
-        template_is_file = template.is_file()
+        installed_is_file = stat.S_ISREG(installed.stat(follow_symlinks=False).st_mode)
+        template_is_file = stat.S_ISREG(template.stat(follow_symlinks=False).st_mode)
     except OSError as exc:
         preflight.add(name, False, f"cannot inspect files: {type(exc).__name__}")
         return

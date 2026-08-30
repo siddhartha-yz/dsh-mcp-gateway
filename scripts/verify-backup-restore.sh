@@ -264,7 +264,8 @@ for row in manifest.get('workspace_files', []):
     if not resolved.is_relative_to(resolved_root):
         raise SystemExit(f"restored workspace path escapes restore root through symlink: {row['path']}")
     if not resolved.is_file(): raise SystemExit(f"restored workspace file missing: {row['path']}")
-    digest=hashlib.sha256(resolved.read_bytes()).hexdigest()
+    with resolved.open('rb') as restored_file:
+        digest=hashlib.file_digest(restored_file, 'sha256').hexdigest()
     if digest != row['sha256']: raise SystemExit(f"restored workspace hash mismatch: {row['path']}")
 print(f"workspace_restore=PASS files={len(manifest.get('workspace_files', []))}")
 PY

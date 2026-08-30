@@ -63,6 +63,15 @@ class DeploymentTemplateTests(unittest.TestCase):
             4,
         )
 
+    def test_workspace_restore_hashing_is_streaming(self) -> None:
+        validation = extract_python_heredoc(
+            VERIFY_BACKUP,
+            'python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<\'PY\'',
+        )
+
+        self.assertIn("hashlib.file_digest(restored_file, 'sha256')", validation)
+        self.assertNotIn("resolved.read_bytes()", validation)
+
     def test_backup_node_version_probe_is_bounded(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
 

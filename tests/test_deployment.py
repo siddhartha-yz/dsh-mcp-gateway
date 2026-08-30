@@ -535,6 +535,47 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("npm pack timed out while localizing plugin", completed.stdout + completed.stderr)
 
+    def test_live_promotion_hashing_rejects_artifact_symlink_swap(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            source = base / "plugin.tgz"
+            source.write_bytes(b"plugin")
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": f"file:{source}"}}),
+                encoding="utf-8",
+            )
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            destination = artifacts / source.name
+            destination.write_bytes(b"plugin")
+            outside = base / "outside.tgz"
+            outside.write_bytes(b"plugin")
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            ).replace(
+                "validate_artifact_file(destination, label=f'localized plugin artifact for {name}')\n                if private_sha256(destination, label=f'localized plugin artifact for {name}') != source_digest:",
+                "validate_artifact_file(destination, label=f'localized plugin artifact for {name}')\n                destination.unlink(); destination.symlink_to(" + repr(str(outside)) + ")\n                if private_sha256(destination, label=f'localized plugin artifact for {name}') != source_digest:",
+                1,
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("unavailable or symlinked", completed.stdout + completed.stderr)
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual(outside.read_bytes(), b"plugin")
+
     def test_live_promotion_rejects_symlinked_installed_git_dependency_before_pack(self) -> None:
         localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
         with tempfile.TemporaryDirectory() as tmp:

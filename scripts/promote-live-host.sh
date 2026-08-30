@@ -224,6 +224,11 @@ def open_private_regular(path: Path, *, label: str):
         raise
 
 
+def private_sha256(path: Path, *, label: str) -> bytes:
+    with open_private_regular(path, label=label) as source:
+        return hashlib.file_digest(source, 'sha256').digest()
+
+
 rewritten = 0
 manifest = []
 for name, spec in list(dependencies.items()):
@@ -241,7 +246,7 @@ for name, spec in list(dependencies.items()):
             source_file.seek(0)
             if destination.exists():
                 validate_artifact_file(destination, label=f'localized plugin artifact for {name}')
-                if hashlib.sha256(destination.read_bytes()).digest() != source_digest:
+                if private_sha256(destination, label=f'localized plugin artifact for {name}') != source_digest:
                     raise SystemExit(f'plugin artifact basename collision: {destination.name}')
             else:
                 try:
@@ -299,7 +304,7 @@ for name, spec in list(dependencies.items()):
             destination = artifacts / filename
             if destination.exists() or destination.is_symlink():
                 validate_artifact_file(destination, label=f'localized plugin artifact for {name}')
-                if hashlib.sha256(destination.read_bytes()).digest() != hashlib.sha256(packed_source.read_bytes()).digest():
+                if private_sha256(destination, label=f'localized plugin artifact for {name}') != private_sha256(packed_source, label=f'npm pack output for {name}'):
                     raise SystemExit(f'plugin artifact basename collision: {destination.name}')
             else:
                 try:
@@ -318,7 +323,7 @@ for name, spec in list(dependencies.items()):
             'name': name,
             'source_spec': original_spec,
             'artifact': destination.name,
-            'sha256': hashlib.sha256(destination.read_bytes()).hexdigest(),
+            'sha256': private_sha256(destination, label=f'localized plugin artifact for {name}').hex(),
         }
     )
 

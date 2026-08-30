@@ -176,7 +176,7 @@ install_node() {
   rm -rf /opt/dsh-runtime/node
   install -d -m 0755 /opt/dsh-runtime/node
   tar -xJf "$tmp/$filename" --strip-components=1 -C /opt/dsh-runtime/node
-  [[ "$(/opt/dsh-runtime/node/bin/node --version)" == "v$NODE_VERSION" ]]
+  [[ "$(timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/node/bin/node --version)" == "v$NODE_VERSION" ]]
   rm -rf "$tmp"
   trap - RETURN
 }

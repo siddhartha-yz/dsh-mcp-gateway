@@ -173,6 +173,10 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("for cmd in curl git tar sha256sum python3 timeout; do", script)
         self.assertIn('timeout --signal=TERM --kill-after=2s 5s "$node" --version', script)
         self.assertIn(
+            "timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/node/bin/node --version",
+            script,
+        )
+        self.assertIn(
             "timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/node/bin/node -p",
             script,
         )

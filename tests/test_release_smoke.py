@@ -360,6 +360,17 @@ class PublicReleaseSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke_module.SmokeError, "single-link regular file"):
                 smoke_module.read_env_value(pin_file, "DSH_MCP_GATEWAY_ADMIN_PIN")
 
+    def test_pin_file_is_read_from_validated_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pin_file = Path(tmp) / "gateway.env"
+            pin_file.write_text("DSH_MCP_GATEWAY_ADMIN_PIN=fixture-long-enough-pin\n", encoding="utf-8")
+            pin_file.chmod(0o600)
+
+            with patch.object(Path, "read_text", side_effect=AssertionError("must not reopen PIN by path")):
+                value = smoke_module.read_env_value(pin_file, "DSH_MCP_GATEWAY_ADMIN_PIN")
+
+            self.assertEqual(value, "fixture-long-enough-pin")
+
     def test_public_smoke_rejects_non_https_non_loopback_before_reading_pin(self) -> None:
         result = subprocess.run(
             [

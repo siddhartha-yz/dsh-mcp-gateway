@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import getpass
 import hashlib
 import ipaddress
 import json
+import os
 import secrets
 import stat
 import sys
@@ -154,19 +156,29 @@ def normalize_origin(value: str, *, allow_http_loopback: bool) -> str:
 
 
 def read_env_value(path: Path, key: str) -> str:
+    descriptor = -1
     try:
-        metadata = path.lstat()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise SmokeError("PIN file must be a single-link regular file")
+        mode = stat.S_IMODE(metadata.st_mode)
+        if mode & 0o077:
+            raise SmokeError("PIN file must not be readable or writable by group/other")
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            descriptor = -1
+            lines = handle.read().splitlines()
+    except SmokeError:
+        raise
     except OSError as exc:
-        raise SmokeError(f"cannot stat PIN file: {type(exc).__name__}") from exc
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-        raise SmokeError("PIN file must be a single-link regular file")
-    mode = stat.S_IMODE(metadata.st_mode)
-    if mode & 0o077:
-        raise SmokeError("PIN file must not be readable or writable by group/other")
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError) as exc:
-        raise SmokeError(f"cannot read PIN file: {type(exc).__name__}") from exc
+        if exc.errno == errno.ELOOP:
+            raise SmokeError("PIN file must be a single-link regular file") from exc
+        raise SmokeError(f"cannot safely read PIN file: {type(exc).__name__}") from exc
+    except UnicodeError as exc:
+        raise SmokeError(f"cannot safely read PIN file: {type(exc).__name__}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     for raw in lines:
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:

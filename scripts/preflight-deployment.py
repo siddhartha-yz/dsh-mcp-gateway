@@ -302,13 +302,20 @@ def main(argv: list[str] | None = None) -> int:
 
     node_executable = args.node_executable or args.dsh_runtime / "node" / "bin" / "node"
     try:
-        node_ok = node_executable.is_file() and os.access(node_executable, os.X_OK)
+        node_info = node_executable.stat(follow_symlinks=False)
+        node_ok = (
+            stat.S_ISREG(node_info.st_mode)
+            and node_info.st_nlink == 1
+            and os.access(node_executable, os.X_OK)
+        )
     except OSError:
         node_ok = False
     p.add(
         "Node executable",
         node_ok,
-        f"{node_executable} (executable)" if node_ok else f"{node_executable} is missing or not executable",
+        f"{node_executable} (private regular executable)"
+        if node_ok
+        else f"{node_executable} is missing or not a private regular executable",
     )
     if node_ok:
         command_ok, rendered = run_command(node_executable, "--version")

@@ -1491,6 +1491,25 @@ class DeploymentPreflightTests(unittest.TestCase):
             failed = {check["name"] for check in report["checks"] if not check["ok"]}
             self.assertIn("installed DSH package-lock.json", failed)
 
+    def test_preflight_rejects_linked_node_executable(self) -> None:
+        for link_kind in ("symlink", "hardlink"):
+            with self.subTest(link_kind=link_kind), tempfile.TemporaryDirectory() as tmp:
+                paths = self.build_layout(Path(tmp))
+                node = paths["node"]
+                real_node = node.with_name("node-real")
+                node.rename(real_node)
+                if link_kind == "symlink":
+                    node.symlink_to(real_node)
+                else:
+                    os.link(real_node, node)
+
+                result = self.run_preflight(paths)
+                self.assertEqual(result.returncode, 1)
+                report = json.loads(result.stdout)
+                failed = {check["name"] for check in report["checks"] if not check["ok"]}
+                self.assertIn("Node executable", failed)
+                self.assertNotIn("Node pinned version", failed)
+
     def test_preflight_reports_secret_file_mode_and_rejects_legacy_model_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self.build_layout(Path(tmp))

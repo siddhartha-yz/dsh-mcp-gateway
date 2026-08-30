@@ -193,10 +193,10 @@ if actual != sys.argv[2]:
     raise SystemExit("restore root path changed after secure creation")
 PY
 install -d -m 0700 "$RESTORE_IO/system" "$RESTORE_IO/workspace" "$RESTORE_IO/logs"
-tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"
-tar --no-same-owner -xzf "$BACKUP_IO/gateway-state.tar.gz" -C "$RESTORE_IO/system"
-tar --no-same-owner -xzf "$BACKUP_IO/config.tar.gz" -C "$RESTORE_IO/system"
-tar --no-same-owner -xzf "$BACKUP_IO/workspace-selected.tar.gz" -C "$RESTORE_IO/workspace"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/gateway-state.tar.gz" -C "$RESTORE_IO/system"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/config.tar.gz" -C "$RESTORE_IO/system"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/workspace-selected.tar.gz" -C "$RESTORE_IO/workspace"
 chmod -R u+rwX,go-rwx "$RESTORE_IO"
 
 DSH_HOME_RESTORED="$RESTORE_IO/system/var/lib/dsh-harness"

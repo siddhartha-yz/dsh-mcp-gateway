@@ -55,6 +55,14 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("timeout --signal=TERM --kill-after=10s 600s", restore)
         self.assertIn("/opt/dsh-runtime/node_modules/.bin/pnpm install", restore)
 
+    def test_restore_archive_extraction_is_bounded(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            restore.count("timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf"),
+            4,
+        )
+
     def test_backup_node_version_probe_is_bounded(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
 

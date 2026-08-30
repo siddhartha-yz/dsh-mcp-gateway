@@ -48,6 +48,12 @@ def extract_python_heredoc(path: Path, invocation: str) -> str:
 
 
 class DeploymentTemplateTests(unittest.TestCase):
+    def test_backup_node_version_probe_is_bounded(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+
+        self.assertIn("['/opt/dsh-runtime/node/bin/node', '--version']", backup)
+        self.assertIn("timeout=5", backup)
+
     def test_ci_syntax_checks_all_shipped_shell_scripts(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 

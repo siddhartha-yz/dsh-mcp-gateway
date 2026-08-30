@@ -376,7 +376,11 @@ manifest={
  'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
  'deployed_commit': pathlib.Path('/srv/dsh-mcp-gateway/.deployed-git-commit').read_text().strip(),
  'dsh_version': json.loads(pathlib.Path('/opt/dsh-runtime/node_modules/@deepseek-ai/dsh/package.json').read_text())['version'],
- 'node_version': subprocess.check_output(['/opt/dsh-runtime/node/bin/node','--version'], text=True).strip(),
+ 'node_version': subprocess.check_output(
+     ['/opt/dsh-runtime/node/bin/node', '--version'],
+     text=True,
+     timeout=5,
+ ).strip(),
  'public_base_url': public_base,
  'workspace_root': str(workspace),
  'workspace_paths': selected,

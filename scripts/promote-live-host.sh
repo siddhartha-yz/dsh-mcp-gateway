@@ -230,8 +230,17 @@ for name, spec in list(dependencies.items()):
             shutil.copy2(source, destination)
     elif spec.startswith(('github:', 'git+https://github.com/', 'https://github.com/')):
         installed = root / 'profiles/web/node_modules' / Path(name)
-        if not installed.is_dir():
-            raise SystemExit(f'cannot localize git dependency {name}; installed package is missing at {installed}')
+        try:
+            installed_opened = installed.stat(follow_symlinks=False)
+            installed_resolved = installed.resolve(strict=True)
+        except OSError as exc:
+            raise SystemExit(f'cannot localize git dependency {name}; installed package is unavailable at {installed}: {exc}') from exc
+        if (
+            installed.is_symlink()
+            or not stat.S_ISDIR(installed_opened.st_mode)
+            or not installed_resolved.is_relative_to(root_resolved)
+        ):
+            raise SystemExit(f'cannot localize git dependency {name}; installed package is symlinked, escaping, or not a directory at {installed}')
         env = {
             **os.environ,
             'PATH': '/opt/dsh-runtime/node/bin:/usr/local/bin:/usr/bin:/bin',

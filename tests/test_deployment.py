@@ -405,6 +405,50 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertEqual(outside.read_bytes(), b"sentinel")
             self.assertTrue(destination.is_symlink())
 
+    def test_live_promotion_rejects_symlinked_installed_git_dependency_before_pack(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            node_modules = web / "node_modules"
+            node_modules.mkdir(parents=True)
+            (web / "package.json").write_text(
+                json.dumps({"dependencies": {"plugin": "github:owner/repo"}}),
+                encoding="utf-8",
+            )
+            outside = base / "outside-package"
+            outside.mkdir()
+            (outside / "secret.txt").write_text("sentinel\n", encoding="utf-8")
+            (node_modules / "plugin").symlink_to(outside, target_is_directory=True)
+            marker = base / "npm-ran"
+            fake_npm = base / "npm"
+            fake_npm.write_text(
+                "#!/bin/sh\n"
+                f"touch {shlex.quote(str(marker))}\n"
+                "exit 99\n",
+                encoding="utf-8",
+            )
+            fake_npm.chmod(0o755)
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            ).replace(
+                "'/opt/dsh-runtime/node/bin/npm'",
+                repr(str(fake_npm)),
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("installed package is symlinked, escaping, or not a directory", completed.stdout + completed.stderr)
+            self.assertFalse(marker.exists())
+
     def test_live_promotion_rejects_symlinked_web_package_path(self) -> None:
         localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
         with tempfile.TemporaryDirectory() as tmp:

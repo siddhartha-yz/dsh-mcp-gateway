@@ -483,6 +483,49 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn("plugin source manifest", completed.stdout + completed.stderr)
             self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel\n")
 
+    def test_live_promotion_rejects_plugin_manifest_symlink_swap_before_truncate(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            (web / "package.json").write_text(json.dumps({"dependencies": {}}), encoding="utf-8")
+            artifacts = root / "plugin-artifacts"
+            artifacts.mkdir()
+            manifest = artifacts / "source-manifest.json"
+            manifest.write_text("old\n", encoding="utf-8")
+            outside = base / "outside.json"
+            original = "outside-must-not-change\n"
+            outside.write_text(original, encoding="utf-8")
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+            rewrite_marker = "try:\n    manifest_descriptor = open_beneath_regular(\n        root,\n        manifest_relative,"
+            self.assertIn(rewrite_marker, localized)
+            localized = localized.replace(
+                rewrite_marker,
+                f"manifest.unlink(); manifest.symlink_to({str(outside)!r})\n" + rewrite_marker,
+                1,
+            ).replace(
+                "manifest_relative = Path('plugin-artifacts/source-manifest.json')",
+                "manifest_relative = Path('plugin-artifacts/source-manifest.json')\nmanifest = root / manifest_relative",
+                1,
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("plugin source manifest", completed.stdout + completed.stderr)
+            self.assertEqual(outside.read_text(encoding="utf-8"), original)
+            self.assertTrue(manifest.is_symlink())
+
     def test_live_promotion_git_pack_cannot_overwrite_preseeded_artifact_symlink(self) -> None:
         localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
         with tempfile.TemporaryDirectory() as tmp:

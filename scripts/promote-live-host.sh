@@ -172,7 +172,9 @@ package_path = root / 'profiles/web/package.json'
 root_resolved = root.resolve(strict=True)
 
 
-def open_beneath_regular(root_path: Path, relative: Path, *, flags: int, label: str):
+def open_beneath_regular(
+    root_path: Path, relative: Path, *, flags: int, label: str, mode: int = 0o600
+):
     if relative.is_absolute() or '..' in relative.parts or not relative.parts:
         raise SystemExit(f'{label} has an unsafe relative path: {relative}')
     directory_fd = os.open(root_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -181,7 +183,12 @@ def open_beneath_regular(root_path: Path, relative: Path, *, flags: int, label: 
             next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
             os.close(directory_fd)
             directory_fd = next_fd
-        descriptor = os.open(relative.parts[-1], flags | os.O_NOFOLLOW, dir_fd=directory_fd)
+        if flags & os.O_CREAT:
+            descriptor = os.open(
+                relative.parts[-1], flags | os.O_NOFOLLOW, mode, dir_fd=directory_fd
+            )
+        else:
+            descriptor = os.open(relative.parts[-1], flags | os.O_NOFOLLOW, dir_fd=directory_fd)
     except BaseException:
         os.close(directory_fd)
         raise
@@ -365,10 +372,19 @@ with os.fdopen(package_descriptor, 'w', encoding='utf-8') as package_file:
     os.ftruncate(package_file.fileno(), 0)
     package_file.write(json.dumps(package, indent=2) + '\n')
 manifest.sort(key=lambda item: item['name'])
-manifest_path = artifacts / 'source-manifest.json'
-if manifest_path.exists() or manifest_path.is_symlink():
-    validate_artifact_file(manifest_path, label='plugin source manifest')
-manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+manifest_relative = Path('plugin-artifacts/source-manifest.json')
+try:
+    manifest_descriptor = open_beneath_regular(
+        root,
+        manifest_relative,
+        flags=os.O_WRONLY | os.O_CREAT,
+        label='plugin source manifest',
+    )
+except OSError as exc:
+    raise SystemExit(f'plugin source manifest is unavailable or unsafe: {exc}') from exc
+with os.fdopen(manifest_descriptor, 'w', encoding='utf-8') as manifest_file:
+    os.ftruncate(manifest_file.fileno(), 0)
+    manifest_file.write(json.dumps(manifest, indent=2) + '\n')
 print(f'rebound {rewritten} local plugin artifact(s) into {artifacts}')
 PY
 

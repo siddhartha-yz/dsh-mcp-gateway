@@ -87,6 +87,24 @@ class DeploymentTemplateTests(unittest.TestCase):
             4,
         )
 
+    def test_restore_extracts_from_checksum_verified_pinned_archive_descriptors(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertIn('exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"', restore)
+        self.assertIn('BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"', restore)
+        self.assertIn('python3 - "$BACKUP_CHECKSUMS"', restore)
+        for variable, name in (
+            ("DSH_HOME_ARCHIVE", "dsh-home.tar.gz"),
+            ("GATEWAY_STATE_ARCHIVE", "gateway-state.tar.gz"),
+            ("CONFIG_ARCHIVE", "config.tar.gz"),
+            ("WORKSPACE_ARCHIVE", "workspace-selected.tar.gz"),
+        ):
+            self.assertIn(f'exec {{{variable}_FD}}<"$BACKUP_IO/{name}"', restore)
+            self.assertIn(f'{variable}="/proc/$$/fd/${variable}_FD"', restore)
+            self.assertIn(f'tar --no-same-owner -xzf "${variable}"', restore)
+        self.assertIn("pinned backup archive checksum mismatch", restore)
+        self.assertNotIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
+
     def test_workspace_restore_hashing_is_streaming(self) -> None:
         validation = extract_python_heredoc(
             VERIFY_BACKUP,
@@ -1399,14 +1417,15 @@ class DeploymentTemplateTests(unittest.TestCase):
             'os.open("SHA256SUMS", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)', restore
         )
         self.assertNotIn('checksum_path.read_text', restore)
-        self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
+        self.assertIn('exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"', restore)
+        self.assertIn('tar --no-same-owner -xzf "$DSH_HOME_ARCHIVE"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz"', restore)
 
     def test_restore_pins_root_directory_after_creation(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
         self.assertIn('exec {RESTORE_FD}<"$RESTORE_ROOT"', restore)
         self.assertIn('RESTORE_IO="/proc/$$/fd/$RESTORE_FD"', restore)
-        self.assertIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"', restore)
+        self.assertIn('tar --no-same-owner -xzf "$DSH_HOME_ARCHIVE" -C "$RESTORE_IO/system"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz" -C "$RESTORE_ROOT/system"', restore)
         self.assertIn('[[ ! -L "$RESTORE_ROOT" && "$RESTORE_ROOT" -ef "$RESTORE_IO" ]]', restore)
 

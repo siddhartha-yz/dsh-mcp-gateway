@@ -145,6 +145,48 @@ finally:
 print("backup_checksums=PASS")
 PY
 
+# Pin the verified checksum manifest and archives to open descriptors before extraction. Backup
+# directories may intentionally be owned by a non-root operator, so reopening
+# an archive by pathname after checksum validation would allow a swap race.
+exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"
+exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"
+exec {GATEWAY_STATE_ARCHIVE_FD}<"$BACKUP_IO/gateway-state.tar.gz"
+exec {CONFIG_ARCHIVE_FD}<"$BACKUP_IO/config.tar.gz"
+exec {WORKSPACE_ARCHIVE_FD}<"$BACKUP_IO/workspace-selected.tar.gz"
+BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"
+DSH_HOME_ARCHIVE="/proc/$$/fd/$DSH_HOME_ARCHIVE_FD"
+GATEWAY_STATE_ARCHIVE="/proc/$$/fd/$GATEWAY_STATE_ARCHIVE_FD"
+CONFIG_ARCHIVE="/proc/$$/fd/$CONFIG_ARCHIVE_FD"
+WORKSPACE_ARCHIVE="/proc/$$/fd/$WORKSPACE_ARCHIVE_FD"
+python3 - "$BACKUP_CHECKSUMS" \
+  "$DSH_HOME_ARCHIVE" dsh-home.tar.gz \
+  "$GATEWAY_STATE_ARCHIVE" gateway-state.tar.gz \
+  "$CONFIG_ARCHIVE" config.tar.gz \
+  "$WORKSPACE_ARCHIVE" workspace-selected.tar.gz <<'PY'
+import hashlib, os, re, stat, sys
+
+checksum_path = sys.argv[1]
+rows = {}
+with open(checksum_path, encoding="utf-8") as stream:
+    for line in stream:
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^/]+)\n?", line)
+        if match:
+            rows[match.group(2)] = match.group(1)
+for fd_path, name in zip(sys.argv[2::2], sys.argv[3::2], strict=True):
+    fd = os.open(fd_path, os.O_RDONLY)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise SystemExit(f"pinned backup archive is not a private regular file: {name}")
+        with os.fdopen(os.dup(fd), "rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    finally:
+        os.close(fd)
+    if digest != rows.get(name):
+        raise SystemExit(f"pinned backup archive checksum mismatch: {name}")
+print("backup_archives_pinned=PASS")
+PY
+
 RESTORE_ROOT_ID="$(python3 - "$RESTORE_ROOT" create-root <<'PY'
 import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -193,10 +235,10 @@ if actual != sys.argv[2]:
     raise SystemExit("restore root path changed after secure creation")
 PY
 install -d -m 0700 "$RESTORE_IO/system" "$RESTORE_IO/workspace" "$RESTORE_IO/logs"
-timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz" -C "$RESTORE_IO/system"
-timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/gateway-state.tar.gz" -C "$RESTORE_IO/system"
-timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/config.tar.gz" -C "$RESTORE_IO/system"
-timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$BACKUP_IO/workspace-selected.tar.gz" -C "$RESTORE_IO/workspace"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$DSH_HOME_ARCHIVE" -C "$RESTORE_IO/system"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$GATEWAY_STATE_ARCHIVE" -C "$RESTORE_IO/system"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$CONFIG_ARCHIVE" -C "$RESTORE_IO/system"
+timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$WORKSPACE_ARCHIVE" -C "$RESTORE_IO/workspace"
 chmod -R u+rwX,go-rwx "$RESTORE_IO"
 
 DSH_HOME_RESTORED="$RESTORE_IO/system/var/lib/dsh-harness"

@@ -46,7 +46,7 @@ done
 getent passwd "$OUTPUT_OWNER" >/dev/null || { echo "output owner does not exist: $OUTPUT_OWNER" >&2; exit 1; }
 [[ -d "$WORKSPACE" ]] || { echo "workspace is missing: $WORKSPACE" >&2; exit 1; }
 
-for command in curl python3 tar sha256sum systemctl; do
+for command in curl python3 tar sha256sum systemctl timeout; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
 for path in \
@@ -237,8 +237,8 @@ trap restore_services EXIT
 ((HOST_WAS_ACTIVE)) && systemctl stop dsh-web-host.service
 
 # Preserve the production paths in each archive so a real restore can extract at /.
-tar --numeric-owner -C / -czf "$OUTPUT_IO/dsh-home.tar.gz" var/lib/dsh-harness
-tar --numeric-owner -C / -czf "$OUTPUT_IO/gateway-state.tar.gz" var/lib/dsh-mcp-gateway
+timeout --signal=TERM --kill-after=10s 600s tar --numeric-owner -C / -czf "$OUTPUT_IO/dsh-home.tar.gz" var/lib/dsh-harness
+timeout --signal=TERM --kill-after=10s 600s tar --numeric-owner -C / -czf "$OUTPUT_IO/gateway-state.tar.gz" var/lib/dsh-mcp-gateway
 
 CONFIG_PATHS=(
   etc/dsh-mcp-gateway
@@ -248,9 +248,9 @@ CONFIG_PATHS=(
   etc/systemd/system/dsh-cloudflared.service
 )
 [[ -d /etc/systemd/system/dsh-web-host.service.d ]] && CONFIG_PATHS+=(etc/systemd/system/dsh-web-host.service.d)
-tar --numeric-owner -C / -czf "$OUTPUT_IO/config.tar.gz" "${CONFIG_PATHS[@]}"
+timeout --signal=TERM --kill-after=10s 600s tar --numeric-owner -C / -czf "$OUTPUT_IO/config.tar.gz" "${CONFIG_PATHS[@]}"
 
-python3 - "$OUTPUT_IO/workspace-selected.tar.gz" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
+timeout --signal=TERM --kill-after=10s 600s python3 - "$OUTPUT_IO/workspace-selected.tar.gz" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
 from __future__ import annotations
 import os, pathlib, stat, sys, tarfile
 

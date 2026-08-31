@@ -67,6 +67,10 @@ class DeploymentTemplateTests(unittest.TestCase):
             'timeout --signal=TERM --kill-after=10s 600s python3 - "$OUTPUT_IO/workspace-selected.tar.gz"',
             backup,
         )
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=10s 600s python3 - "$OUTPUT_IO" "$WORKSPACE"',
+            backup,
+        )
 
     def test_restore_archive_extraction_is_bounded(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")

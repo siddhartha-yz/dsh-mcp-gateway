@@ -349,7 +349,9 @@ PY
 chmod 0600 "$OUTPUT_IO"/*.tar.gz
 
 # Record a non-secret manifest plus exact hashes of the securely archived workspace files.
-python3 - "$OUTPUT_IO" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
+# Keep this post-quiesce hashing bounded so a pathological archive cannot extend
+# the service outage indefinitely.
+timeout --signal=TERM --kill-after=10s 600s python3 - "$OUTPUT_IO" "$WORKSPACE" "${WORKSPACE_PATHS[@]}" <<'PY'
 from __future__ import annotations
 import datetime, hashlib, json, os, pathlib, subprocess, sys, tarfile
 out=pathlib.Path(sys.argv[1]); workspace=pathlib.Path(os.path.abspath(sys.argv[2])); selected=sys.argv[3:]

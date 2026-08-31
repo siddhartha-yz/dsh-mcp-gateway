@@ -90,9 +90,12 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_restore_extracts_from_checksum_verified_pinned_archive_descriptors(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 
+        self.assertIn('exec {BACKUP_MANIFEST_FD}<"$BACKUP_IO/MANIFEST.json"', restore)
+        self.assertIn('BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"', restore)
         self.assertIn('exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"', restore)
         self.assertIn('BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"', restore)
         self.assertIn('python3 - "$BACKUP_CHECKSUMS"', restore)
+        self.assertIn('"$BACKUP_MANIFEST" MANIFEST.json', restore)
         for variable, name in (
             ("DSH_HOME_ARCHIVE", "dsh-home.tar.gz"),
             ("GATEWAY_STATE_ARCHIVE", "gateway-state.tar.gz"),
@@ -102,13 +105,13 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn(f'exec {{{variable}_FD}}<"$BACKUP_IO/{name}"', restore)
             self.assertIn(f'{variable}="/proc/$$/fd/${variable}_FD"', restore)
             self.assertIn(f'tar --no-same-owner -xzf "${variable}"', restore)
-        self.assertIn("pinned backup archive checksum mismatch", restore)
+        self.assertIn("pinned backup input checksum mismatch", restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
 
     def test_workspace_restore_hashing_is_streaming(self) -> None:
         validation = extract_python_heredoc(
             VERIFY_BACKUP,
-            'python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<\'PY\'',
+            'python3 - "$BACKUP_MANIFEST" "$RESTORE_IO/workspace" <<\'PY\'',
         )
 
         self.assertIn("hashlib.file_digest(restored_file, 'sha256')", validation)
@@ -1417,6 +1420,9 @@ class DeploymentTemplateTests(unittest.TestCase):
             'os.open("SHA256SUMS", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)', restore
         )
         self.assertNotIn('checksum_path.read_text', restore)
+        self.assertIn('exec {BACKUP_MANIFEST_FD}<"$BACKUP_IO/MANIFEST.json"', restore)
+        self.assertIn('BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"', restore)
+        self.assertNotIn('python3 - "$BACKUP_IO/MANIFEST.json"', restore)
         self.assertIn('exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"', restore)
         self.assertIn('tar --no-same-owner -xzf "$DSH_HOME_ARCHIVE"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz"', restore)
@@ -1567,7 +1573,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         )
         restore_validation = extract_python_heredoc(
             VERIFY_BACKUP,
-            'python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<\'PY\'',
+            'python3 - "$BACKUP_MANIFEST" "$RESTORE_IO/workspace" <<\'PY\'',
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1645,7 +1651,7 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_workspace_restore_rejects_broken_nested_symlinks(self) -> None:
         restore_validation = extract_python_heredoc(
             VERIFY_BACKUP,
-            'python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<\'PY\'',
+            'python3 - "$BACKUP_MANIFEST" "$RESTORE_IO/workspace" <<\'PY\'',
         )
 
         with tempfile.TemporaryDirectory() as tmp:

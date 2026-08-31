@@ -145,20 +145,23 @@ finally:
 print("backup_checksums=PASS")
 PY
 
-# Pin the verified checksum manifest and archives to open descriptors before extraction. Backup
+# Pin the verified manifest, checksum manifest, and archives to open descriptors before extraction. Backup
 # directories may intentionally be owned by a non-root operator, so reopening
 # an archive by pathname after checksum validation would allow a swap race.
+exec {BACKUP_MANIFEST_FD}<"$BACKUP_IO/MANIFEST.json"
 exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"
 exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"
 exec {GATEWAY_STATE_ARCHIVE_FD}<"$BACKUP_IO/gateway-state.tar.gz"
 exec {CONFIG_ARCHIVE_FD}<"$BACKUP_IO/config.tar.gz"
 exec {WORKSPACE_ARCHIVE_FD}<"$BACKUP_IO/workspace-selected.tar.gz"
+BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"
 BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"
 DSH_HOME_ARCHIVE="/proc/$$/fd/$DSH_HOME_ARCHIVE_FD"
 GATEWAY_STATE_ARCHIVE="/proc/$$/fd/$GATEWAY_STATE_ARCHIVE_FD"
 CONFIG_ARCHIVE="/proc/$$/fd/$CONFIG_ARCHIVE_FD"
 WORKSPACE_ARCHIVE="/proc/$$/fd/$WORKSPACE_ARCHIVE_FD"
 python3 - "$BACKUP_CHECKSUMS" \
+  "$BACKUP_MANIFEST" MANIFEST.json \
   "$DSH_HOME_ARCHIVE" dsh-home.tar.gz \
   "$GATEWAY_STATE_ARCHIVE" gateway-state.tar.gz \
   "$CONFIG_ARCHIVE" config.tar.gz \
@@ -177,14 +180,14 @@ for fd_path, name in zip(sys.argv[2::2], sys.argv[3::2], strict=True):
     try:
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-            raise SystemExit(f"pinned backup archive is not a private regular file: {name}")
+            raise SystemExit(f"pinned backup input is not a private regular file: {name}")
         with os.fdopen(os.dup(fd), "rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
     finally:
         os.close(fd)
     if digest != rows.get(name):
-        raise SystemExit(f"pinned backup archive checksum mismatch: {name}")
-print("backup_archives_pinned=PASS")
+        raise SystemExit(f"pinned backup input checksum mismatch: {name}")
+print("backup_inputs_pinned=PASS")
 PY
 
 RESTORE_ROOT_ID="$(python3 - "$RESTORE_ROOT" create-root <<'PY'
@@ -281,7 +284,7 @@ PY
 [[ -f "$RESTORE_IO/system/etc/dsh-cloudflared/credentials.json" ]] || { echo "restored tunnel credentials missing" >&2; exit 1; }
 
 # Verify the explicitly selected workspace data before starting any process.
-python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/workspace" <<'PY'
+python3 - "$BACKUP_MANIFEST" "$RESTORE_IO/workspace" <<'PY'
 import hashlib, json, os, pathlib, sys
 manifest=json.load(open(sys.argv[1]))
 root=pathlib.Path(sys.argv[2])
@@ -389,7 +392,7 @@ for _ in $(seq 1 120); do
 done
 curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$DSH_PORT/api/chatgpt-bridge/skills" > "$RESTORE_IO/skills-restored.json"
 
-python3 - "$BACKUP_IO/MANIFEST.json" "$RESTORE_IO/tools-restored.json" "$RESTORE_IO/skills-restored.json" <<'PY'
+python3 - "$BACKUP_MANIFEST" "$RESTORE_IO/tools-restored.json" "$RESTORE_IO/skills-restored.json" <<'PY'
 import json, sys
 m=json.load(open(sys.argv[1])); tools=json.load(open(sys.argv[2]))['tools']; skills=json.load(open(sys.argv[3]))['skills']
 tool_names=sorted(x['name'] for x in tools); skill_names=sorted(x['name'] for x in skills)
@@ -398,7 +401,7 @@ if skill_names != m['skill_names']: raise SystemExit('restored SkillRegistry dif
 print(f"dsh_restore=PASS tools={len(tool_names)} skills={len(skill_names)}")
 PY
 
-PUBLIC_BASE="$(python3 - "$BACKUP_IO/MANIFEST.json" <<'PY'
+PUBLIC_BASE="$(python3 - "$BACKUP_MANIFEST" <<'PY'
 import json,sys
 print(json.load(open(sys.argv[1]))['public_base_url'])
 PY
@@ -428,7 +431,7 @@ curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$GATEWAY_PORT/ready
 
 # Exercise a cloned real ChatGPT refresh grant against the isolated restored
 # gateway. Token values never leave this Python process or appear in output.
-python3 - "$BACKUP_IO/MANIFEST.json" "$GATEWAY_STATE_RESTORED/oauth.sqlite3" "$GATEWAY_PORT" <<'PY'
+python3 - "$BACKUP_MANIFEST" "$GATEWAY_STATE_RESTORED/oauth.sqlite3" "$GATEWAY_PORT" <<'PY'
 import http.client, json, sqlite3, sys, urllib.parse
 from urllib.parse import urlparse
 manifest=json.load(open(sys.argv[1])); db=sys.argv[2]; port=int(sys.argv[3]); public=manifest['public_base_url'].rstrip('/')

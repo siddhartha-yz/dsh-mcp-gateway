@@ -270,7 +270,7 @@ export function apply(ctx) {
     const presetId = presets.defaultId
     const preset = await presets.resolve(presetId)
     const stamp = await presetStamp(preset.path)
-    if (presets.defaultId !== presetId) return acquireCapabilityAgent()
+    if (presets.defaultId !== presetId) return acquireCapabilityAgent(signal)
     const helperSessionId = capabilitySessionId(process.cwd(), presetId, preset.path, stamp)
 
     let entry = capabilityHandles.get(helperSessionId)
@@ -343,7 +343,7 @@ export function apply(ctx) {
         entry.stale = true
         entry.leases -= 1
         await maybeDisposeCapabilityEntry(helperSessionId, entry)
-        return acquireCapabilityAgent()
+        return acquireCapabilityAgent(signal)
       }
       const currentPreset = await presets.resolve(presetId)
       const currentStamp = await presetStamp(currentPreset.path)
@@ -355,7 +355,7 @@ export function apply(ctx) {
         entry.stale = true
         entry.leases -= 1
         await maybeDisposeCapabilityEntry(helperSessionId, entry)
-        return acquireCapabilityAgent()
+        return acquireCapabilityAgent(signal)
       }
       entry.stale = false
       retireOtherCapabilityEntries(helperSessionId)

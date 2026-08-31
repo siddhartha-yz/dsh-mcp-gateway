@@ -715,6 +715,55 @@ function makeContext({
 }
 
 {
+  const never = new Promise(() => {})
+  let setDefaultId
+  const state = makeContext({
+    resolveHook({ id }) {
+      if (id === 'default') setDefaultId('alternate')
+    },
+    createHook(options) {
+      if (state.calls.create.length === 1) return never
+      return Promise.resolve({
+        agent: { id: options.sessionId },
+        async dispose() {
+          state.calls.disposed.push(options.sessionId)
+        },
+      })
+    },
+  })
+  setDefaultId = state.setDefaultId
+
+  const first = responseCapture()
+  const firstPending = state.routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), first)
+  for (let attempt = 0; attempt < 20 && state.calls.create.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(state.calls.create.length, 1)
+  assert.equal(state.calls.create[0].sessionId, expectedCapabilitySessionId('alternate'))
+  first.emitClose()
+  const completedAfterDisconnect = await Promise.race([
+    firstPending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(completedAfterDisconnect, true)
+
+  const second = responseCapture()
+  const secondPending = state.routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), second)
+  const secondCompleted = await Promise.race([
+    secondPending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  if (!secondCompleted) {
+    second.emitClose()
+    await secondPending
+  }
+  assert.equal(secondCompleted, true)
+  assert.equal(state.calls.create.length, 2)
+  assert.equal(second.state.status, 200)
+  assert.equal(state.calls.execute.length, 1)
+}
+
+{
   const { routes, calls } = makeContext({ executeWaitForAbort: true })
   const res = responseCapture()
   const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)

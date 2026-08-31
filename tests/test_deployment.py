@@ -86,6 +86,14 @@ class DeploymentTemplateTests(unittest.TestCase):
             backup,
         )
 
+    def test_restore_rejects_archives_that_exceed_available_disk_space(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertIn('shutil.disk_usage(restore_root).free', restore)
+        self.assertIn('reserve = 512 * 1024 * 1024', restore)
+        self.assertIn('if required + reserve > free:', restore)
+        self.assertIn('backup requires too much restore space', restore)
+
     def test_restore_archive_extraction_is_bounded(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 

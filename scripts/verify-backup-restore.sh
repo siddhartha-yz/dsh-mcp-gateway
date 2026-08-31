@@ -239,6 +239,33 @@ if actual != sys.argv[2]:
     raise SystemExit("restore root path changed after secure creation")
 PY
 install -d -m 0700 "$RESTORE_IO/system" "$RESTORE_IO/workspace" "$RESTORE_IO/logs"
+# Reject a validly checksummed but pathologically large backup before extraction can
+# exhaust the host filesystem. Keep a fixed reserve for logs/process state created
+# by the drill itself.
+timeout --signal=TERM --kill-after=10s 600s python3 - \
+  "$RESTORE_IO" \
+  "$DSH_HOME_ARCHIVE" \
+  "$GATEWAY_STATE_ARCHIVE" \
+  "$CONFIG_ARCHIVE" \
+  "$WORKSPACE_ARCHIVE" <<'PY'
+import os, shutil, sys, tarfile
+
+restore_root = sys.argv[1]
+archives = sys.argv[2:]
+required = 0
+for archive in archives:
+    with tarfile.open(archive, "r:gz") as tf:
+        for member in tf:
+            if member.isfile():
+                required += member.size
+reserve = 512 * 1024 * 1024
+free = shutil.disk_usage(restore_root).free
+if required + reserve > free:
+    raise SystemExit(
+        f"backup requires too much restore space: required={required} free={free} reserve={reserve}"
+    )
+print(f"restore_space_preflight=PASS required={required} free={free}")
+PY
 timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$DSH_HOME_ARCHIVE" -C "$RESTORE_IO/system"
 timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$GATEWAY_STATE_ARCHIVE" -C "$RESTORE_IO/system"
 timeout --signal=TERM --kill-after=10s 600s tar --no-same-owner -xzf "$CONFIG_ARCHIVE" -C "$RESTORE_IO/system"

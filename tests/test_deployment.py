@@ -227,6 +227,14 @@ class DeploymentTemplateTests(unittest.TestCase):
             "timeout --signal=TERM --kill-after=10s 600s apt-get install -y python3-venv",
             script,
         )
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=10s 600s \\\n    tar -xJf "$tmp/$filename" --strip-components=1 -C /opt/dsh-runtime/node',
+            script,
+        )
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=10s 600s git -C "$SOURCE_ROOT" archive "$SOURCE_COMMIT" | \\\n  timeout --signal=TERM --kill-after=10s 600s tar -x -C /srv/dsh-mcp-gateway',
+            script,
+        )
         self.assertIn("/opt/dsh-runtime/node/bin/npm ci", script)
         self.assertIn(
             "timeout --signal=TERM --kill-after=10s 600s \\\n  /srv/dsh-mcp-gateway/.venv/bin/python -m pip install",

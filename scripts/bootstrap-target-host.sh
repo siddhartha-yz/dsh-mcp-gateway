@@ -175,7 +175,8 @@ install_node() {
   printf '%s  %s\n' "$checksum" "$tmp/$filename" | sha256sum --check --status
   rm -rf /opt/dsh-runtime/node
   install -d -m 0755 /opt/dsh-runtime/node
-  tar -xJf "$tmp/$filename" --strip-components=1 -C /opt/dsh-runtime/node
+  timeout --signal=TERM --kill-after=10s 600s \
+    tar -xJf "$tmp/$filename" --strip-components=1 -C /opt/dsh-runtime/node
   [[ "$(timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/node/bin/node --version)" == "v$NODE_VERSION" ]]
   rm -rf "$tmp"
   trap - RETURN
@@ -207,7 +208,8 @@ if [[ -e /srv/dsh-mcp-gateway ]]; then
   rm -rf /srv/dsh-mcp-gateway
 fi
 install -d -o root -g root -m 0755 /srv/dsh-mcp-gateway
-git -C "$SOURCE_ROOT" archive "$SOURCE_COMMIT" | tar -x -C /srv/dsh-mcp-gateway
+timeout --signal=TERM --kill-after=10s 600s git -C "$SOURCE_ROOT" archive "$SOURCE_COMMIT" | \
+  timeout --signal=TERM --kill-after=10s 600s tar -x -C /srv/dsh-mcp-gateway
 printf '%s\n' "$SOURCE_COMMIT" > /srv/dsh-mcp-gateway/.deployed-git-commit
 chmod 0644 /srv/dsh-mcp-gateway/.deployed-git-commit
 

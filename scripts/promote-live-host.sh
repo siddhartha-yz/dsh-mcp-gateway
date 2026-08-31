@@ -170,19 +170,44 @@ from pathlib import Path
 root = Path('/var/lib/dsh-harness')
 package_path = root / 'profiles/web/package.json'
 root_resolved = root.resolve(strict=True)
+
+
+def open_beneath_regular(root_path: Path, relative: Path, *, flags: int, label: str):
+    if relative.is_absolute() or '..' in relative.parts or not relative.parts:
+        raise SystemExit(f'{label} has an unsafe relative path: {relative}')
+    directory_fd = os.open(root_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in relative.parts[:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        descriptor = os.open(relative.parts[-1], flags | os.O_NOFOLLOW, dir_fd=directory_fd)
+    except BaseException:
+        os.close(directory_fd)
+        raise
+    os.close(directory_fd)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise SystemExit(f'{label} is not a private regular file beneath {root_path}')
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+package_relative = Path('profiles/web/package.json')
 try:
-    package_resolved = package_path.resolve(strict=True)
+    package_descriptor = open_beneath_regular(
+        root,
+        package_relative,
+        flags=os.O_RDONLY,
+        label='DSH web package.json',
+    )
 except OSError as exc:
-    raise SystemExit(f'DSH web package.json is unavailable: {exc}') from exc
-package_opened = package_path.stat(follow_symlinks=False)
-if (
-    package_path.is_symlink()
-    or not package_resolved.is_relative_to(root_resolved)
-    or not stat.S_ISREG(package_opened.st_mode)
-    or package_opened.st_nlink != 1
-):
-    raise SystemExit('refusing non-private, symlinked, or escaping DSH web package.json')
-package = json.loads(package_resolved.read_text(encoding='utf-8'))
+    raise SystemExit(f'DSH web package.json is unavailable or unsafe: {exc}') from exc
+with os.fdopen(package_descriptor, encoding='utf-8') as package_file:
+    package = json.load(package_file)
 dependencies = package.get('dependencies')
 if not isinstance(dependencies, dict):
     raise SystemExit('DSH web profile has no dependencies object')
@@ -327,7 +352,17 @@ for name, spec in list(dependencies.items()):
         }
     )
 
-package_resolved.write_text(json.dumps(package, indent=2) + '\n', encoding='utf-8')
+try:
+    package_descriptor = open_beneath_regular(
+        root,
+        package_relative,
+        flags=os.O_WRONLY | os.O_TRUNC,
+        label='DSH web package.json',
+    )
+except OSError as exc:
+    raise SystemExit(f'DSH web package.json became unavailable or unsafe: {exc}') from exc
+with os.fdopen(package_descriptor, 'w', encoding='utf-8') as package_file:
+    package_file.write(json.dumps(package, indent=2) + '\n')
 manifest.sort(key=lambda item: item['name'])
 manifest_path = artifacts / 'source-manifest.json'
 if manifest_path.exists() or manifest_path.is_symlink():

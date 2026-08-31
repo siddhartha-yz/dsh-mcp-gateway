@@ -696,6 +696,38 @@ function makeContext({
 }
 
 {
+  let readStarted = false
+  const never = new Promise(() => {})
+  const { routes, calls } = makeContext({
+    attachments: {
+      async readImage() {
+        readStarted = true
+        return never
+      },
+    },
+    executeResult: {
+      isError: false,
+      value: { image: true },
+      content: [{ type: 'image', attachment: { id: 'image-1' } }],
+    },
+  })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'read_image', arguments: {} }), res)
+  for (let attempt = 0; attempt < 20 && !readStarted; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(readStarted, true)
+  res.emitClose()
+  const completedAfterDisconnect = await Promise.race([
+    pending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(completedAfterDisconnect, true)
+  assert.equal(res.state.status, undefined)
+  assert.equal(calls.warnings.length, 0)
+}
+
+{
   const { routes, calls } = makeContext()
   const badArguments = responseCapture()
   await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: [] }), badArguments)

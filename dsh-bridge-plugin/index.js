@@ -527,7 +527,11 @@ export function apply(ctx) {
           agent: capability.agent,
         })
         if (lifetime.disconnected.aborted) return
-        const materialized = await materializeToolContent(ctx, result)
+        const materialized = await awaitWithinToolCallLifetime(
+          materializeToolContent(ctx, result),
+          lifetime,
+          () => {},
+        )
         if (!lifetime.disconnected.aborted) json(res, 200, materialized)
       } catch (error) {
         if (!lifetime?.disconnected.aborted) {

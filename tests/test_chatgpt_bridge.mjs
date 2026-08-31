@@ -87,6 +87,7 @@ function makeContext({
   attachments,
 } = {}) {
   const routes = new Map()
+  const cleanups = new Map()
   let currentDefaultId = defaultId
   const scope = { agentPreset: defaultId }
   const helperSessionId = expectedCapabilitySessionId(defaultId, presetPath)
@@ -116,8 +117,10 @@ function makeContext({
     llm: {
       registerAdapter() {},
     },
-    effect(factory) {
-      return factory()
+    effect(factory, label) {
+      const cleanup = factory()
+      if (typeof cleanup === 'function' && label) cleanups.set(label, cleanup)
+      return cleanup
     },
     on() {
       return () => {}
@@ -233,6 +236,7 @@ function makeContext({
   apply(ctx)
   return {
     routes,
+    cleanups,
     scope,
     agent,
     calls,
@@ -761,6 +765,29 @@ function makeContext({
   assert.equal(state.calls.create.length, 2)
   assert.equal(second.state.status, 200)
   assert.equal(state.calls.execute.length, 1)
+}
+
+{
+  const never = new Promise(() => {})
+  const { routes, cleanups, calls } = makeContext({
+    createHook() {
+      return never
+    },
+  })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  for (let attempt = 0; attempt < 20 && calls.create.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.create.length, 1)
+  const cleanup = cleanups.get('dsh-chatgpt-bridge.capability-agent')
+  const teardownCompleted = await Promise.race([
+    cleanup().then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(teardownCompleted, true)
+  res.emitClose()
+  await pending
 }
 
 {

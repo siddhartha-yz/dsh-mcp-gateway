@@ -102,7 +102,7 @@ need_command() {
 
 install_base_prereqs() {
   local missing=0
-  for cmd in curl git tar sha256sum python3 timeout; do
+  for cmd in curl git tar xz sha256sum python3 timeout; do
     if ! need_command "$cmd"; then
       echo "missing prerequisite command: $cmd" >&2
       missing=1

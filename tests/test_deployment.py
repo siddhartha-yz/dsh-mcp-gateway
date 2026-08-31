@@ -204,7 +204,7 @@ class DeploymentTemplateTests(unittest.TestCase):
             'curl --fail --silent --show-error --location --connect-timeout 10 --max-time 600 "$base/SHASUMS256.txt"',
             script,
         )
-        self.assertIn("for cmd in curl git tar sha256sum python3 timeout; do", script)
+        self.assertIn("for cmd in curl git tar xz sha256sum python3 timeout; do", script)
         self.assertIn('timeout --signal=TERM --kill-after=2s 5s "$node" --version', script)
         self.assertIn(
             "timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/node/bin/node --version",

@@ -647,6 +647,39 @@ function makeContext({
 }
 
 {
+  let releaseSetup
+  const setupGate = new Promise(resolve => {
+    releaseSetup = resolve
+  })
+  const { routes, calls, setDefaultId } = makeContext({ mountHook: () => setupGate })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  for (let attempt = 0; attempt < 20 && calls.mountIds.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.mountIds.length, 1)
+  const firstHelper = calls.create[0].sessionId
+  res.emitClose()
+  const completedAfterDisconnect = await Promise.race([
+    pending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(completedAfterDisconnect, true)
+  assert.equal(calls.execute.length, 0)
+  releaseSetup()
+  for (let attempt = 0; attempt < 200 && calls.create[0]?.handle === undefined; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  setDefaultId('alternate')
+  const second = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), second)
+  assert.equal(second.state.status, 200)
+  assert.equal(calls.disposed.includes(firstHelper), true)
+  assert.equal(res.state.status, undefined)
+  assert.equal(calls.warnings.length, 0)
+}
+
+{
   const { routes, calls } = makeContext({ executeWaitForAbort: true })
   const res = responseCapture()
   const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)

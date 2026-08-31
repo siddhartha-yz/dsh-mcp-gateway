@@ -122,6 +122,33 @@ function toolCallLifetime(res) {
   }
 }
 
+function awaitWithinToolCallLifetime(promise, lifetime, onLateResolve) {
+  const disposeLateValue = value => {
+    void Promise.resolve(onLateResolve(value)).catch(() => {})
+  }
+  if (lifetime.signal.aborted) {
+    promise.then(disposeLateValue, () => {})
+    return Promise.reject(lifetime.signal.reason)
+  }
+  let removeAbortListener
+  const aborted = new Promise((_, reject) => {
+    const onAbort = () => reject(lifetime.signal.reason)
+    lifetime.signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => lifetime.signal.removeEventListener('abort', onAbort)
+  })
+  return Promise.race([promise, aborted]).then(
+    value => {
+      removeAbortListener?.()
+      return value
+    },
+    error => {
+      removeAbortListener?.()
+      if (lifetime.signal.aborted) promise.then(disposeLateValue, () => {})
+      throw error
+    },
+  )
+}
+
 async function materializeContentBlocks(ctx, blocks) {
   if (!Array.isArray(blocks)) return blocks
   const hasAttachmentImage = blocks.some(block => block?.type === 'image' && block.attachment)
@@ -486,7 +513,11 @@ export function apply(ctx) {
         if (typeof toolArguments !== 'object' || toolArguments === null || Array.isArray(toolArguments)) {
           throw new BridgeRequestError(400, 'invalid_request', 'arguments must be an object when supplied')
         }
-        capability = await acquireCapabilityAgent()
+        capability = await awaitWithinToolCallLifetime(
+          acquireCapabilityAgent(),
+          lifetime,
+          lateCapability => lateCapability.release(),
+        )
         if (lifetime.disconnected.aborted) return
         const result = await ctx.tools.execute({
           callId: `chatgpt-${randomUUID()}`,

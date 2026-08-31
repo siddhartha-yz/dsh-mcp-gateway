@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -13,8 +13,9 @@ const DEFAULT_PRESET_PATH = join(process.cwd(), 'dsh-bridge-plugin', 'index.js')
 
 function expectedCapabilitySessionId(presetId = 'default', presetPath = DEFAULT_PRESET_PATH) {
   const { mtimeMs, size } = statSync(presetPath)
+  const digest = createHash('sha256').update(readFileSync(presetPath)).digest('hex')
   const suffix = createHash('sha256')
-    .update(JSON.stringify([process.cwd(), presetId, presetPath, mtimeMs, size]))
+    .update(JSON.stringify([process.cwd(), presetId, presetPath, mtimeMs, size, digest]))
     .digest('hex')
     .slice(0, 24)
   return `${CAPABILITY_SESSION_PREFIX}-${suffix}`
@@ -365,6 +366,38 @@ function makeContext({
     assert.equal(calls.create.length, 2)
     assert.equal(calls.execute[1].agent.id, secondHelper)
     assert.equal(calls.mountIds.length, 2)
+    assert.deepEqual(calls.disposed, [firstHelper])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-bridge-preset-content-generation-'))
+  const presetPath = join(dir, 'agent.cordis.yml')
+  try {
+    writeFileSync(presetPath, 'allow-A\n')
+    const fixedTime = new Date(Math.trunc(Date.now() / 1000) * 1000)
+    utimesSync(presetPath, fixedTime, fixedTime)
+    const original = statSync(presetPath)
+    const { routes, calls } = makeContext({ presetPath })
+    const first = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), first)
+    const firstHelper = calls.create[0].sessionId
+
+    writeFileSync(presetPath, 'allow-B\n')
+    utimesSync(presetPath, fixedTime, fixedTime)
+    const replaced = statSync(presetPath)
+    assert.equal(replaced.size, original.size)
+    assert.equal(replaced.mtimeMs, original.mtimeMs)
+
+    const second = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), second)
+    const secondHelper = calls.create[1].sessionId
+
+    assert.notEqual(secondHelper, firstHelper)
+    assert.equal(calls.create.length, 2)
+    assert.equal(calls.execute[1].agent.id, secondHelper)
     assert.deepEqual(calls.disposed, [firstHelper])
   } finally {
     rmSync(dir, { recursive: true, force: true })

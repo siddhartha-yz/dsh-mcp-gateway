@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 
 export const name = 'dsh-chatgpt-bridge'
 export const inject = ['webServer', 'tools', 'skills', 'llm', 'agents', 'agentPresets']
@@ -11,13 +11,19 @@ const EXTERNAL_PROVIDER = 'chatgpt-web-external'
 const EXTERNAL_MODEL = 'chatgpt-web'
 const CAPABILITY_SESSION_PREFIX = 'dsh-mcp-gateway-chatgpt-capability'
 
+async function presetStamp(path) {
+  const metadata = await stat(path)
+  const digest = createHash('sha256').update(await readFile(path)).digest('hex')
+  return { mtimeMs: metadata.mtimeMs, size: metadata.size, digest }
+}
+
 function samePresetStamp(left, right) {
-  return left.mtimeMs === right.mtimeMs && left.size === right.size
+  return left.mtimeMs === right.mtimeMs && left.size === right.size && left.digest === right.digest
 }
 
 function capabilitySessionId(cwd, presetId, presetPath, stamp) {
   const suffix = createHash('sha256')
-    .update(JSON.stringify([cwd, presetId, presetPath, stamp.mtimeMs, stamp.size]))
+    .update(JSON.stringify([cwd, presetId, presetPath, stamp.mtimeMs, stamp.size, stamp.digest]))
     .digest('hex')
     .slice(0, 24)
   return `${CAPABILITY_SESSION_PREFIX}-${suffix}`
@@ -231,7 +237,7 @@ export function apply(ctx) {
 
     const presetId = presets.defaultId
     const preset = await presets.resolve(presetId)
-    const stamp = await stat(preset.path)
+    const stamp = await presetStamp(preset.path)
     if (presets.defaultId !== presetId) return acquireCapabilityAgent()
     const helperSessionId = capabilitySessionId(process.cwd(), presetId, preset.path, stamp)
 
@@ -247,7 +253,7 @@ export function apply(ctx) {
       }
       const setup = async agentCtx => {
         const mountedPreset = await presets.mount(agentCtx, presetId)
-        const mountedStamp = await stat(mountedPreset.path)
+        const mountedStamp = await presetStamp(mountedPreset.path)
         if (mountedPreset.path !== preset.path || !samePresetStamp(stamp, mountedStamp)) {
           throw new Error('DSH preset composition changed while creating the bridge capability agent')
         }
@@ -306,7 +312,7 @@ export function apply(ctx) {
         return acquireCapabilityAgent()
       }
       const currentPreset = await presets.resolve(presetId)
-      const currentStamp = await stat(currentPreset.path)
+      const currentStamp = await presetStamp(currentPreset.path)
       if (
         presets.defaultId !== presetId
         || currentPreset.path !== preset.path

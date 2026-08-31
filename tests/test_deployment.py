@@ -115,7 +115,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"', restore)
         self.assertIn('exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"', restore)
         self.assertIn('BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"', restore)
-        self.assertIn('python3 - "$BACKUP_CHECKSUMS"', restore)
+        self.assertIn('python3 - "$BACKUP_IO" "$BACKUP_CHECKSUMS"', restore)
         self.assertIn('"$BACKUP_MANIFEST" MANIFEST.json', restore)
         for variable, name in (
             ("DSH_HOME_ARCHIVE", "dsh-home.tar.gz"),
@@ -126,7 +126,7 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn(f'exec {{{variable}_FD}}<"$BACKUP_IO/{name}"', restore)
             self.assertIn(f'{variable}="/proc/$$/fd/${variable}_FD"', restore)
             self.assertIn(f'tar --no-same-owner -xzf "${variable}"', restore)
-        self.assertIn("pinned backup input checksum mismatch", restore)
+        self.assertIn("backup checksum mismatch", restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP_IO/dsh-home.tar.gz"', restore)
 
     def test_workspace_restore_hashing_is_streaming(self) -> None:
@@ -967,7 +967,7 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_restore_checksum_validation_rejects_linked_inputs_and_unsafe_manifest_entries(self) -> None:
         validation = extract_python_heredoc(
             VERIFY_BACKUP,
-            'python3 - "$BACKUP_IO" <<\'PY\'',
+            '  "$WORKSPACE_ARCHIVE" workspace-selected.tar.gz <<\'PY\'',
         )
         expected = (
             "MANIFEST.json",
@@ -989,7 +989,14 @@ class DeploymentTemplateTests(unittest.TestCase):
             (root / "SHA256SUMS").write_text(sums, encoding="utf-8")
 
             ok = subprocess.run(
-                [sys.executable, "-", str(root)],
+                [
+                    sys.executable, "-", str(root), str(root / "SHA256SUMS"),
+                    str(root / "MANIFEST.json"), "MANIFEST.json",
+                    str(root / "dsh-home.tar.gz"), "dsh-home.tar.gz",
+                    str(root / "gateway-state.tar.gz"), "gateway-state.tar.gz",
+                    str(root / "config.tar.gz"), "config.tar.gz",
+                    str(root / "workspace-selected.tar.gz"), "workspace-selected.tar.gz",
+                ],
                 input=validation,
                 text=True,
                 capture_output=True,
@@ -1004,7 +1011,14 @@ class DeploymentTemplateTests(unittest.TestCase):
             linked.unlink()
             linked.symlink_to(target)
             result = subprocess.run(
-                [sys.executable, "-", str(root)],
+                [
+                    sys.executable, "-", str(root), str(root / "SHA256SUMS"),
+                    str(root / "MANIFEST.json"), "MANIFEST.json",
+                    str(root / "dsh-home.tar.gz"), "dsh-home.tar.gz",
+                    str(root / "gateway-state.tar.gz"), "gateway-state.tar.gz",
+                    str(root / "config.tar.gz"), "config.tar.gz",
+                    str(root / "workspace-selected.tar.gz"), "workspace-selected.tar.gz",
+                ],
                 input=validation,
                 text=True,
                 capture_output=True,
@@ -1012,13 +1026,20 @@ class DeploymentTemplateTests(unittest.TestCase):
                 timeout=10,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("unavailable or linked", result.stdout + result.stderr)
+            self.assertIn("not the pinned private regular file", result.stdout + result.stderr)
 
             linked.unlink()
             linked.write_bytes(b"config.tar.gz")
             (root / "SHA256SUMS").write_text(sums + f"{'0' * 64}  ../outside\n", encoding="utf-8")
             result = subprocess.run(
-                [sys.executable, "-", str(root)],
+                [
+                    sys.executable, "-", str(root), str(root / "SHA256SUMS"),
+                    str(root / "MANIFEST.json"), "MANIFEST.json",
+                    str(root / "dsh-home.tar.gz"), "dsh-home.tar.gz",
+                    str(root / "gateway-state.tar.gz"), "gateway-state.tar.gz",
+                    str(root / "config.tar.gz"), "config.tar.gz",
+                    str(root / "workspace-selected.tar.gz"), "workspace-selected.tar.gz",
+                ],
                 input=validation,
                 text=True,
                 capture_output=True,
@@ -1435,15 +1456,25 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('exec {BACKUP_FD}<"$BACKUP"', restore)
         self.assertIn('BACKUP_IO="/proc/$$/fd/$BACKUP_FD"', restore)
         self.assertIn('[[ ! -L "$BACKUP" && "$BACKUP" -ef "$BACKUP_IO" ]]', restore)
-        self.assertIn('python3 - "$BACKUP_IO" <<\'PY\'', restore)
+        self.assertIn('python3 - "$BACKUP_IO" "$BACKUP_CHECKSUMS"', restore)
         self.assertIn('os.open(root, os.O_RDONLY | os.O_DIRECTORY)', restore)
         self.assertIn(
-            'os.open("SHA256SUMS", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)', restore
+            'checksum_path_stat = os.stat("SHA256SUMS", dir_fd=root_fd, follow_symlinks=False)',
+            restore,
         )
+        self.assertIn('(checksum_stat.st_dev, checksum_stat.st_ino)', restore)
         self.assertNotIn('checksum_path.read_text', restore)
         self.assertIn('exec {BACKUP_MANIFEST_FD}<"$BACKUP_IO/MANIFEST.json"', restore)
         self.assertIn('BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"', restore)
         self.assertNotIn('python3 - "$BACKUP_IO/MANIFEST.json"', restore)
+        self.assertLess(
+            restore.index('exec {BACKUP_MANIFEST_FD}'),
+            restore.index('python3 - "$BACKUP_IO" "$BACKUP_CHECKSUMS"'),
+        )
+        self.assertIn(
+            '(opened.st_dev, opened.st_ino) != (path_stat.st_dev, path_stat.st_ino)',
+            restore,
+        )
         self.assertIn('exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"', restore)
         self.assertIn('tar --no-same-owner -xzf "$DSH_HOME_ARCHIVE"', restore)
         self.assertNotIn('tar --no-same-owner -xzf "$BACKUP/dsh-home.tar.gz"', restore)

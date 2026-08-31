@@ -85,10 +85,33 @@ for raw in sys.argv[1:]:
         sock.close()
 PY
 
-python3 - "$BACKUP_IO" <<'PY'
-import hashlib, os, pathlib, re, stat, sys
+# Pin the checksum manifest and all restore inputs consumed later before validating
+# them. Validation compares each pathname to its pinned descriptor, so replacing a
+# backup file between checksum validation and descriptor handoff cannot change the
+# content restored by this drill.
+exec {BACKUP_MANIFEST_FD}<"$BACKUP_IO/MANIFEST.json"
+exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"
+exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"
+exec {GATEWAY_STATE_ARCHIVE_FD}<"$BACKUP_IO/gateway-state.tar.gz"
+exec {CONFIG_ARCHIVE_FD}<"$BACKUP_IO/config.tar.gz"
+exec {WORKSPACE_ARCHIVE_FD}<"$BACKUP_IO/workspace-selected.tar.gz"
+BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"
+BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"
+DSH_HOME_ARCHIVE="/proc/$$/fd/$DSH_HOME_ARCHIVE_FD"
+GATEWAY_STATE_ARCHIVE="/proc/$$/fd/$GATEWAY_STATE_ARCHIVE_FD"
+CONFIG_ARCHIVE="/proc/$$/fd/$CONFIG_ARCHIVE_FD"
+WORKSPACE_ARCHIVE="/proc/$$/fd/$WORKSPACE_ARCHIVE_FD"
+python3 - "$BACKUP_IO" "$BACKUP_CHECKSUMS" \
+  "$BACKUP_MANIFEST" MANIFEST.json \
+  "$DSH_HOME_ARCHIVE" dsh-home.tar.gz \
+  "$GATEWAY_STATE_ARCHIVE" gateway-state.tar.gz \
+  "$CONFIG_ARCHIVE" config.tar.gz \
+  "$WORKSPACE_ARCHIVE" workspace-selected.tar.gz <<'PY'
+import hashlib, os, re, stat, sys
 
-root = pathlib.Path(sys.argv[1])
+root = sys.argv[1]
+checksum_path = sys.argv[2]
+pinned = dict(zip(sys.argv[4::2], sys.argv[3::2], strict=True))
 expected = (
     "MANIFEST.json",
     "tools-before.json",
@@ -100,18 +123,19 @@ expected = (
 )
 root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
 try:
-    try:
-        checksum_fd = os.open("SHA256SUMS", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
-    except OSError as exc:
-        raise SystemExit(f"backup checksum manifest is unavailable or linked: {exc}") from exc
+    checksum_fd = os.open(checksum_path, os.O_RDONLY)
     try:
         checksum_stat = os.fstat(checksum_fd)
+        checksum_path_stat = os.stat("SHA256SUMS", dir_fd=root_fd, follow_symlinks=False)
         if (
             not stat.S_ISREG(checksum_stat.st_mode)
             or checksum_stat.st_nlink != 1
             or checksum_stat.st_size > 4096
+            or not stat.S_ISREG(checksum_path_stat.st_mode)
+            or (checksum_stat.st_dev, checksum_stat.st_ino)
+            != (checksum_path_stat.st_dev, checksum_path_stat.st_ino)
         ):
-            raise SystemExit("backup checksum manifest is not a bounded private regular file")
+            raise SystemExit("backup checksum manifest is not a bounded private pinned regular file")
         with os.fdopen(os.dup(checksum_fd), encoding="utf-8") as checksum_stream:
             checksum_lines = checksum_stream.read().splitlines()
     finally:
@@ -127,14 +151,23 @@ try:
         raise SystemExit("backup checksum manifest does not contain the expected files")
 
     for name in expected:
-        try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
-        except OSError as exc:
-            raise SystemExit(f"backup input is unavailable or linked: {name}: {exc}") from exc
+        if name in pinned:
+            fd = os.open(pinned[name], os.O_RDONLY)
+        else:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
+            except OSError as exc:
+                raise SystemExit(f"backup input is unavailable or linked: {name}: {exc}") from exc
         try:
             opened = os.fstat(fd)
-            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-                raise SystemExit(f"backup input is not a private regular file: {name}")
+            path_stat = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or not stat.S_ISREG(path_stat.st_mode)
+                or (opened.st_dev, opened.st_ino) != (path_stat.st_dev, path_stat.st_ino)
+            ):
+                raise SystemExit(f"backup input is not the pinned private regular file: {name}")
             if name == "MANIFEST.json" and opened.st_size > 1024 * 1024:
                 raise SystemExit("backup manifest exceeds the 1 MiB size limit")
             with os.fdopen(os.dup(fd), "rb") as stream:
@@ -145,51 +178,6 @@ try:
             raise SystemExit(f"backup checksum mismatch: {name}")
 finally:
     os.close(root_fd)
-print("backup_checksums=PASS")
-PY
-
-# Pin the verified manifest, checksum manifest, and archives to open descriptors before extraction. Backup
-# directories may intentionally be owned by a non-root operator, so reopening
-# an archive by pathname after checksum validation would allow a swap race.
-exec {BACKUP_MANIFEST_FD}<"$BACKUP_IO/MANIFEST.json"
-exec {BACKUP_CHECKSUMS_FD}<"$BACKUP_IO/SHA256SUMS"
-exec {DSH_HOME_ARCHIVE_FD}<"$BACKUP_IO/dsh-home.tar.gz"
-exec {GATEWAY_STATE_ARCHIVE_FD}<"$BACKUP_IO/gateway-state.tar.gz"
-exec {CONFIG_ARCHIVE_FD}<"$BACKUP_IO/config.tar.gz"
-exec {WORKSPACE_ARCHIVE_FD}<"$BACKUP_IO/workspace-selected.tar.gz"
-BACKUP_MANIFEST="/proc/$$/fd/$BACKUP_MANIFEST_FD"
-BACKUP_CHECKSUMS="/proc/$$/fd/$BACKUP_CHECKSUMS_FD"
-DSH_HOME_ARCHIVE="/proc/$$/fd/$DSH_HOME_ARCHIVE_FD"
-GATEWAY_STATE_ARCHIVE="/proc/$$/fd/$GATEWAY_STATE_ARCHIVE_FD"
-CONFIG_ARCHIVE="/proc/$$/fd/$CONFIG_ARCHIVE_FD"
-WORKSPACE_ARCHIVE="/proc/$$/fd/$WORKSPACE_ARCHIVE_FD"
-python3 - "$BACKUP_CHECKSUMS" \
-  "$BACKUP_MANIFEST" MANIFEST.json \
-  "$DSH_HOME_ARCHIVE" dsh-home.tar.gz \
-  "$GATEWAY_STATE_ARCHIVE" gateway-state.tar.gz \
-  "$CONFIG_ARCHIVE" config.tar.gz \
-  "$WORKSPACE_ARCHIVE" workspace-selected.tar.gz <<'PY'
-import hashlib, os, re, stat, sys
-
-checksum_path = sys.argv[1]
-rows = {}
-with open(checksum_path, encoding="utf-8") as stream:
-    for line in stream:
-        match = re.fullmatch(r"([0-9a-f]{64})  ([^/]+)\n?", line)
-        if match:
-            rows[match.group(2)] = match.group(1)
-for fd_path, name in zip(sys.argv[2::2], sys.argv[3::2], strict=True):
-    fd = os.open(fd_path, os.O_RDONLY)
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-            raise SystemExit(f"pinned backup input is not a private regular file: {name}")
-        with os.fdopen(os.dup(fd), "rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    finally:
-        os.close(fd)
-    if digest != rows.get(name):
-        raise SystemExit(f"pinned backup input checksum mismatch: {name}")
 print("backup_inputs_pinned=PASS")
 PY
 

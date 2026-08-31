@@ -5,6 +5,7 @@ BACKUP=""
 RESTORE_ROOT=""
 DSH_PORT=18422
 GATEWAY_PORT=18778
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -406,7 +407,10 @@ import json,sys
 print(json.load(open(sys.argv[1]))['public_base_url'])
 PY
 )"
-[[ "$PUBLIC_BASE" == https://* ]] || { echo "backup manifest has invalid public base URL" >&2; exit 1; }
+python3 "$SCRIPT_DIR/validate-public-origin.py" "$PUBLIC_BASE" || {
+  echo "backup manifest has invalid public base URL" >&2
+  exit 1
+}
 DRILL_PIN="restore-drill-only-$(python3 - <<'PY'
 import secrets
 print(secrets.token_hex(12))

@@ -48,6 +48,13 @@ def extract_python_heredoc(path: Path, invocation: str) -> str:
 
 
 class DeploymentTemplateTests(unittest.TestCase):
+    def test_restore_uses_shared_public_origin_validator(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertIn('SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"', restore)
+        self.assertIn('python3 "$SCRIPT_DIR/validate-public-origin.py" "$PUBLIC_BASE"', restore)
+        self.assertNotIn('[[ "$PUBLIC_BASE" == https://* ]]', restore)
+
     def test_restore_profile_rebuild_is_bounded(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 

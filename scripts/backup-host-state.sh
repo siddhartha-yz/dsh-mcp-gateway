@@ -107,11 +107,12 @@ PY
 
 # Validate explicitly selected workspace paths before creating backup output or interrupting services.
 python3 - "$WORKSPACE" "$OUTPUT" "${WORKSPACE_PATHS[@]}" <<'PY'
-import os, sys
+import os, pathlib, sys
 root=os.path.realpath(sys.argv[1]); output=os.path.realpath(sys.argv[2])
 for raw in sys.argv[3:]:
-    if not raw or os.path.isabs(raw):
-        raise SystemExit(f"workspace path must be non-empty and relative: {raw!r}")
+    parts = pathlib.PurePosixPath(raw).parts
+    if not raw or os.path.isabs(raw) or any(part in {'.', '..'} for part in parts):
+        raise SystemExit(f"workspace path must be a normalized relative path: {raw!r}")
     candidate=os.path.join(root, raw)
     if os.path.islink(candidate):
         raise SystemExit(f"workspace path must not be a symlink: {raw}")

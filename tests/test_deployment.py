@@ -739,7 +739,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("systemctl stop dsh-web-host.service", backup)
         self.assertNotIn("shutdown", backup)
         self.assertNotIn("systemctl stop --all", backup)
-        self.assertIn("workspace path must be non-empty and relative", backup)
+        self.assertIn("workspace path must be a normalized relative path", backup)
         self.assertIn("workspace-selected.tar.gz", backup)
         self.assertIn("gateway-state.tar.gz", backup)
         self.assertIn("config.tar.gz", backup)
@@ -945,6 +945,28 @@ class DeploymentTemplateTests(unittest.TestCase):
             backup.index(create_output),
             "invalid workspace selections must fail before leaving a partial backup output directory",
         )
+
+    def test_backup_rejects_non_normalized_workspace_selection_before_quiesce(self) -> None:
+        validation = extract_python_heredoc(
+            BACKUP_HOST,
+            'python3 - "$WORKSPACE" "$OUTPUT" "${WORKSPACE_PATHS[@]}" <<\'PY\'',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (workspace / "first").mkdir()
+            (workspace / "second").mkdir()
+            result = subprocess.run(
+                [sys.executable, "-", str(workspace), str(root / "backup"), "first/../second"],
+                input=validation,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("normalized relative path", result.stdout + result.stderr)
 
     def test_backup_output_creation_rejects_symlink_race(self) -> None:
         creation = extract_python_heredoc(BACKUP_HOST, 'python3 - "$OUTPUT" create-output <<\'PY\'')

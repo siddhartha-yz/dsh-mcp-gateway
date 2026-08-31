@@ -135,6 +135,8 @@ try:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
                 raise SystemExit(f"backup input is not a private regular file: {name}")
+            if name == "MANIFEST.json" and opened.st_size > 1024 * 1024:
+                raise SystemExit("backup manifest exceeds the 1 MiB size limit")
             with os.fdopen(os.dup(fd), "rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
         finally:

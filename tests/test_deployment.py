@@ -94,6 +94,12 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('if required + reserve > free:', restore)
         self.assertIn('backup requires too much restore space', restore)
 
+    def test_restore_manifest_size_is_bounded_before_json_parsing(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertIn('if name == "MANIFEST.json" and opened.st_size > 1024 * 1024:', restore)
+        self.assertIn("backup manifest exceeds the 1 MiB size limit", restore)
+
     def test_restore_archive_extraction_is_bounded(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 

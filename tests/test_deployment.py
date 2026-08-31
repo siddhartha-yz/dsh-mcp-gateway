@@ -725,7 +725,7 @@ class DeploymentTemplateTests(unittest.TestCase):
                 "root = Path('/var/lib/dsh-harness')",
                 f"root = Path({str(root)!r})",
             )
-            rewrite_marker = "try:\n    package_descriptor = open_beneath_regular(\n        root,\n        package_relative,\n        flags=os.O_WRONLY | os.O_TRUNC,"
+            rewrite_marker = "try:\n    package_descriptor = open_beneath_regular(\n        root,\n        package_relative,\n        flags=os.O_WRONLY,"
             self.assertIn(rewrite_marker, localized)
             localized = localized.replace(
                 rewrite_marker,
@@ -744,6 +744,42 @@ class DeploymentTemplateTests(unittest.TestCase):
             self.assertIn("package.json", completed.stdout + completed.stderr)
             self.assertEqual(outside.read_text(encoding="utf-8"), original)
             self.assertTrue(package.is_symlink())
+
+    def test_live_promotion_rejects_web_package_hardlink_swap_before_truncate(self) -> None:
+        localization = extract_python_heredoc(PROMOTE_LIVE, "python3 - <<'PY'")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "dsh-home"
+            web = root / "profiles" / "web"
+            web.mkdir(parents=True)
+            package = web / "package.json"
+            package.write_text(json.dumps({"dependencies": {}}) + "\n", encoding="utf-8")
+            outside = base / "outside-package.json"
+            original = "outside-must-not-change\n"
+            outside.write_text(original, encoding="utf-8")
+            localized = localization.replace(
+                "root = Path('/var/lib/dsh-harness')",
+                f"root = Path({str(root)!r})",
+            )
+            rewrite_marker = "try:\n    package_descriptor = open_beneath_regular(\n        root,\n        package_relative,\n        flags=os.O_WRONLY,"
+            self.assertIn(rewrite_marker, localized)
+            localized = localized.replace(
+                rewrite_marker,
+                f"package_path.unlink(); os.link({str(outside)!r}, package_path)\n" + rewrite_marker,
+                1,
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", localized],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("package.json", completed.stdout + completed.stderr)
+            self.assertEqual(outside.read_text(encoding="utf-8"), original)
+            self.assertEqual(package.read_text(encoding="utf-8"), original)
 
     def test_live_promotion_fails_closed_when_readiness_poll_never_succeeds(self) -> None:
         script = PROMOTE_LIVE.read_text(encoding="utf-8")

@@ -356,12 +356,13 @@ try:
     package_descriptor = open_beneath_regular(
         root,
         package_relative,
-        flags=os.O_WRONLY | os.O_TRUNC,
+        flags=os.O_WRONLY,
         label='DSH web package.json',
     )
 except OSError as exc:
     raise SystemExit(f'DSH web package.json became unavailable or unsafe: {exc}') from exc
 with os.fdopen(package_descriptor, 'w', encoding='utf-8') as package_file:
+    os.ftruncate(package_file.fileno(), 0)
     package_file.write(json.dumps(package, indent=2) + '\n')
 manifest.sort(key=lambda item: item['name'])
 manifest_path = artifacts / 'source-manifest.json'

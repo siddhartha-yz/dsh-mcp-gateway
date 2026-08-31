@@ -51,9 +51,16 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_restore_profile_rebuild_is_bounded(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 
-        self.assertIn("for command in curl python3 tar sha256sum timeout; do", restore)
+        self.assertIn("for command in curl python3 tar sha256sum sleep timeout; do", restore)
         self.assertIn("timeout --signal=TERM --kill-after=10s 600s", restore)
         self.assertIn("/opt/dsh-runtime/node_modules/.bin/pnpm install", restore)
+
+    def test_restore_process_cleanup_is_bounded(self) -> None:
+        restore = VERIFY_BACKUP.read_text(encoding="utf-8")
+
+        self.assertIn('for pid in "$GATEWAY_PID" "$DSH_PID"; do', restore)
+        self.assertIn('[[ -z "$GATEWAY_PID$DSH_PID" ]] || sleep 1', restore)
+        self.assertIn('kill -KILL "$pid" 2>/dev/null || true', restore)
 
     def test_backup_archive_creation_is_bounded(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")

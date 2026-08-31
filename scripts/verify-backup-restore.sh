@@ -40,7 +40,7 @@ done
 [[ "$DSH_PORT" =~ ^[0-9]+$ && "$GATEWAY_PORT" =~ ^[0-9]+$ ]] || { echo "ports must be integers" >&2; exit 2; }
 ((DSH_PORT > 0 && DSH_PORT <= 65535 && GATEWAY_PORT > 0 && GATEWAY_PORT <= 65535 && DSH_PORT != GATEWAY_PORT)) || { echo "invalid or duplicate ports" >&2; exit 2; }
 
-for command in curl python3 tar sha256sum timeout; do
+for command in curl python3 tar sha256sum sleep timeout; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
 BACKUP="$(cd "$BACKUP" && pwd)"
@@ -317,10 +317,16 @@ DSH_PID=""
 GATEWAY_PID=""
 cleanup() {
   set +e
-  [[ -n "$GATEWAY_PID" ]] && kill "$GATEWAY_PID" 2>/dev/null
-  [[ -n "$DSH_PID" ]] && kill "$DSH_PID" 2>/dev/null
-  [[ -n "$GATEWAY_PID" ]] && wait "$GATEWAY_PID" 2>/dev/null
-  [[ -n "$DSH_PID" ]] && wait "$DSH_PID" 2>/dev/null
+  for pid in "$GATEWAY_PID" "$DSH_PID"; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" 2>/dev/null || true
+  done
+  [[ -z "$GATEWAY_PID$DSH_PID" ]] || sleep 1
+  for pid in "$GATEWAY_PID" "$DSH_PID"; do
+    [[ -n "$pid" ]] || continue
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
 }
 trap cleanup EXIT
 

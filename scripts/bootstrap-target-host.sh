@@ -114,8 +114,8 @@ install_base_prereqs() {
       exit 1
     fi
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y ca-certificates curl git tar xz-utils python3 python3-venv
+    timeout --signal=TERM --kill-after=10s 600s apt-get update
+    timeout --signal=TERM --kill-after=10s 600s apt-get install -y ca-certificates curl git tar xz-utils python3 python3-venv
   fi
 
   local probe
@@ -127,8 +127,8 @@ install_base_prereqs() {
       exit 1
     fi
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y python3-venv
+    timeout --signal=TERM --kill-after=10s 600s apt-get update
+    timeout --signal=TERM --kill-after=10s 600s apt-get install -y python3-venv
     probe="$(mktemp -d)"
     python3 -m venv "$probe/venv" >/dev/null
   fi

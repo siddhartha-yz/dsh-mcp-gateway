@@ -215,6 +215,18 @@ class DeploymentTemplateTests(unittest.TestCase):
             script,
         )
         self.assertIn("timeout --signal=TERM --kill-after=10s 600s", script)
+        self.assertEqual(
+            script.count("timeout --signal=TERM --kill-after=10s 600s apt-get update"),
+            2,
+        )
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=10s 600s apt-get install -y ca-certificates curl git tar xz-utils python3 python3-venv",
+            script,
+        )
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=10s 600s apt-get install -y python3-venv",
+            script,
+        )
         self.assertIn("/opt/dsh-runtime/node/bin/npm ci", script)
         self.assertIn(
             "timeout --signal=TERM --kill-after=10s 600s \\\n  /srv/dsh-mcp-gateway/.venv/bin/python -m pip install",

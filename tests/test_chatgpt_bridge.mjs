@@ -699,4 +699,21 @@ function makeContext({
   assert.equal(whitespace.state.body.error, 'invalid_request')
 }
 
+{
+  const { routes } = makeContext({
+    executeResult: {
+      isError: false,
+      value: null,
+      content: [{ type: 'text', text: 'x'.repeat(16 * 1024 * 1024) }],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'large_result', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.deepEqual(res.state.body, {
+    error: 'bridge_error',
+    message: 'DSH bridge response exceeds the configured size limit',
+  })
+}
+
 console.log('chatgpt-bridge-standing-scope-and-capability-session-ok')

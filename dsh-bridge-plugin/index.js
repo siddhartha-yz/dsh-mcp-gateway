@@ -6,6 +6,7 @@ export const inject = ['webServer', 'tools', 'skills', 'llm', 'agents', 'agentPr
 
 const PREFIX = '/api/chatgpt-bridge'
 const MAX_BODY_BYTES = 1_000_000
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 const TOOL_CALL_TIMEOUT_MS = 120_000
 const EXTERNAL_PROVIDER = 'chatgpt-web-external'
 const EXTERNAL_MODEL = 'chatgpt-web'
@@ -68,7 +69,11 @@ class ExternalChatGPTCapabilityAdapter {
 }
 
 function json(res, status, body) {
-  const data = JSON.stringify(body)
+  let data = JSON.stringify(body)
+  if (Buffer.byteLength(data) > MAX_RESPONSE_BYTES) {
+    status = 500
+    data = JSON.stringify({ error: 'bridge_error', message: 'DSH bridge response exceeds the configured size limit' })
+  }
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(data),

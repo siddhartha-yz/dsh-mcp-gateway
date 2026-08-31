@@ -81,6 +81,7 @@ function makeContext({
   skillListError,
   mountHook,
   resolveHook,
+  createHook,
   omitAgents = false,
   omitPresets = false,
   attachments,
@@ -186,6 +187,7 @@ function makeContext({
         return {
           async create(options) {
             calls.create.push(options)
+            if (createHook) return createHook(options, calls)
             const createdAgent = agentFor(options.sessionId)
             if (options.setup) await options.setup({ agent: createdAgent })
             return {
@@ -677,6 +679,39 @@ function makeContext({
   assert.equal(calls.disposed.includes(firstHelper), true)
   assert.equal(res.state.status, undefined)
   assert.equal(calls.warnings.length, 0)
+}
+
+{
+  const never = new Promise(() => {})
+  const { routes, calls } = makeContext({
+    createHook(options) {
+      if (calls.create.length === 1) return never
+      return Promise.resolve({
+        agent: { id: options.sessionId },
+        async dispose() {
+          calls.disposed.push(options.sessionId)
+        },
+      })
+    },
+  })
+  const first = responseCapture()
+  const firstPending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), first)
+  for (let attempt = 0; attempt < 20 && calls.create.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.create.length, 1)
+  first.emitClose()
+  const completedAfterDisconnect = await Promise.race([
+    firstPending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(completedAfterDisconnect, true)
+
+  const second = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), second)
+  assert.equal(calls.create.length, 2)
+  assert.equal(second.state.status, 200)
+  assert.equal(calls.execute.length, 1)
 }
 
 {

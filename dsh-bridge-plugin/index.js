@@ -260,7 +260,7 @@ export function apply(ctx) {
     }
   }
 
-  async function acquireCapabilityAgent() {
+  async function acquireCapabilityAgent(signal) {
     const agents = ctx.get('agents')
     const presets = ctx.get('agentPresets')
     if (!agents || !presets) {
@@ -336,7 +336,9 @@ export function apply(ctx) {
     entry.leases += 1
     let verified = false
     try {
-      const handle = await entry.promise
+      const handle = signal
+        ? await awaitWithinToolCallLifetime(entry.promise, { signal }, () => {})
+        : await entry.promise
       if (presets.defaultId !== presetId) {
         entry.stale = true
         entry.leases -= 1
@@ -371,7 +373,12 @@ export function apply(ctx) {
     } catch (error) {
       if (!verified) entry.stale = true
       entry.leases -= 1
-      await maybeDisposeCapabilityEntry(helperSessionId, entry)
+      if (signal?.aborted && entry.leases === 0 && capabilityHandles.get(helperSessionId) === entry) {
+        capabilityHandles.delete(helperSessionId)
+        void entry.promise.then(handle => handle.dispose(), () => {})
+      } else {
+        await maybeDisposeCapabilityEntry(helperSessionId, entry)
+      }
       throw error
     }
   }
@@ -514,7 +521,7 @@ export function apply(ctx) {
           throw new BridgeRequestError(400, 'invalid_request', 'arguments must be an object when supplied')
         }
         capability = await awaitWithinToolCallLifetime(
-          acquireCapabilityAgent(),
+          acquireCapabilityAgent(lifetime.signal),
           lifetime,
           lateCapability => lateCapability.release(),
         )

@@ -212,7 +212,8 @@ printf '%s\n' "$SOURCE_COMMIT" > /srv/dsh-mcp-gateway/.deployed-git-commit
 chmod 0644 /srv/dsh-mcp-gateway/.deployed-git-commit
 
 python3 -m venv /srv/dsh-mcp-gateway/.venv
-/srv/dsh-mcp-gateway/.venv/bin/python -m pip install \
+timeout --signal=TERM --kill-after=10s 600s \
+  /srv/dsh-mcp-gateway/.venv/bin/python -m pip install \
   --constraint /srv/dsh-mcp-gateway/deploy/server-constraints.txt \
   -e '/srv/dsh-mcp-gateway[server]'
 

@@ -217,6 +217,10 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("timeout --signal=TERM --kill-after=10s 600s", script)
         self.assertIn("/opt/dsh-runtime/node/bin/npm ci", script)
         self.assertIn(
+            "timeout --signal=TERM --kill-after=10s 600s \\\n  /srv/dsh-mcp-gateway/.venv/bin/python -m pip install",
+            script,
+        )
+        self.assertIn(
             "curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/healthz",
             script,
         )

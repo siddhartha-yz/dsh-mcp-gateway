@@ -60,7 +60,7 @@ class DurableSessionRuntime:
     def _secure_sidecars(self) -> None:
         parent_fd = self._open_parent_dir()
         try:
-            for suffix in ("-wal", "-shm"):
+            for suffix in ("-journal", "-wal", "-shm"):
                 try:
                     fd = os.open(
                         f"{self.database.name}{suffix}",

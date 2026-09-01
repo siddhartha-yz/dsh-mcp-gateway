@@ -297,6 +297,22 @@ class DurableSessionRuntimeTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
             self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
 
+    def test_sqlite_database_rejects_symlinked_journal_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sessions.sqlite3"
+            runtime = DurableSessionRuntime(path)
+            target = root / "target.txt"
+            target.write_text("sentinel\n", encoding="utf-8")
+            target.chmod(0o644)
+            Path(f"{path}-journal").symlink_to(target)
+
+            with self.assertRaises(OSError):
+                runtime.manage(action="list")
+
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+            self.assertEqual(target.read_text(encoding="utf-8"), "sentinel\n")
+
     def test_sqlite_database_rejects_hard_linked_sidecar_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

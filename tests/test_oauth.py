@@ -79,6 +79,38 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
             admin_pin="test-admin-pin",
         )
 
+    def test_sqlite_sidecars_are_rechecked_after_connect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OAuthStore(Path(tmp) / "oauth.sqlite3")
+            real_connect = sqlite3.connect
+            closed: list[bool] = []
+
+            class TrackingConnection:
+                def __init__(self, connection):
+                    object.__setattr__(self, "connection", connection)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def __setattr__(self, name, value):
+                    setattr(self.connection, name, value)
+
+                def close(self):
+                    closed.append(True)
+                    self.connection.close()
+
+            def tracking_connect(*args, **kwargs):
+                return TrackingConnection(real_connect(*args, **kwargs))
+
+            with (
+                patch.object(store, "_secure_sidecars", side_effect=[None, OSError("sidecar race")]),
+                patch("dsh_mcp_gateway.oauth.sqlite3.connect", side_effect=tracking_connect),
+                self.assertRaisesRegex(OSError, "sidecar race"),
+            ):
+                store._connect()
+
+            self.assertEqual(closed, [True])
+
     def test_sqlite_database_is_private_before_connect_returns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "oauth.sqlite3"

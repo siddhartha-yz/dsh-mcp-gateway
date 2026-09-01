@@ -990,6 +990,29 @@ function makeContext({
 }
 
 {
+  const never = new Promise(() => {})
+  const { routes, calls } = makeContext({
+    executeHook() {
+      return never
+    },
+  })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  for (let attempt = 0; attempt < 20 && calls.execute.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.execute.length, 1)
+  res.emitClose()
+  const completedAfterDisconnect = await Promise.race([
+    pending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(completedAfterDisconnect, true)
+  assert.equal(res.state.status, undefined)
+  assert.equal(calls.warnings.length, 0)
+}
+
+{
   let readStarted = false
   const never = new Promise(() => {})
   const { routes, calls } = makeContext({

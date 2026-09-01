@@ -581,13 +581,17 @@ export function apply(ctx) {
           lateCapability => lateCapability.release(),
         )
         if (lifetime.disconnected.aborted) return
-        const result = await ctx.tools.execute({
-          callId: `chatgpt-${randomUUID()}`,
-          name: toolName,
-          arguments: toolArguments,
-          signal: lifetime.signal,
-          agent: capability.agent,
-        })
+        const result = await awaitWithinToolCallLifetime(
+          ctx.tools.execute({
+            callId: `chatgpt-${randomUUID()}`,
+            name: toolName,
+            arguments: toolArguments,
+            signal: lifetime.signal,
+            agent: capability.agent,
+          }),
+          lifetime,
+          () => {},
+        )
         if (lifetime.disconnected.aborted) return
         const materialized = await awaitWithinToolCallLifetime(
           materializeToolContent(ctx, result),

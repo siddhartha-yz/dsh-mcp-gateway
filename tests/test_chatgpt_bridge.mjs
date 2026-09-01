@@ -812,6 +812,27 @@ function makeContext({
 {
   const never = new Promise(() => {})
   const { routes, cleanups, calls } = makeContext({
+    async disposeHook() {
+      await never
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  assert.equal(res.state.status, 200)
+  assert.equal(calls.create.length, 1)
+
+  const cleanup = cleanups.get('dsh-chatgpt-bridge.capability-agent')
+  const teardownCompleted = await Promise.race([
+    cleanup().then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(teardownCompleted, true)
+  assert.equal(calls.disposed.length, 1)
+}
+
+{
+  const never = new Promise(() => {})
+  const { routes, cleanups, calls } = makeContext({
     createHook() {
       return never
     },

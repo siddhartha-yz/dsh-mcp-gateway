@@ -323,14 +323,9 @@ export function apply(ctx) {
         promise,
         leases: 0,
         stale: false,
-        settled: false,
         disposePromise: undefined,
       }
       capabilityHandles.set(helperSessionId, entry)
-      promise.then(
-        () => { entry.settled = true },
-        () => { entry.settled = true },
-      )
       promise.catch(() => {
         if (capabilityHandles.get(helperSessionId) === entry) {
           capabilityHandles.delete(helperSessionId)
@@ -392,21 +387,16 @@ export function apply(ctx) {
   }
 
   ctx.effect(() => async () => {
-    const settledDisposals = []
     for (const [helperSessionId, entry] of capabilityHandles) {
-      if (entry.settled) {
-        settledDisposals.push(forceDisposeCapabilityEntry(helperSessionId, entry))
-        continue
-      }
       if (capabilityHandles.get(helperSessionId) === entry) {
         capabilityHandles.delete(helperSessionId)
       }
-      // Agent creation/resume does not expose cancellation. Do not let an
-      // indefinitely pending DSH operation block plugin teardown; if it later
-      // succeeds, dispose the unpublished handle as soon as it arrives.
+      // DSH creation/resume and handle disposal do not expose cancellation.
+      // Teardown must therefore only trigger best-effort disposal, not wait on
+      // an operation that can stall indefinitely. Pending handles are disposed
+      // as soon as they arrive; settled handles follow the same path.
       void entry.promise.then(handle => handle.dispose(), () => {})
     }
-    await Promise.allSettled(settledDisposals)
   }, 'dsh-chatgpt-bridge.capability-agent')
 
   async function standingLookup() {

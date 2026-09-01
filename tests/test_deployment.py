@@ -107,6 +107,12 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('if name == "MANIFEST.json" and opened.st_size > 1024 * 1024:', restore)
         self.assertIn("backup manifest exceeds the 1 MiB size limit", restore)
 
+    def test_backup_rejects_manifest_larger_than_restore_limit(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+
+        self.assertIn("if len(manifest_text.encode('utf-8')) > 1024 * 1024:", backup)
+        self.assertIn("backup manifest exceeds the 1 MiB restore limit", backup)
+
     def test_restore_archive_extraction_is_bounded(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 

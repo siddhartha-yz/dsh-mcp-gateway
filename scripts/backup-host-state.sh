@@ -393,7 +393,10 @@ manifest={
  'tool_names': sorted(x['name'] for x in tools),
  'skill_names': sorted(x['name'] for x in skills),
 }
-(out/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n')
+manifest_text=json.dumps(manifest,indent=2)+'\n'
+if len(manifest_text.encode('utf-8')) > 1024 * 1024:
+    raise SystemExit('backup manifest exceeds the 1 MiB restore limit; select fewer workspace files')
+(out/'MANIFEST.json').write_text(manifest_text)
 os.chmod(out/'MANIFEST.json',0o600)
 print(f"backup manifest: tools={len(manifest['tool_names'])} skills={len(manifest['skill_names'])} workspace_files={len(workspace_files)}")
 PY

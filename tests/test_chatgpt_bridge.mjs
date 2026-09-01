@@ -382,6 +382,24 @@ function makeContext({
 }
 
 {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-bridge-preset-size-limit-'))
+  const presetPath = join(dir, 'agent.cordis.yml')
+  try {
+    writeFileSync(presetPath, Buffer.alloc(4 * 1024 * 1024 + 1, 0x61))
+    const { routes, calls } = makeContext({ presetPath })
+    const response = responseCapture()
+    await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), response)
+
+    assert.equal(response.state.status, 500)
+    assert.equal(response.state.body.error, 'bridge_error')
+    assert.equal(calls.create.length, 0)
+    assert.equal(calls.execute.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+{
   const dir = mkdtempSync(join(tmpdir(), 'dsh-bridge-preset-content-generation-'))
   const presetPath = join(dir, 'agent.cordis.yml')
   try {

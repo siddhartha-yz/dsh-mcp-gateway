@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 
 export const name = 'dsh-chatgpt-bridge'
 export const inject = ['webServer', 'tools', 'skills', 'llm', 'agents', 'agentPresets']
@@ -8,15 +8,38 @@ const PREFIX = '/api/chatgpt-bridge'
 const MAX_BODY_BYTES = 1_000_000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 const MAX_MATERIALIZED_IMAGE_BYTES = 12 * 1024 * 1024
+const MAX_PRESET_BYTES = 4 * 1024 * 1024
 const TOOL_CALL_TIMEOUT_MS = 120_000
 const EXTERNAL_PROVIDER = 'chatgpt-web-external'
 const EXTERNAL_MODEL = 'chatgpt-web'
 const CAPABILITY_SESSION_PREFIX = 'dsh-mcp-gateway-chatgpt-capability'
 
 async function presetStamp(path) {
-  const metadata = await stat(path)
-  const digest = createHash('sha256').update(await readFile(path)).digest('hex')
-  return { mtimeMs: metadata.mtimeMs, size: metadata.size, digest }
+  const handle = await open(path, 'r')
+  try {
+    const metadata = await handle.stat()
+    if (metadata.size > MAX_PRESET_BYTES) {
+      throw new Error('DSH preset exceeds the bridge fingerprint size limit')
+    }
+    const digest = createHash('sha256')
+    const chunk = Buffer.allocUnsafe(64 * 1024)
+    let size = 0
+    while (true) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null)
+      if (bytesRead === 0) break
+      size += bytesRead
+      if (size > MAX_PRESET_BYTES) {
+        throw new Error('DSH preset exceeds the bridge fingerprint size limit')
+      }
+      digest.update(chunk.subarray(0, bytesRead))
+    }
+    if (size !== metadata.size) {
+      throw new Error('DSH preset changed while computing its bridge fingerprint')
+    }
+    return { mtimeMs: metadata.mtimeMs, size, digest: digest.digest('hex') }
+  } finally {
+    await handle.close()
+  }
 }
 
 function samePresetStamp(left, right) {

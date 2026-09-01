@@ -682,6 +682,34 @@ function makeContext({
 }
 
 {
+  let activeReads = 0
+  let maxActiveReads = 0
+  const { routes } = makeContext({
+    attachments: {
+      async readImage(attachment) {
+        activeReads += 1
+        maxActiveReads = Math.max(maxActiveReads, activeReads)
+        await new Promise(resolve => setTimeout(resolve, 1))
+        activeReads -= 1
+        return { data: Buffer.from(attachment.id), ref: { mediaType: 'image/png' } }
+      },
+    },
+    executeResult: {
+      isError: false,
+      value: { images: true },
+      additionalContexts: [
+        { role: 'user', content: [{ type: 'image', attachment: { id: 'one' } }] },
+        { role: 'user', content: [{ type: 'image', attachment: { id: 'two' } }] },
+      ],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'read_images', arguments: {} }), res)
+  assert.equal(res.state.status, 200)
+  assert.equal(maxActiveReads, 1)
+}
+
+{
   const { routes } = makeContext({
     attachments: {
       async readImage() {

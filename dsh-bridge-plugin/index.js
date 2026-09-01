@@ -186,13 +186,18 @@ async function materializeToolContent(ctx, result) {
   const content = await materializeContentBlocks(ctx, result.content)
   let additionalContexts = result.additionalContexts
   if (Array.isArray(additionalContexts)) {
-    additionalContexts = await Promise.all(additionalContexts.map(async (message) => {
-      if (!message || typeof message !== 'object') return message
-      return {
+    const materializedContexts = []
+    for (const message of additionalContexts) {
+      if (!message || typeof message !== 'object') {
+        materializedContexts.push(message)
+        continue
+      }
+      materializedContexts.push({
         ...message,
         content: await materializeContentBlocks(ctx, message.content),
-      }
-    }))
+      })
+    }
+    additionalContexts = materializedContexts
   }
   return { ...result, content, additionalContexts }
 }

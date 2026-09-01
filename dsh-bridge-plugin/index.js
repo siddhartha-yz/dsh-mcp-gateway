@@ -372,7 +372,10 @@ export function apply(ctx) {
           if (released) return
           released = true
           entry.leases -= 1
-          await maybeDisposeCapabilityEntry(helperSessionId, entry)
+          // A stale helper is no longer on the request's correctness path.
+          // Its DSH dispose hook may itself stall, so do not keep a completed
+          // bridge request alive waiting for best-effort retirement.
+          void Promise.resolve(maybeDisposeCapabilityEntry(helperSessionId, entry)).catch(() => {})
         },
       }
     } catch (error) {

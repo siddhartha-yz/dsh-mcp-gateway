@@ -82,6 +82,7 @@ function makeContext({
   mountHook,
   resolveHook,
   createHook,
+  disposeHook,
   omitAgents = false,
   omitPresets = false,
   attachments,
@@ -197,6 +198,7 @@ function makeContext({
               agent: createdAgent,
               async dispose() {
                 calls.disposed.push(createdAgent.id)
+                if (disposeHook) await disposeHook(createdAgent.id, calls)
               },
             }
           },
@@ -209,6 +211,7 @@ function makeContext({
               agent: resumedAgent,
               async dispose() {
                 calls.disposed.push(resumedAgent.id)
+                if (disposeHook) await disposeHook(resumedAgent.id, calls)
               },
             }
           },
@@ -473,6 +476,45 @@ function makeContext({
 
   releaseFirst()
   await firstCall
+  assert.equal(firstRes.state.status, 200)
+  assert.equal(calls.disposed.includes(firstHelper), true)
+}
+
+{
+  let releaseFirst
+  const firstGate = new Promise(resolve => {
+    releaseFirst = resolve
+  })
+  const neverDispose = new Promise(() => {})
+  const firstHelper = expectedCapabilitySessionId('default')
+  const { routes, calls, setDefaultId } = makeContext({
+    async executeHook(input) {
+      if (input.agent.id === firstHelper) await firstGate
+      return { isError: false, value: null, content: [{ type: 'text', text: 'ok' }] }
+    },
+    async disposeHook(id) {
+      if (id === firstHelper) await neverDispose
+    },
+  })
+
+  const firstRes = responseCapture()
+  const firstCall = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), firstRes)
+  for (let attempt = 0; attempt < 20 && calls.execute.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  assert.equal(calls.execute.length, 1)
+
+  setDefaultId('alternate')
+  const secondRes = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), secondRes)
+  assert.equal(secondRes.state.status, 200)
+
+  releaseFirst()
+  const firstCompleted = await Promise.race([
+    firstCall.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(firstCompleted, true)
   assert.equal(firstRes.state.status, 200)
   assert.equal(calls.disposed.includes(firstHelper), true)
 }

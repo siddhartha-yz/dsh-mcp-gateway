@@ -261,6 +261,9 @@ export function apply(ctx) {
   }
 
   async function acquireCapabilityAgent(signal) {
+    const assertActive = () => {
+      if (signal?.aborted) throw signal.reason
+    }
     const agents = ctx.get('agents')
     const presets = ctx.get('agentPresets')
     if (!agents || !presets) {
@@ -269,13 +272,16 @@ export function apply(ctx) {
 
     const presetId = presets.defaultId
     const preset = await presets.resolve(presetId)
+    assertActive()
     const stamp = await presetStamp(preset.path)
+    assertActive()
     if (presets.defaultId !== presetId) return acquireCapabilityAgent(signal)
     const helperSessionId = capabilitySessionId(process.cwd(), presetId, preset.path, stamp)
 
     let entry = capabilityHandles.get(helperSessionId)
     if (entry?.disposePromise) {
       await entry.disposePromise
+      assertActive()
       entry = capabilityHandles.get(helperSessionId)
     }
     if (!entry) {
@@ -294,6 +300,7 @@ export function apply(ctx) {
         const persistence = ctx.get('sessionPersistence')
         if (persistence) {
           const persisted = await persistence.list()
+          assertActive()
           const persistedHelper = persisted.find(header => header.id === helperSessionId)
           if (persistedHelper) {
             assertPersistedHelperHeader(persistedHelper, process.cwd(), presetId)
@@ -304,6 +311,7 @@ export function apply(ctx) {
             })
           }
         }
+        assertActive()
         return agents.create({
           sessionId: helperSessionId,
           agentOptions,

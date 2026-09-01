@@ -809,6 +809,33 @@ function makeContext({
   assert.equal(state.calls.execute.length, 1)
 }
 
+
+{
+  let releaseResolve
+  const resolveGate = new Promise(resolve => {
+    releaseResolve = resolve
+  })
+  const { routes, calls } = makeContext({
+    async resolveHook() {
+      await resolveGate
+    },
+  })
+  const res = responseCapture()
+  const pending = routes.get(`${PREFIX}/call`)(postJson({ name: 'bash', arguments: {} }), res)
+  await new Promise(resolve => setImmediate(resolve))
+  res.emitClose()
+  const completedAfterDisconnect = await Promise.race([
+    pending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50)),
+  ])
+  assert.equal(completedAfterDisconnect, true)
+  assert.equal(calls.create.length, 0)
+
+  releaseResolve()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.create.length, 0)
+}
+
 {
   const never = new Promise(() => {})
   const { routes, cleanups, calls } = makeContext({

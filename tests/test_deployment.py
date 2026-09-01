@@ -86,6 +86,13 @@ class DeploymentTemplateTests(unittest.TestCase):
             backup,
         )
 
+    def test_backup_capability_snapshots_are_size_bounded(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+
+        self.assertEqual(backup.count("--max-filesize 16777216"), 2)
+        self.assertIn("/api/chatgpt-bridge/tools", backup)
+        self.assertIn("/api/chatgpt-bridge/skills", backup)
+
     def test_restore_rejects_archives_that_exceed_available_disk_space(self) -> None:
         restore = VERIFY_BACKUP.read_text(encoding="utf-8")
 

@@ -186,8 +186,10 @@ cleanup_partial_output() {
 trap cleanup_partial_output EXIT
 
 # Snapshot the live capability surface before making the backup offline.
-curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT_IO/tools-before.json"
-curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3080/api/chatgpt-bridge/skills > "$OUTPUT_IO/skills-before.json"
+curl -fsS --connect-timeout 2 --max-time 5 --max-filesize 16777216 \
+  http://127.0.0.1:3080/api/chatgpt-bridge/tools > "$OUTPUT_IO/tools-before.json"
+curl -fsS --connect-timeout 2 --max-time 5 --max-filesize 16777216 \
+  http://127.0.0.1:3080/api/chatgpt-bridge/skills > "$OUTPUT_IO/skills-before.json"
 chmod 0600 "$OUTPUT_IO/tools-before.json" "$OUTPUT_IO/skills-before.json"
 
 HOST_WAS_ACTIVE=0

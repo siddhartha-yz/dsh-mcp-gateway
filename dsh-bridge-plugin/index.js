@@ -7,6 +7,7 @@ export const inject = ['webServer', 'tools', 'skills', 'llm', 'agents', 'agentPr
 const PREFIX = '/api/chatgpt-bridge'
 const MAX_BODY_BYTES = 1_000_000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+const MAX_MATERIALIZED_IMAGE_BYTES = 12 * 1024 * 1024
 const TOOL_CALL_TIMEOUT_MS = 120_000
 const EXTERNAL_PROVIDER = 'chatgpt-web-external'
 const EXTERNAL_MODEL = 'chatgpt-web'
@@ -156,19 +157,28 @@ async function materializeContentBlocks(ctx, blocks) {
   const attachments = ctx.get('attachments')
   if (!attachments) throw new Error('DSH attachments service is unavailable for image materialization')
 
-  return Promise.all(blocks.map(async (block) => {
-    if (block?.type !== 'image' || !block.attachment) return block
+  const materialized = []
+  for (const block of blocks) {
+    if (block?.type !== 'image' || !block.attachment) {
+      materialized.push(block)
+      continue
+    }
     const stored = await attachments.readImage(block.attachment)
     const mediaType = stored?.ref?.mediaType
     if (typeof mediaType !== 'string' || !mediaType) {
       throw new Error('DSH attachments service returned an image without a media type')
     }
-    return {
-      type: 'image',
-      data: Buffer.from(stored.data).toString('base64'),
-      mediaType,
+    const data = Buffer.from(stored.data)
+    if (data.byteLength > MAX_MATERIALIZED_IMAGE_BYTES) {
+      throw new Error('DSH attachment image exceeds the bridge materialization size limit')
     }
-  }))
+    materialized.push({
+      type: 'image',
+      data: data.toString('base64'),
+      mediaType,
+    })
+  }
+  return materialized
 }
 
 async function materializeToolContent(ctx, result) {

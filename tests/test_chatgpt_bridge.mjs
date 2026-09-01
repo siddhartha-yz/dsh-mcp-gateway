@@ -654,6 +654,53 @@ function makeContext({
 }
 
 {
+  let activeReads = 0
+  let maxActiveReads = 0
+  const { routes } = makeContext({
+    attachments: {
+      async readImage(attachment) {
+        activeReads += 1
+        maxActiveReads = Math.max(maxActiveReads, activeReads)
+        await new Promise(resolve => setTimeout(resolve, 1))
+        activeReads -= 1
+        return { data: Buffer.from(attachment.id), ref: { mediaType: 'image/png' } }
+      },
+    },
+    executeResult: {
+      isError: false,
+      value: { images: true },
+      content: [
+        { type: 'image', attachment: { id: 'one' } },
+        { type: 'image', attachment: { id: 'two' } },
+      ],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'read_images', arguments: {} }), res)
+  assert.equal(res.state.status, 200)
+  assert.equal(maxActiveReads, 1)
+}
+
+{
+  const { routes } = makeContext({
+    attachments: {
+      async readImage() {
+        return { data: Buffer.alloc(12 * 1024 * 1024 + 1), ref: { mediaType: 'image/png' } }
+      },
+    },
+    executeResult: {
+      isError: false,
+      value: { image: true },
+      content: [{ type: 'image', attachment: { id: 'oversize' } }],
+    },
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'read_image', arguments: {} }), res)
+  assert.equal(res.state.status, 500)
+  assert.equal(res.state.body.error, 'bridge_error')
+}
+
+{
   const { routes, calls } = makeContext({ executeError: new Error('/private/workspace/tool failed') })
   const res = responseCapture()
   await routes.get(`${PREFIX}/call`)(postJson({ name: ' bash ', arguments: {} }), res)

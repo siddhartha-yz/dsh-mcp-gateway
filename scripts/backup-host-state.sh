@@ -361,7 +361,7 @@ tools=json.loads((out/'tools-before.json').read_text())['tools']
 skills=json.loads((out/'skills-before.json').read_text())['skills']
 workspace_files=[]
 with tarfile.open(out/'workspace-selected.tar.gz', 'r:gz') as tf:
-    for member in tf.getmembers():
+    for member in tf:
         if not member.isfile():
             continue
         source=tf.extractfile(member)

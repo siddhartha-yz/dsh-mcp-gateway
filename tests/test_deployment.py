@@ -151,6 +151,11 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("hashlib.file_digest(restored_file, 'sha256')", validation)
         self.assertNotIn("resolved.read_bytes()", validation)
 
+    def test_backup_workspace_manifest_scans_tar_streamingly(self) -> None:
+        backup = BACKUP_HOST.read_text(encoding="utf-8")
+        self.assertIn("for member in tf:", backup)
+        self.assertNotIn("for member in tf.getmembers():", backup)
+
     def test_backup_node_version_probe_is_bounded(self) -> None:
         backup = BACKUP_HOST.read_text(encoding="utf-8")
 

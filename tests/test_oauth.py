@@ -111,6 +111,26 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(closed, [True])
 
+    def test_sqlite_schema_is_reinitialized_after_database_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "oauth.sqlite3"
+            store = OAuthStore(path)
+            with store.connection() as db:
+                self.assertEqual(
+                    db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0],
+                    0,
+                )
+
+            replacement = Path(tmp) / "replacement.sqlite3"
+            sqlite3.connect(replacement).close()
+            replacement.replace(path)
+
+            with store.connection() as db:
+                self.assertEqual(
+                    db.execute("SELECT count(*) FROM oauth_clients").fetchone()[0],
+                    0,
+                )
+
     def test_sqlite_database_is_private_before_connect_returns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "oauth.sqlite3"

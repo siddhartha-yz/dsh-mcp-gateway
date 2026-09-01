@@ -249,7 +249,7 @@ class OAuthStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._init_lock = threading.Lock()
-        self._initialized = False
+        self._initialized_identity: tuple[int, int] | None = None
 
     def _open_parent_dir(self) -> int:
         parent = self.path.parent.absolute()
@@ -314,6 +314,7 @@ class OAuthStore:
             if opened.st_nlink != 1:
                 raise OSError(f"OAuth SQLite state path has unexpected hard links: {self.path}")
             os.fchmod(fd, 0o600)
+            database_identity = (opened.st_dev, opened.st_ino)
             connection = sqlite3.connect(f"file:/proc/self/fd/{fd}?mode=rw", uri=True, timeout=5)
         finally:
             os.close(fd)
@@ -321,7 +322,7 @@ class OAuthStore:
             self._secure_sidecars()
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
-            self._ensure_schema(connection)
+            self._ensure_schema(connection, database_identity)
             return connection
         except BaseException:
             connection.close()
@@ -336,11 +337,15 @@ class OAuthStore:
         finally:
             db.close()
 
-    def _ensure_schema(self, connection: sqlite3.Connection) -> None:
-        if self._initialized:
+    def _ensure_schema(
+        self,
+        connection: sqlite3.Connection,
+        database_identity: tuple[int, int],
+    ) -> None:
+        if self._initialized_identity == database_identity:
             return
         with self._init_lock:
-            if self._initialized:
+            if self._initialized_identity == database_identity:
                 return
             connection.executescript(
                 """
@@ -472,7 +477,7 @@ class OAuthStore:
                 """
             )
             connection.commit()
-            self._initialized = True
+            self._initialized_identity = database_identity
 
     @staticmethod
     def _prune_expired(db: sqlite3.Connection, *, now: float) -> None:

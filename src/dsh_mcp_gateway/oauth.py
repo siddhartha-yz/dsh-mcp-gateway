@@ -271,7 +271,32 @@ class OAuthStore:
             os.close(fd)
             raise
 
+    def _secure_sidecars(self) -> None:
+        parent_fd = self._open_parent_dir()
+        try:
+            for suffix in ("-journal", "-wal", "-shm"):
+                try:
+                    fd = os.open(
+                        f"{self.path.name}{suffix}",
+                        os.O_RDWR | os.O_NOFOLLOW,
+                        dir_fd=parent_fd,
+                    )
+                except FileNotFoundError:
+                    continue
+                try:
+                    opened = os.fstat(fd)
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise OSError(f"OAuth SQLite sidecar path is not a regular file: {self.path}{suffix}")
+                    if opened.st_nlink != 1:
+                        raise OSError(f"OAuth SQLite sidecar path has unexpected hard links: {self.path}{suffix}")
+                    os.fchmod(fd, 0o600)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(parent_fd)
+
     def _connect(self) -> sqlite3.Connection:
+        self._secure_sidecars()
         parent_fd = self._open_parent_dir()
         try:
             fd = os.open(

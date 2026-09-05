@@ -183,6 +183,17 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("node tests/test_lsm_tool_filter.mjs", workflow)
         self.assertIn("node tests/test_chatgpt_bridge.mjs", workflow)
 
+    def test_ci_smokes_pinned_dsh_runtime_not_removed_python_sdk(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("name: DSH runtime install smoke", workflow)
+        self.assertIn("python scripts/verify-dsh-runtime-lock.py", workflow)
+        self.assertIn("working-directory: deploy/dsh-runtime", workflow)
+        self.assertIn("npm ci --no-audit --no-fund", workflow)
+        self.assertIn('test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"', workflow)
+        self.assertNotIn("deepseek_harness", workflow)
+        self.assertNotIn("DSH SDK integration imports", workflow)
+
     def test_gateway_stays_loopback_and_does_not_require_host_lifetime(self) -> None:
         unit = read_unit("dsh-mcp-gateway.service")
         unit_section = unit["Unit"]

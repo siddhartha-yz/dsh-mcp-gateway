@@ -65,7 +65,7 @@ Typical externally useful tools:
 - shell and jobs
 - deterministic utilities
 - image reading
-- skills
+- skills, via the dedicated skill meta-tools rather than generic ToolRuntime invocation
 - explicitly approved plugins
 
 Tools requiring special review before exposure include DSH-agent-oriented lifecycle/orchestration tools such as:
@@ -79,6 +79,8 @@ Tools requiring special review before exposure include DSH-agent-oriented lifecy
 - `exit_plan_mode`
 
 Acceptance goal: the catalog exposed to ChatGPT has clear semantics under the "ChatGPT is the agent" architecture.
+
+Implementation checkpoint: `chatgpt-external-v1` now filters both catalog discovery and generic execution in the DSH bridge. Its reviewed default set contains 21 external-agent tools; DSH AgentLoop lifecycle/orchestration tools and the duplicate ToolRuntime `skill` helper are reserved, while reviewed community tools can be admitted explicitly with `allowExtraTools`. The Python gateway contains no duplicate allowlist. Local regression is green; live production verification is still required before P2 is complete.
 
 ### P3 — Add a ChatGPT-oriented Logical Session / Plan capability
 

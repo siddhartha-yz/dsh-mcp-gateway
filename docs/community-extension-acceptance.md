@@ -1,5 +1,7 @@
 # Community extension acceptance
 
+The recorded runs below predate the P2 external capability profile. Their raw catalog counts remain historical evidence; under P2 a community ToolRuntime capability must also be admitted by the DSH-side ChatGPT profile (or already be part of its reviewed defaults) before `dsh_tool_catalog` / `dsh_tool_call` can expose it.
+
 This is the product-level proof for the repository contract in [`../AGENTS.md`](../AGENTS.md). It deliberately assumes ChatGPT has already approved and cached the connector's MCP tool snapshot.
 
 ## Representative extension

@@ -1,5 +1,7 @@
 # Production backup/restore acceptance
 
+This document records a **pre-P2 historical acceptance run**. Tool counts such as 34 describe the then-raw DSH-internal/ChatGPT catalog and are not the current external ChatGPT capability-profile expectation.
+
 Date: 2026-08-15
 
 This acceptance validates that the production ChatGPT -> DSH deployment can be backed up and restored without stopping or modifying unrelated projects on the host.

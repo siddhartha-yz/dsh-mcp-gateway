@@ -55,14 +55,16 @@ OAuth MCP gateway
 ChatGPT Web
 ```
 
-The primary compatibility surface is deliberately small and stable. ChatGPT can keep the same approved MCP tools while DSH gains new community extensions: `dsh_tool_catalog` reads the live DSH ToolRuntime catalog and `dsh_tool_call` executes any discovered capability through `ctx.tools.execute(...)`, so DSH policy/guards remain authoritative. This path does not require ChatGPT to refresh or re-approve its MCP tool snapshot.
+The primary compatibility surface is deliberately small and stable. ChatGPT can keep the same approved MCP tools while DSH gains reviewed community extensions: `dsh_tool_catalog` reads the live preset-scoped ToolRuntime catalog after the DSH-side `chatgpt-external-v1` capability profile has projected it, and `dsh_tool_call` executes only tools that are still approved by that profile through `ctx.tools.execute(...)`. DSH policy/guards therefore remain authoritative, and this path does not require ChatGPT to refresh or re-approve its MCP tool snapshot.
 
 Generic Harness operations cover both DSH tools and DSH community skills:
 
-- `dsh_tool_catalog`: reads the current DSH `ToolRuntime` schema catalog.
-- `dsh_tool_call`: executes a discovered tool through DSH's guarded `ToolRuntime` pipeline.
+- `dsh_tool_catalog`: reads the current external-ChatGPT projection of DSH `ToolRuntime`.
+- `dsh_tool_call`: executes a tool only while it remains approved and present in that projection, through DSH's guarded `ToolRuntime` pipeline.
 - `dsh_skill_catalog`: lists model-invocable entries from DSH's native `SkillRegistry` for the Harness workspace.
 - `dsh_skill_load`: loads one compatible community skill's instructions from that registry.
+
+The default `chatgpt-external-v1` profile covers deterministic utilities, filesystem operations, shell/jobs, web access, image reading, and DSH plugin discovery. DSH AgentLoop lifecycle/orchestration tools such as goal/todo control, subagents, `workflow`, `ralph`, `send_message`, `ask_user_question`, and `exit_plan_mode` are excluded from both discovery and guessed-name execution. The ToolRuntime `skill` helper is also excluded because skills already have the dedicated `dsh_skill_catalog` / `dsh_skill_load` surface. Reviewed community ToolRuntime entries can be added one by one with `allowExtraTools` in the DSH bridge overlay; reserved AgentLoop and skill names cannot be enabled through that generic opt-in. The OAuth gateway contains no copy of this policy.
 
 The default gateway mode is deliberately **meta-only**: `tools/list` exposes only those four stable DSH meta-tools, individual DSH ToolRuntime schemas are not projected into ChatGPT, and the gateway does not advertise the modern tool-list change subscription. This makes the frozen-snapshot property an enforced protocol boundary rather than an assumption about client behavior. Operators may explicitly enable `--tool-surface projected` as a separate UX mode when they want compatible DSH tools to appear as first-class MCP tools.
 
@@ -72,7 +74,7 @@ For native DSH tools whose execution is gated by the routed model's declared mod
 
 DSH `additionalContexts` are also preserved across the external-agent boundary. DSH uses these follow-up user contexts for guard reminders and for nested Code Mode results such as an image returned by `run_code`. The bridge materializes attachment-backed images inside those contexts and the MCP adapter appends their visible text/image blocks to the tool result, so replacing DSH's own model loop with ChatGPT Web does not silently discard policy or nested multimodal context.
 
-This means adding a compatible tool or skill to the normal DSH preset composition no longer requires another Python wrapper, gateway restart, or ChatGPT app re-publication. The fixed meta-tools discover the live catalog on demand. In the optional `projected` tool-surface mode only, the DSH-side bridge tracks native `tools/change` invalidations and the gateway publishes MCP `tools/list_changed`, allowing clients that support dynamic refresh to gain first-class tool entries.
+This means adding a compatible skill needs no Python wrapper, gateway restart, or ChatGPT app re-publication. A new ToolRuntime capability likewise needs no Python wrapper, but it must be admitted by the DSH-side external capability profile (built-ins by default, reviewed community tools through `allowExtraTools`). The fixed meta-tools discover the resulting live projection on demand. In the optional `projected` tool-surface mode only, the DSH-side bridge tracks native `tools/change` invalidations and the gateway publishes MCP `tools/list_changed`, allowing clients that support dynamic refresh to gain first-class approved entries.
 
 The DSH-side bridge plugin is in [`dsh-bridge-plugin/`](dsh-bridge-plugin/) and the deployment overlay is [`deploy/dsh/chatgpt-bridge.cordis.yml`](deploy/dsh/chatgpt-bridge.cordis.yml).
 

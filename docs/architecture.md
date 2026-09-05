@@ -34,9 +34,11 @@ The default ChatGPT-facing surface is deliberately fixed to four meta-tools:
 - `dsh_skill_catalog`
 - `dsh_skill_load`
 
-`dsh_tool_catalog` and `dsh_skill_catalog` read the live preset-scoped DSH registries. `dsh_tool_call` executes through DSH `ToolRuntime.execute(...)`, so DSH remains responsible for guards and execution policy. A compatible DSH extension can therefore become usable without republishing the ChatGPT App or depending on dynamic MCP tool-list refresh.
+`dsh_skill_catalog` reads the live preset-scoped SkillRegistry. `dsh_tool_catalog` reads the preset-scoped ToolRuntime only after the DSH-side `chatgpt-external-v1` profile has projected capabilities with clear external-agent semantics. `dsh_tool_call` enforces the same profile again before executing through DSH `ToolRuntime.execute(...)`, so a hidden tool cannot be invoked merely by guessing its name. DSH remains responsible for guards, execution policy, and the external capability policy; the Python OAuth gateway does not carry a second allowlist.
 
-The optional `projected` surface is only a UX mode. It projects compatible DSH tools as first-class MCP tools and publishes tool-list changes, but correctness must never depend on it.
+The default profile admits deterministic utilities, filesystem operations, shell/jobs, web, image reading, and plugin discovery. AgentLoop lifecycle/orchestration tools remain reserved for architecture review, while reviewed community ToolRuntime entries can be explicitly admitted with the bridge's `allowExtraTools` configuration. Skills remain on their dedicated meta-tool surface.
+
+The optional `projected` surface is only a UX mode. It projects the same approved DSH tools as first-class MCP tools and publishes tool-list changes, but correctness must never depend on it.
 
 ## DSH bridge identity
 

@@ -272,6 +272,27 @@ class HarnessBridgeClientTests(unittest.TestCase):
         ):
             client.load_skill("missing")
 
+    def test_http_error_exposes_tool_unavailable_detail(self) -> None:
+        client = HarnessBridgeClient("http://127.0.0.1:3080")
+        error = HTTPError(
+            "http://127.0.0.1:3080/api/chatgpt-bridge/call",
+            404,
+            "Not Found",
+            {},
+            BytesIO(json.dumps({
+                "error": "tool_unavailable",
+                "message": "tool is unavailable in the external ChatGPT capability profile",
+            }).encode()),
+        )
+        with (
+            patch("dsh_mcp_gateway.harness_bridge.urlopen", side_effect=error),
+            self.assertRaisesRegex(
+                HarnessBridgeError,
+                "HTTP 404: tool_unavailable: tool is unavailable in the external ChatGPT capability profile",
+            ),
+        ):
+            client.call("workflow", {})
+
     def test_http_error_internal_bridge_message_is_suppressed(self) -> None:
         client = HarnessBridgeClient("http://127.0.0.1:3080")
         error = HTTPError(

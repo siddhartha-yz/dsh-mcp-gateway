@@ -1,5 +1,7 @@
 # Restart recovery acceptance
 
+The 2026-08-15 counts below are **pre-P2 historical evidence**. P2 intentionally projects a smaller external ChatGPT catalog while leaving the underlying DSH ToolRuntime composition intact.
+
 This drill verifies that the ChatGPT-facing DSH Harness composition survives real
 process death and cold process recreation from durable state. It is narrower than
 an operating-system reboot: the Cloudflare named tunnel and the host OS remain

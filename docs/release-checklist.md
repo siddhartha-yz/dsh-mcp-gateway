@@ -6,7 +6,7 @@ A checked item requires executable or recorded integration evidence; documentati
 
 ## Proven Harness gates
 
-- [x] Stable `dsh_tool_catalog` + `dsh_tool_call` meta-tools discover and invoke the live DSH `ToolRuntime` catalog without bespoke Python wrappers or a refreshed MCP tool list.
+- [x] Stable `dsh_tool_catalog` + `dsh_tool_call` meta-tools discover and invoke the DSH-side external ChatGPT capability projection without bespoke Python wrappers or a refreshed MCP tool list; discovery and guessed-name execution share the same profile.
 - [x] Projected calls execute through DSH `ToolRuntime.execute(...)`, preserving DSH guards, policy, result normalization, and scoped restrictions.
 - [x] Catalog/skill discovery uses DSH's preset standing scope without starting an Agent, Session, or turn. Tool execution lazily uses a metadata-only capability Agent/session keyed by a non-reversible hash of workspace cwd + preset id + resolved composition path + DSH's `mtimeMs`/size generation stamp plus a content digest. Stable generations resume across DSH restarts; default-preset or composition hot reloads receive a new helper, and setup fails closed if a generation changes while the helper is being created. No prompt or model-provider API key is used, and ChatGPT remains the only reasoning agent.
 - [x] DSH community skills are discovered and loaded through the native scoped `SkillRegistry` with model-invocation policy preserved.

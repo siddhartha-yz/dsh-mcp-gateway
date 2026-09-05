@@ -74,6 +74,7 @@ jobs:
 
       - name: Verify deployment JavaScript syntax
         run: |
+          node --check dsh-bridge-plugin/chatgpt-capability-profile.js
           node --check dsh-bridge-plugin/index.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_lsm_tool_filter.mjs

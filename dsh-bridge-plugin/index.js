@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { open } from 'node:fs/promises'
 
+import { buildChatGPTCapabilityProfile } from './chatgpt-capability-profile.js'
+
 export const name = 'dsh-chatgpt-bridge'
 export const inject = ['webServer', 'tools', 'skills', 'llm', 'agents', 'agentPresets']
 
@@ -247,7 +249,8 @@ async function readJson(req) {
   }
 }
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  const capabilityProfile = buildChatGPTCapabilityProfile(config)
   const capabilityHandles = new Map()
   const instanceId = randomUUID()
   let toolRevision = 1
@@ -461,11 +464,25 @@ export function apply(ctx) {
     }
   }
 
+  function externalToolSchemas(scope) {
+    return capabilityProfile.project(ctx.tools.schemas(scope))
+  }
+
+  async function assertExternalToolAvailable(toolName) {
+    if (!capabilityProfile.allows(toolName)) {
+      throw new BridgeRequestError(404, 'tool_unavailable', 'tool is unavailable in the external ChatGPT capability profile')
+    }
+    const { scope } = await standingLookup()
+    if (!externalToolSchemas(scope).some(schema => schema.name === toolName)) {
+      throw new BridgeRequestError(404, 'tool_unavailable', 'tool is unavailable in the current DSH preset')
+    }
+  }
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: `${PREFIX}/revision`,
     handler: async (_req, res) => {
-      json(res, 200, { instanceId, toolRevision, skillRevision })
+      json(res, 200, { instanceId, toolRevision, skillRevision, capabilityProfile: capabilityProfile.id })
     },
   }))
 
@@ -476,8 +493,9 @@ export function apply(ctx) {
       try {
         const { scope } = await standingLookup()
         json(res, 200, {
-          tools: ctx.tools.schemas(scope),
+          tools: externalToolSchemas(scope),
           scope: 'dsh-preset-standing',
+          capabilityProfile: capabilityProfile.id,
         })
       } catch (error) {
         replyBridgeFailure(ctx, res, 'tool catalog', error)
@@ -575,6 +593,7 @@ export function apply(ctx) {
         if (typeof toolArguments !== 'object' || toolArguments === null || Array.isArray(toolArguments)) {
           throw new BridgeRequestError(400, 'invalid_request', 'arguments must be an object when supplied')
         }
+        await assertExternalToolAvailable(toolName)
         capability = await awaitWithinToolCallLifetime(
           acquireCapabilityAgent(lifetime.signal),
           lifetime,

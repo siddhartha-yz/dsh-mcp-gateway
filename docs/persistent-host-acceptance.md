@@ -1,5 +1,7 @@
 # Persistent host acceptance
 
+The 34-tool observations below are **pre-P2 historical evidence** from the raw external catalog used at the time. P2 later introduced a smaller DSH-side external ChatGPT capability profile.
+
 This record covers the promotion of the previously validated temporary ChatGPT -> DSH stack into the long-running systemd deployment on the intended host. It is a service-level deployment acceptance, not yet the operating-system reboot acceptance.
 
 ## 2026-08-15 promotion

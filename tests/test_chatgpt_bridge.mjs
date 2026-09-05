@@ -86,6 +86,11 @@ function makeContext({
   omitAgents = false,
   omitPresets = false,
   attachments,
+  toolSchemas = [
+    { name: 'bash', description: 'bash', parameters: { type: 'object' } },
+    { name: 'read_image', description: 'read image', parameters: { type: 'object' } },
+  ],
+  bridgeConfig = {},
 } = {}) {
   const routes = new Map()
   const cleanups = new Map()
@@ -135,7 +140,7 @@ function makeContext({
     tools: {
       schemas(viewScope) {
         calls.schemas.push(viewScope)
-        return [{ name: 'bash', description: 'bash', parameters: { type: 'object' } }]
+        return toolSchemas
       },
       async execute(input) {
         calls.execute.push(input)
@@ -236,7 +241,7 @@ function makeContext({
     },
   }
 
-  apply(ctx)
+  apply(ctx, bridgeConfig)
   return {
     routes,
     cleanups,
@@ -267,6 +272,69 @@ function makeContext({
   assert.deepEqual(calls.skillList[0].scope, scope)
   assert.equal(calls.create.length, 0)
   assert.equal(calls.resume.length, 0)
+}
+
+{
+  const schemas = [
+    { name: 'bash', description: 'bash', parameters: { type: 'object' } },
+    { name: 'read', description: 'read', parameters: { type: 'object' } },
+    { name: 'skill', description: 'skill helper', parameters: { type: 'object' } },
+    { name: 'ask_user_question', description: 'agent loop', parameters: { type: 'object' } },
+    { name: 'create_goal', description: 'agent loop', parameters: { type: 'object' } },
+    { name: 'workflow', description: 'agent loop', parameters: { type: 'object' } },
+    { name: 'subagent_fork', description: 'agent loop', parameters: { type: 'object' } },
+    { name: 'third_party_tool', description: 'plugin', parameters: { type: 'object' } },
+  ]
+  const { routes, calls } = makeContext({ toolSchemas: schemas })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/tools`)({ method: 'GET' }, res)
+  assert.equal(res.state.status, 200)
+  assert.equal(res.state.body.capabilityProfile, 'chatgpt-external-v1')
+  assert.deepEqual(res.state.body.tools.map(tool => tool.name), ['bash', 'read'])
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.execute.length, 0)
+}
+
+{
+  const { routes, calls } = makeContext({
+    toolSchemas: [
+      { name: 'bash', description: 'bash', parameters: { type: 'object' } },
+      { name: 'workflow', description: 'agent loop', parameters: { type: 'object' } },
+    ],
+  })
+  const res = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'workflow', arguments: {} }), res)
+  assert.equal(res.state.status, 404)
+  assert.equal(res.state.body.error, 'tool_unavailable')
+  assert.equal(calls.create.length, 0)
+  assert.equal(calls.resume.length, 0)
+  assert.equal(calls.execute.length, 0)
+}
+
+{
+  const pluginSchema = { name: 'third_party_tool', description: 'plugin', parameters: { type: 'object' } }
+  const { routes, calls } = makeContext({
+    toolSchemas: [pluginSchema],
+    bridgeConfig: { allowExtraTools: ['third_party_tool'] },
+  })
+  const catalog = responseCapture()
+  await routes.get(`${PREFIX}/tools`)({ method: 'GET' }, catalog)
+  assert.deepEqual(catalog.state.body.tools.map(tool => tool.name), ['third_party_tool'])
+  const call = responseCapture()
+  await routes.get(`${PREFIX}/call`)(postJson({ name: 'third_party_tool', arguments: {} }), call)
+  assert.equal(call.state.status, 200)
+  assert.equal(calls.execute[0].name, 'third_party_tool')
+}
+
+{
+  assert.throws(
+    () => makeContext({ bridgeConfig: { allowExtraTools: ['workflow'] } }),
+    /cannot expose reserved tool/,
+  )
+  assert.throws(
+    () => makeContext({ bridgeConfig: { allowExtraTools: ['skill'] } }),
+    /cannot expose reserved tool/,
+  )
 }
 
 {
@@ -675,6 +743,8 @@ function makeContext({
   let activeReads = 0
   let maxActiveReads = 0
   const { routes } = makeContext({
+    toolSchemas: [{ name: 'read_images', description: 'test helper', parameters: { type: 'object' } }],
+    bridgeConfig: { allowExtraTools: ['read_images'] },
     attachments: {
       async readImage(attachment) {
         activeReads += 1
@@ -703,6 +773,8 @@ function makeContext({
   let activeReads = 0
   let maxActiveReads = 0
   const { routes } = makeContext({
+    toolSchemas: [{ name: 'read_images', description: 'test helper', parameters: { type: 'object' } }],
+    bridgeConfig: { allowExtraTools: ['read_images'] },
     attachments: {
       async readImage(attachment) {
         activeReads += 1
@@ -1083,6 +1155,8 @@ function makeContext({
 
 {
   const { routes } = makeContext({
+    toolSchemas: [{ name: 'large_result', description: 'test helper', parameters: { type: 'object' } }],
+    bridgeConfig: { allowExtraTools: ['large_result'] },
     executeResult: {
       isError: false,
       value: null,

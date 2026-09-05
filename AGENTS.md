@@ -37,6 +37,8 @@ The primary product is the thinnest practical MCP/access adapter that exposes a 
 
 ChatGPT clients may keep an approved MCP tool surface as a snapshot and may not immediately adopt later `tools/list_changed` additions. Therefore extension availability must not depend on dynamic first-class tool refresh. A small stable set of meta-tools (catalog/discovery + generic invocation) is the correctness path. First-class projection of individual DSH tools is a best-effort UX optimization only.
 
+The tool catalog consumed by those meta-tools is an explicit DSH-side external ChatGPT capability profile, not a raw dump of every ToolRuntime entry. Tools whose semantics depend on DSH owning the AgentLoop/session lifecycle must remain unavailable to ChatGPT until their external-agent semantics are reviewed. Discovery and execution must enforce the same profile, and the Python OAuth gateway must not duplicate that allowlist. Community ToolRuntime capabilities may be added through an explicit DSH-bridge opt-in after review; DSH AgentLoop lifecycle tools are not eligible for that generic escape hatch.
+
 The shipped/default gateway mode is **meta-only**: its ChatGPT-facing MCP tool list stays fixed to the stable DSH meta-tools and it does not advertise a tool-list change subscription. Dynamic first-class projection must require explicit operator opt-in and must remain a separately tested UX mode.
 
 The adapter may also contain the public-access engineering required by ChatGPT Web, such as OAuth integration, MCP transport glue, capability projection, and compatibility code that cannot live inside DSH itself.

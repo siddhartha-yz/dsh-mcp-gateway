@@ -5,3 +5,8 @@
 - insert:
     - id: chatgpt-harness-bridge
       name: /srv/dsh-mcp-gateway/dsh-bridge-plugin/index.js
+      config:
+        # Community/plugin ToolRuntime entries are external-agent capabilities
+        # only after explicit review. DSH AgentLoop lifecycle tools remain
+        # reserved and cannot be exposed through this generic opt-in list.
+        allowExtraTools: []

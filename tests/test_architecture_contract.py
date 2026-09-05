@@ -39,11 +39,17 @@ class ArchitectureContractTests(unittest.TestCase):
 
     def test_dsh_bridge_uses_native_tool_runtime_seam(self) -> None:
         plugin = (ROOT / "dsh-bridge-plugin" / "index.js").read_text(encoding="utf-8")
+        profile = (ROOT / "dsh-bridge-plugin" / "chatgpt-capability-profile.js").read_text(encoding="utf-8")
+        gateway_bridge = (ROOT / "src" / "dsh_mcp_gateway" / "harness_bridge.py").read_text(encoding="utf-8")
         overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
 
         self.assertIn("'agents', 'agentPresets'", plugin)
         self.assertIn("presets.standingKeyFor(presetId)", plugin)
         self.assertIn("ctx.tools.schemas(scope)", plugin)
+        self.assertIn("tools: externalToolSchemas(scope)", plugin)
+        self.assertNotIn("tools: ctx.tools.schemas(scope)", plugin)
+        self.assertIn("await assertExternalToolAvailable(toolName)", plugin)
+        self.assertIn("buildChatGPTCapabilityProfile", plugin)
         self.assertNotIn("scope ? 'dsh-preset-standing' : 'global'", plugin)
         self.assertIn("ctx.skills.list", plugin)
         self.assertIn("ctx.skills.get", plugin)
@@ -67,8 +73,16 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("provider: EXTERNAL_PROVIDER", plugin)
         self.assertIn("model: EXTERNAL_MODEL", plugin)
         self.assertIn("const instanceId = randomUUID()", plugin)
-        self.assertIn("{ instanceId, toolRevision, skillRevision }", plugin)
+        self.assertIn("{ instanceId, toolRevision, skillRevision, capabilityProfile: capabilityProfile.id }", plugin)
         self.assertNotIn("DEEPSEEK_API_KEY", plugin)
+        self.assertIn("chatgpt-external-v1", profile)
+        self.assertIn("DEFAULT_CHATGPT_TOOL_NAMES", profile)
+        self.assertIn("REVIEW_REQUIRED_DSH_AGENT_TOOL_NAMES", profile)
+        self.assertIn("'workflow'", profile)
+        self.assertIn("DEDICATED_CHATGPT_SURFACE_TOOL_NAMES", profile)
+        self.assertIn("'skill'", profile)
+        self.assertNotIn("DEFAULT_CHATGPT_TOOL_NAMES", gateway_bridge)
+        self.assertNotIn("REVIEW_REQUIRED_DSH_AGENT_TOOL_NAMES", gateway_bridge)
 
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")
         dsh_unit = (ROOT / "deploy" / "systemd" / "dsh-web-host.service").read_text(encoding="utf-8")
@@ -79,6 +93,7 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", dsh_unit)
         self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
         self.assertIn("dsh-bridge-plugin/index.js", overlay)
+        self.assertIn("allowExtraTools: []", overlay)
 
 
 if __name__ == "__main__":

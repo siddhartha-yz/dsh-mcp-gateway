@@ -44,6 +44,7 @@ def _http_error_detail(error: HTTPError, *, limit: int) -> str:
             "method_not_allowed",
             "request_too_large",
             "skill_unavailable",
+            "tool_unavailable",
         }:
             return "<unrecognized bridge error>"
         if code == "bridge_error":
@@ -264,9 +265,10 @@ async def watch_tool_catalog(
 class HarnessProjectionMixin:
     """Project DSH ToolRuntime schemas directly into the MCP tool surface.
 
-    The catalog is read on every tools/list request, so a newly loaded DSH
-    community tool can appear without adding a gateway wrapper or restarting
-    the gateway. Tool execution still goes through DSH ToolRuntime.
+    The catalog is read on every tools/list request from the DSH-side external
+    capability projection. A newly approved DSH community tool can appear
+    without adding a gateway wrapper or restarting the gateway. Eligibility
+    remains owned by the DSH bridge and execution still goes through ToolRuntime.
     """
 
     _dsh_harness_bridge: HarnessBridgeClient | None = None

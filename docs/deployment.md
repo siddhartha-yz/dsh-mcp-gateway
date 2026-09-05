@@ -137,7 +137,7 @@ sudo -u dsh-agent env \
 sudo systemctl restart dsh-web-host.service
 ```
 
-Restarting DSH is allowed to load a newly installed bundle; the OAuth gateway and the already-approved ChatGPT connector do not need to restart or refresh. Stable meta-tools discover the new capability from the restarted DSH ToolRuntime.
+Restarting DSH is allowed to load a newly installed bundle; the OAuth gateway and the already-approved ChatGPT connector do not need to restart or refresh. Stable meta-tools discover a new ToolRuntime capability only when the DSH-side external ChatGPT capability profile admits it; reviewed community tools are added through the bridge `allowExtraTools` list.
 
 Install the gateway:
 

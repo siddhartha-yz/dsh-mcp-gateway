@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 EXPECTED_DSH_VERSION = "0.1.2-rc.1"
 EXPECTED_PNPM_VERSION = "10.34.5"
@@ -74,6 +75,7 @@ def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str)
 
     missing_integrity: list[str] = []
     missing_version: list[str] = []
+    nonportable_resolved: list[str] = []
     for package_name, entry in packages.items():
         if package_name == "":
             continue
@@ -85,12 +87,19 @@ def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str)
         version = entry.get("version")
         if not isinstance(version, str) or not version:
             missing_version.append(package_name)
+        resolved_url = entry.get("resolved")
+        parsed = urlsplit(resolved_url) if isinstance(resolved_url, str) else None
+        if parsed is None or parsed.scheme != "https" or parsed.netloc != "registry.npmjs.org":
+            nonportable_resolved.append(package_name)
     if missing_integrity:
         sample = ", ".join(sorted(missing_integrity)[:5])
         raise ValueError(f"npm lock entries are missing sha512 integrity metadata: {sample}")
     if missing_version:
         sample = ", ".join(sorted(missing_version)[:5])
         raise ValueError(f"npm lock entries are missing versions: {sample}")
+    if nonportable_resolved:
+        sample = ", ".join(sorted(nonportable_resolved)[:5])
+        raise ValueError(f"npm lock entries must resolve from https://registry.npmjs.org: {sample}")
 
     return len(packages) - 1, str(dsh_entry["integrity"])
 

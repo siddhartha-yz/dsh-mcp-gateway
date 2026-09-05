@@ -1962,6 +1962,26 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(rejected_policy.returncode, 1)
         self.assertIn("exact reviewed install-script policy", rejected_policy.stderr)
 
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / "package.json", root / "package.json")
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / "package-lock.json", root / "package-lock.json")
+            lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+            lock["packages"]["node_modules/@deepseek-ai/dsh"]["resolved"] = (
+                "http://mirrors.tencentyun.com/npm/@deepseek-ai/dsh/-/dsh-0.1.2-rc.1.tgz"
+            )
+            (root / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+            rejected_registry = subprocess.run(
+                [sys.executable, str(DSH_LOCK_VERIFY), "--root", str(root)],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(rejected_registry.returncode, 1)
+        self.assertIn("must resolve from https://registry.npmjs.org", rejected_registry.stderr)
+
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:
         gateway_env = (SYSTEMD / "gateway.env.example").read_text(encoding="utf-8")
         dsh_env = (SYSTEMD / "dsh.env.example").read_text(encoding="utf-8")

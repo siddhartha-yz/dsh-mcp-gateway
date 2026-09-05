@@ -71,7 +71,8 @@ for path in \
   [[ -e "$path" ]] || { echo "required live/source path missing: $path" >&2; exit 1; }
 done
 
-python3 "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py"
+python3 "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py" \
+  --root "$SOURCE_ROOT/deploy/dsh-runtime"
 
 DSH_USER="$(systemctl show "$DSH_SERVICE" -p User --value)"
 DSH_GROUP="$(systemctl show "$DSH_SERVICE" -p Group --value)"

@@ -97,7 +97,8 @@ def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Verify deploy/dsh-runtime package.json and package-lock.json.")
-    parser.add_argument("--root", type=Path, default=Path("deploy/dsh-runtime"))
+    default_root = Path(__file__).resolve().parents[1] / "deploy" / "dsh-runtime"
+    parser.add_argument("--root", type=Path, default=default_root)
     parser.add_argument("--expected-dsh-version", default=EXPECTED_DSH_VERSION)
     parser.add_argument("--expected-pnpm-version", default=EXPECTED_PNPM_VERSION)
     return parser

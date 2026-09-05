@@ -1848,6 +1848,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('--workspace-mode "$WORKSPACE_MODE"', script)
         self.assertIn('RUNTIME_STAGE="/opt/.dsh-runtime-stage-$TMP_ID"', script)
         self.assertIn('SOURCE_STAGE="/srv/.dsh-mcp-gateway-stage-$TMP_ID"', script)
+        self.assertIn('python3 "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py" \\\n  --root "$SOURCE_ROOT/deploy/dsh-runtime"', script)
         self.assertIn('RUNTIME_OLD="/opt/.dsh-runtime-old-$TMP_ID"', script)
         self.assertIn('SOURCE_OLD="/srv/.dsh-mcp-gateway-old-$TMP_ID"', script)
         self.assertIn("rollback()", script)
@@ -1901,6 +1902,18 @@ class DeploymentTemplateTests(unittest.TestCase):
         )
         self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
         self.assertIn("dsh-runtime-lock-ok", accepted.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outside_repo = subprocess.run(
+                [sys.executable, str(DSH_LOCK_VERIFY)],
+                cwd=tmp,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(outside_repo.returncode, 0, outside_repo.stdout + outside_repo.stderr)
+        self.assertIn("dsh-runtime-lock-ok", outside_repo.stdout)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

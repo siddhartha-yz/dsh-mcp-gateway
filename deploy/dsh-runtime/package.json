@@ -2,7 +2,7 @@
   "name": "dsh-mcp-gateway-dsh-runtime",
   "private": true,
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.6",
+    "@deepseek-ai/dsh": "0.1.2-rc.1",
     "pnpm": "10.34.5"
   }
 }

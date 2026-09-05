@@ -25,7 +25,7 @@ Both HTTP listeners remain loopback-only. Only the OAuth-protected gateway is pl
 
 ## Tested runtime boundary
 
-The deployment lock currently uses `@deepseek-ai/dsh@0.1.0-rc.6`, `pnpm@10.34.5`, and Node `24.19.0`. The self-contained Node tree lives at `/opt/dsh-runtime/node`; do not silently substitute a distribution-global Node. `pnpm` is shipped inside `/opt/dsh-runtime/node_modules/.bin` because DSH's native `dsh plugin` command requires it to manage community extensions. Upgrade these pins deliberately and rerun the integration tests.
+The deployment lock currently uses `@deepseek-ai/dsh@0.1.2-rc.1`, `pnpm@10.34.5`, and Node `24.19.0`. The lock contains 583 integrity-pinned package entries. The self-contained Node tree lives at `/opt/dsh-runtime/node`; do not silently substitute a distribution-global Node. `pnpm` is shipped inside `/opt/dsh-runtime/node_modules/.bin` because DSH's native `dsh plugin` command requires it to manage community extensions. Upgrade these pins deliberately and rerun the integration tests.
 
 ```text
 /opt/dsh-runtime/                  pinned DSH CLI/runtime

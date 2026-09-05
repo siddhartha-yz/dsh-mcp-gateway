@@ -29,6 +29,8 @@ BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
 VERIFY_BACKUP = ROOT / "scripts" / "verify-backup-restore.sh"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 GATEWAY_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+DSH_RUNTIME_PACKAGE = json.loads((ROOT / "deploy" / "dsh-runtime" / "package.json").read_text(encoding="utf-8"))
+DSH_VERSION = DSH_RUNTIME_PACKAGE["dependencies"]["@deepseek-ai/dsh"]
 
 
 def read_unit(name: str) -> configparser.RawConfigParser:
@@ -1832,6 +1834,23 @@ class DeploymentTemplateTests(unittest.TestCase):
             deployment.index("systemctl enable --now dsh-web-host.service"),
         )
 
+    def test_dsh_runtime_generation_is_synchronized_across_deployment_contract(self) -> None:
+        bridge = json.loads((ROOT / "dsh-bridge-plugin" / "package.json").read_text(encoding="utf-8"))
+        peers = bridge["peerDependencies"]
+        lock = json.loads((ROOT / "deploy" / "dsh-runtime" / "package-lock.json").read_text(encoding="utf-8"))
+        bootstrap = BOOTSTRAP_HOST.read_text(encoding="utf-8")
+        preflight = PREFLIGHT.read_text(encoding="utf-8")
+        verifier = DSH_LOCK_VERIFY.read_text(encoding="utf-8")
+
+        self.assertEqual(DSH_VERSION, "0.1.2-rc.1")
+        self.assertEqual(lock["packages"][""]["dependencies"]["@deepseek-ai/dsh"], DSH_VERSION)
+        self.assertEqual(peers["@deepseek-ai/dsh-host-webserver"], DSH_VERSION)
+        self.assertEqual(peers["@deepseek-ai/dsh-tools"], DSH_VERSION)
+        self.assertEqual(peers["@deepseek-ai/cordis"], "^4.0.2")
+        self.assertIn(f'DSH_VERSION="{DSH_VERSION}"', bootstrap)
+        self.assertIn(f'TESTED_DSH_VERSION = "{DSH_VERSION}"', preflight)
+        self.assertIn(f'EXPECTED_DSH_VERSION = "{DSH_VERSION}"', verifier)
+
     def test_dsh_runtime_lock_verifier_accepts_repository_lock_and_rejects_root_drift(self) -> None:
         accepted = subprocess.run(
             [sys.executable, str(DSH_LOCK_VERIFY)],
@@ -1910,7 +1929,7 @@ class DeploymentPreflightTests(unittest.TestCase):
         dsh_bin.chmod(0o755)
         package = paths["dsh_runtime"] / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
         package.parent.mkdir(parents=True)
-        package.write_text(json.dumps({"version": "0.1.0-rc.6"}), encoding="utf-8")
+        package.write_text(json.dumps({"version": DSH_VERSION}), encoding="utf-8")
 
         venv_bin = paths["gateway_root"] / ".venv" / "bin"
         venv_bin.mkdir(parents=True)

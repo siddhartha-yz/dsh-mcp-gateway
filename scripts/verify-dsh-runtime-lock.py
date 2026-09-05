@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-EXPECTED_DSH_VERSION = "0.1.0-rc.6"
+EXPECTED_DSH_VERSION = "0.1.2-rc.1"
 EXPECTED_PNPM_VERSION = "10.34.5"
 EXPECTED_LOCKFILE_VERSION = 3
 

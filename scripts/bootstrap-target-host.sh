@@ -2,7 +2,7 @@
 set -euo pipefail
 
 NODE_VERSION="24.19.0"
-DSH_VERSION="0.1.0-rc.6"
+DSH_VERSION="0.1.2-rc.1"
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 START_SERVICES=1
 REPLACE_SOURCE=0

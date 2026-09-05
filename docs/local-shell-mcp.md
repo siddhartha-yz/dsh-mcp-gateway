@@ -25,7 +25,7 @@ The public gateway and the internal execution MCP are different trust boundaries
 
 ## Current tool surface
 
-This integration is intentionally opt-in. local-shell-mcp 4.0.0 publishes 43 MCP tools internally, while DSH rc6's `dsh-mcp-client` has no per-server filter. The overlay therefore adds a tiny host plugin that uses DSH's agent-scoped `ctx.tools.restrict()` seam to hide redundant LSM tools coherently from model presentation, lookup, and execution.
+This integration is intentionally opt-in. The original local-shell-mcp 4.0.0 acceptance exposed 43 MCP tools internally, while the then-current DSH rc6 `dsh-mcp-client` had no per-server filter. The overlay therefore adds a tiny host plugin that uses DSH's agent-scoped `ctx.tools.restrict()` seam to hide redundant LSM tools coherently from model presentation, lookup, and execution. The supported `0.1.2-rc.1` baseline retains that restriction seam; the counts below remain historical rc6 acceptance evidence rather than a claim that the optional LSM composition was re-run for P1.
 
 The default model-facing LSM subset is seven differentiated capabilities:
 

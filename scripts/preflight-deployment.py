@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-TESTED_DSH_VERSION = "0.1.0-rc.6"
+TESTED_DSH_VERSION = "0.1.2-rc.1"
 TESTED_NODE_VERSION = "24.19.0"
 MIN_PYTHON = (3, 11)
 

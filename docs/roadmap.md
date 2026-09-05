@@ -36,9 +36,9 @@ Historical design evidence may be retained in an archive document if useful, but
 
 Acceptance result: the gateway production path now consists of OAuth/MCP transport plus the DSH Harness bridge; the old gateway-owned harness runtime is retained only in git history.
 
-### P1 — Upgrade the DSH runtime baseline
+### P1 — Upgrade the DSH runtime baseline — COMPLETE
 
-Move the deployment away from the old `0.1.0-rc.6` baseline and revalidate every bridge seam used by the project.
+Moved the deployment from the old `0.1.0-rc.6` baseline to `0.1.2-rc.1` and revalidated every bridge seam used by the project.
 
 Current bridge-sensitive seams include:
 
@@ -51,7 +51,7 @@ Current bridge-sensitive seams include:
 
 Upgrade conservatively: prefer a current release-candidate baseline over an alpha unless an alpha-only capability is required.
 
-Acceptance goal: live runtime, deployment lockfile, bridge peer dependencies, tests, and local reference source all describe the same supported DSH generation.
+Acceptance result: live runtime, deployment lockfile, bridge peer dependencies, tests, and the pinned local reference source all describe DSH `0.1.2-rc.1`. Post-upgrade verification from ChatGPT confirmed the four stable `dsh_*` meta tools, a 34-tool DSH ToolRuntime catalog, one native skill, live bridge/gateway readiness, and successful guarded tool execution.
 
 ### P2 — Define an external ChatGPT capability profile
 

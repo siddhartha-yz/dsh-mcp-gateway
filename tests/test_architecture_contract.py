@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 import unittest
 from pathlib import Path
 
@@ -27,45 +25,17 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("AGENTS.md", architecture)
         self.assertIn("give ChatGPT Web a mature DSH Harness", architecture)
 
-    def test_primary_cli_import_does_not_eagerly_load_legacy_runtime_modules(self) -> None:
-        code = """
-import json
-import sys
-import dsh_mcp_gateway.cli
-names = [
-    'dsh_mcp_gateway.backend',
-    'dsh_mcp_gateway.routing',
-    'dsh_mcp_gateway.session_runtime',
-]
-print(json.dumps([name for name in names if name in sys.modules]))
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.stdout.strip(), "[]")
+    def test_legacy_gateway_runtime_modules_are_removed(self) -> None:
+        package = ROOT / "src" / "dsh_mcp_gateway"
+        for name in ("backend.py", "routing.py", "session_runtime.py", "types.py"):
+            with self.subTest(name=name):
+                self.assertFalse((package / name).exists())
 
-    def test_legacy_top_level_exports_remain_lazy_and_compatible(self) -> None:
-        code = """
-import json
-import sys
-import dsh_mcp_gateway
-before = 'dsh_mcp_gateway.backend' in sys.modules
-_ = dsh_mcp_gateway.PublicSdkBridge
-after = 'dsh_mcp_gateway.backend' in sys.modules
-print(json.dumps([before, after]))
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.stdout.strip(), "[false, true]")
+        import dsh_mcp_gateway
+
+        for name in ("PublicSdkBridge", "GatewayService", "DurableSessionRuntime"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(dsh_mcp_gateway, name))
 
     def test_dsh_bridge_uses_native_tool_runtime_seam(self) -> None:
         plugin = (ROOT / "dsh-bridge-plugin" / "index.js").read_text(encoding="utf-8")

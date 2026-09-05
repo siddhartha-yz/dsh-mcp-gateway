@@ -19,7 +19,7 @@ public HTTPS reverse proxy / tunnel
     tools / skills / plugins
 ```
 
-ChatGPT is the reasoning agent. The DSH process is a Harness host and **does not need a model-provider API key** for this path. The checked-in DSH service always loads `deploy/dsh/chatgpt-bridge.cordis.yml`; the public gateway points at it with `--dsh-harness-url` and explicitly uses `--tool-surface meta-only`. The legacy autonomous DSH Web API adapter is documented separately in [`legacy-dsh-prototype.md`](legacy-dsh-prototype.md) and is not part of this deployment.
+ChatGPT is the reasoning agent. The DSH process is a Harness host and **does not need a model-provider API key** for this path. The checked-in DSH service always loads `deploy/dsh/chatgpt-bridge.cordis.yml`; the public gateway points at it with `--dsh-harness-url` and explicitly uses `--tool-surface meta-only`. Gateway-owned autonomous DSH/session runtimes were removed in P0 and remain available only through git history.
 
 Both HTTP listeners remain loopback-only. Only the OAuth-protected gateway is placed behind public HTTPS; never expose port 3080 directly.
 
@@ -200,7 +200,7 @@ The gateway unit launches with:
 --tool-surface meta-only
 ```
 
-These distinctions are release invariants: production must not silently fall back to the legacy `--dsh-web-url` autonomous-agent adapter or silently enable first-class DSH projection. Operators can test the latter separately with `--tool-surface projected`.
+These distinctions are release invariants: production uses the DSH Harness bridge and must not silently enable first-class DSH projection. Operators can test projection separately with `--tool-surface projected`.
 
 ## Health and readiness
 

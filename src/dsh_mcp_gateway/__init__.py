@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
-from os import PathLike
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .harness_bridge import (
     HarnessBridgeClient,
@@ -16,54 +14,18 @@ from .harness_bridge import (
 )
 from .mcp_compat import disable_modern_subscriptions
 
-if TYPE_CHECKING:
-    from .backend import PublicSdkBridge, PublicSdkClient
-    from .routing import GatewayService
-    from .session_runtime import DurableSessionRuntime
-
 __version__ = "0.1.0"
-
-_LEGACY_EXPORTS = {
-    "PublicSdkBridge": (".backend", "PublicSdkBridge"),
-    "PublicSdkClient": (".backend", "PublicSdkClient"),
-    "SessionCatalog": (".backend", "SessionCatalog"),
-    "GatewayService": (".routing", "GatewayService"),
-    "DurableSessionRuntime": (".session_runtime", "DurableSessionRuntime"),
-}
-
-
-def __getattr__(name: str) -> Any:
-    target = _LEGACY_EXPORTS.get(name)
-    if target is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from importlib import import_module
-
-    module_name, attribute = target
-    value = getattr(import_module(module_name, __name__), attribute)
-    globals()[name] = value
-    return value
 
 
 def build_mcp_server(
-    service: GatewayService | None,
+    harness_bridge: HarnessBridgeClient | None,
     *,
-    session_runtime: DurableSessionRuntime | None = None,
-    harness_bridge: HarnessBridgeClient | None = None,
     project_dsh_tools: bool = False,
     auth_server_provider: Any | None = None,
     auth: Any | None = None,
     _server_cls: Any | None = None,
 ) -> Any:
-    """Build one mutually exclusive MCP runtime surface."""
-    runtime_modes = sum(
-        (
-            service is not None,
-            session_runtime is not None,
-            harness_bridge is not None,
-        )
-    )
-    if runtime_modes > 1:
-        raise ValueError("service, session_runtime, and harness_bridge are mutually exclusive runtime modes")
+    """Build the ChatGPT-facing MCP surface over one DSH Harness bridge."""
     if project_dsh_tools and harness_bridge is None:
         raise ValueError("project_dsh_tools requires harness_bridge")
 
@@ -115,54 +77,33 @@ def build_mcp_server(
             (HarnessProjectionMixin, server_cls),
             {},
         )
+
+    instructions = (
+        "DSH is the harness authority and ChatGPT is the reasoning agent. The stable meta-tools "
+        "dsh_tool_catalog/dsh_tool_call and dsh_skill_catalog/dsh_skill_load are the correctness path for DSH "
+        "community extensions: use them to discover and invoke capabilities even if the ChatGPT client keeps a "
+        "frozen MCP tool snapshot."
+        + (
+            " This server also projects compatible DSH ToolRuntime capabilities as first-class MCP tools as an "
+            "explicit optional UX mode; extension availability must not depend on that projection."
+            if project_dsh_tools
+            else " This server is in meta-only mode, so DSH-internal tools are intentionally absent from the MCP tool list."
+        )
+    )
     mcp = server_cls(
         "dsh-mcp-gateway",
         version=__version__,
-        description=(
-            "Expose DSH Harness capabilities to ChatGPT Web."
-            if harness_bridge is not None
-            else (
-                "Legacy durable ChatGPT runtime control plane with an experimental DSH adapter."
-                if session_runtime is not None
-                else "Control long-lived DeepSeek Harness agent sessions."
-            )
-        ),
-        instructions=(
-            "DSH is the harness authority and ChatGPT is the reasoning agent. The stable meta-tools "
-            "dsh_tool_catalog/dsh_tool_call and dsh_skill_catalog/dsh_skill_load are the correctness path for DSH "
-            "community extensions: use them to discover and invoke capabilities even if the ChatGPT client keeps a "
-            "frozen MCP tool snapshot."
-            + (
-                " This server also projects compatible DSH ToolRuntime capabilities as first-class MCP tools as an "
-                "explicit optional UX mode; extension availability must not depend on that projection."
-                if project_dsh_tools
-                else " This server is in meta-only mode, so DSH-internal tools are intentionally absent from the MCP tool list."
-            )
-            if harness_bridge is not None
-            else (
-            "Use session_manage(action='start') before substantial work, keep the returned session_id and "
-            "active_run.run_id as session_run_id, and report semantic checkpoints. A later ChatGPT run should call "
-            "session_manage(action='resume', session_id=..., takeover=true) before continuing. "
-            "The dsh_* tools are a legacy experimental adapter and are not required for ChatGPT-driven runtime sessions."
-            if session_runtime is not None
-            else (
-                "Use dsh_start for a new task and keep its session_id. "
-                "When reconnecting, use dsh_status and dsh_messages for a compact transcript; use dsh_history or "
-                "dsh_history_page only when raw event detail is needed. Use dsh_search to recover an older session "
-                "from remembered message text, then dsh_continue to steer it later."
-            )
-            )
-        ),
+        description="Expose DSH Harness capabilities to ChatGPT Web.",
+        instructions=instructions,
         auth_server_provider=auth_server_provider,
         auth=auth,
         lifespan=harness_lifespan,
     )
+
     if harness_bridge is not None and not project_dsh_tools:
         disable_modern_subscriptions(mcp)
     if harness_bridge is not None:
         mcp._dsh_harness_bridge = harness_bridge
-
-    if harness_bridge is not None:
 
         @mcp.tool(name="dsh_tool_catalog", annotations=read_only)
         def dsh_tool_catalog() -> dict[str, Any]:
@@ -186,173 +127,13 @@ def build_mcp_server(
             """Load one DSH community skill's instructions through the native SkillRegistry."""
             return {"skill": harness_bridge.load_skill(name)}
 
-    if session_runtime is not None:
-
-        @mcp.tool(name="session_manage", annotations=consequential_control)
-        def session_manage(
-            action: str,
-            session_id: str | None = None,
-            session_run_id: str | None = None,
-            label: str | None = None,
-            objective: str | None = None,
-            summary: str | None = None,
-            findings: list[str] | None = None,
-            next: str | None = None,
-            blockers: list[str] | None = None,
-            takeover: bool = False,
-        ) -> dict[str, Any]:
-            """Manage durable ChatGPT task state without invoking any model provider."""
-            return session_runtime.manage(
-                action=action,
-                session_id=session_id,
-                run_id=session_run_id,
-                label=label,
-                objective=objective,
-                summary=summary,
-                findings=findings,
-                next=next,
-                blockers=blockers,
-                takeover=takeover,
-            )
-
-    if service is not None:
-
-        @mcp.tool(name="dsh_start", annotations=consequential_control)
-        def dsh_start(prompt: str, session_id: str | None = None) -> dict[str, str]:
-            """Start work in a new or explicitly named DSH session and return a receipt."""
-            return service.start(prompt, session_id=session_id).as_dict()
-
-        @mcp.tool(name="dsh_continue", annotations=consequential_control)
-        def dsh_continue(session_id: str, prompt: str) -> dict[str, str]:
-            """Send another instruction to the same durable DSH session."""
-            return service.continue_session(session_id, prompt).as_dict()
-
-        @mcp.tool(name="dsh_status", annotations=read_only)
-        def dsh_status(session_id: str) -> dict[str, Any]:
-            """Read the current state of one DSH session."""
-            return service.status(session_id)
-
-        @mcp.tool(name="dsh_history", annotations=read_only)
-        def dsh_history(session_id: str, limit: int = 100) -> list[dict[str, Any]]:
-            """Read the newest durable or projected events for one DSH session."""
-            return service.history(session_id, limit=limit)
-
-        @mcp.tool(name="dsh_history_page", annotations=read_only)
-        def dsh_history_page(
-            session_id: str,
-            before_seq: int | None = None,
-            max_messages: int = 50,
-        ) -> dict[str, Any]:
-            """Read one durable history page backwards; use next_before_seq to load older pages."""
-            return service.history_page(
-                session_id,
-                before_seq=before_seq,
-                max_messages=max_messages,
-            )
-
-        @mcp.tool(name="dsh_messages", annotations=read_only)
-        def dsh_messages(
-            session_id: str,
-            before_seq: int | None = None,
-            limit: int = 20,
-        ) -> dict[str, Any]:
-            """Read a compact human/model transcript without raw tool or reasoning events."""
-            return service.messages(
-                session_id,
-                before_seq=before_seq,
-                limit=limit,
-            )
-
-        @mcp.tool(name="dsh_list", annotations=read_only)
-        def dsh_list(limit: int = 50, offset: int = 0) -> dict[str, Any]:
-            """List one bounded page of sessions; use next_offset to continue through the current snapshot."""
-            return service.list_sessions_page(limit=limit, offset=offset)
-
-        @mcp.tool(name="dsh_search", annotations=read_only)
-        def dsh_search(query: str) -> dict[str, Any]:
-            """Search durable user/assistant/steering messages and return up to 20 matching sessions."""
-            return service.search_sessions(query)
-
-        @mcp.tool(name="dsh_cancel", annotations=consequential_control)
-        def dsh_cancel(session_id: str) -> dict[str, Any]:
-            """Cancel active work in a DSH session without replacing that session."""
-            return service.cancel(session_id)
-
-        @mcp.tool(name="dsh_goal_status", annotations=read_only)
-        def dsh_goal_status(session_id: str) -> dict[str, Any]:
-            """Read the durable current goal projection for one DSH session."""
-            return service.goal_status(session_id)
-
-        @mcp.tool(name="dsh_goal_create", annotations=consequential_control)
-        def dsh_goal_create(
-            session_id: str,
-            objective: str,
-            max_goal_rounds: int | None = None,
-        ) -> dict[str, Any]:
-            """Create and arm a durable DSH goal for an existing session."""
-            return service.goal_create(
-                session_id,
-                objective,
-                max_goal_rounds=max_goal_rounds,
-            )
-
-        @mcp.tool(name="dsh_goal_edit", annotations=consequential_control)
-        def dsh_goal_edit(
-            session_id: str,
-            objective: str | None = None,
-            max_goal_rounds: int | None = None,
-        ) -> dict[str, Any]:
-            """Edit the current durable goal objective and/or round cap using its latest CAS revision."""
-            return service.goal_edit(
-                session_id,
-                objective=objective,
-                max_goal_rounds=max_goal_rounds,
-            )
-
-        @mcp.tool(name="dsh_goal_resume", annotations=consequential_control)
-        def dsh_goal_resume(session_id: str) -> dict[str, Any]:
-            """Explicitly re-arm/resume the current goal using its latest durable CAS revision."""
-            return service.goal_resume(session_id)
-
-        @mcp.tool(name="dsh_goal_pause", annotations=consequential_control)
-        def dsh_goal_pause(session_id: str) -> dict[str, Any]:
-            """Pause the current goal using its latest durable CAS revision."""
-            return service.goal_pause(session_id)
-
-        @mcp.tool(name="dsh_goal_complete", annotations=consequential_control)
-        def dsh_goal_complete(session_id: str) -> dict[str, Any]:
-            """Mark the current non-complete durable goal complete using its latest CAS revision."""
-            return service.goal_complete(session_id)
-
-        @mcp.tool(name="dsh_goal_clear", annotations=consequential_control)
-        def dsh_goal_clear(session_id: str) -> dict[str, Any]:
-            """Clear the current durable goal while retaining DSH's durable tombstone/history."""
-            return service.goal_clear(session_id)
     return mcp
 
 
-@dataclass(slots=True)
-class PublicSdkGateway:
-    """Composed MCP facade over one caller-owned public DSH SDK client."""
-
-    server: Any
-    service: GatewayService
-    bridge: PublicSdkBridge
-    oauth_provider: Any | None = None
-
-    def start(self) -> None:
-        self.bridge.start()
-
-    def close(self) -> None:
-        self.bridge.close()
-
-
 def build_embedded_oauth_server(
-    service: GatewayService | None,
+    harness_bridge: HarnessBridgeClient | None,
     config: Any,
     *,
-    session_runtime: DurableSessionRuntime | None = None,
-    harness_bridge: HarnessBridgeClient | None = None,
     project_dsh_tools: bool = False,
 ) -> tuple[Any, Any]:
     """Build a self-contained OAuth-protected MCP server plus its provider."""
@@ -403,9 +184,7 @@ def build_embedded_oauth_server(
         revocation_options=RevocationOptions(enabled=True),
     )
     server = build_mcp_server(
-        service,
-        session_runtime=session_runtime,
-        harness_bridge=harness_bridge,
+        harness_bridge,
         project_dsh_tools=project_dsh_tools,
         auth_server_provider=provider,
         auth=auth,
@@ -413,60 +192,3 @@ def build_embedded_oauth_server(
     )
     install_approval_route(server, provider)
     return server, provider
-
-
-def build_public_sdk_oauth_gateway(
-    client: PublicSdkClient,
-    catalog_path: str | PathLike[str],
-    oauth_config: Any,
-    *,
-    poll_interval_s: float = 0.05,
-    event_buffer_size: int = 2000,
-) -> PublicSdkGateway:
-    """Compose an OAuth-protected MCP facade around an initialized DSH SDK client."""
-    from .backend import PublicSdkBridge, SessionCatalog
-    from .routing import GatewayService
-
-    bridge = PublicSdkBridge(
-        client,
-        SessionCatalog(catalog_path),
-        poll_interval_s=poll_interval_s,
-        event_buffer_size=event_buffer_size,
-    )
-    service = GatewayService(bridge.backend)
-    server, oauth_provider = build_embedded_oauth_server(service, oauth_config)
-    return PublicSdkGateway(
-        server=server,
-        service=service,
-        bridge=bridge,
-        oauth_provider=oauth_provider,
-    )
-
-
-def build_public_sdk_gateway(
-    client: PublicSdkClient,
-    catalog_path: str | PathLike[str],
-    *,
-    poll_interval_s: float = 0.05,
-    event_buffer_size: int = 2000,
-) -> PublicSdkGateway:
-    """Compose MCP tools and event projection around an initialized DSH SDK client.
-
-    The caller retains ownership of the SDK client/runtime. Closing the returned
-    gateway stops only its notification subscription.
-    """
-    from .backend import PublicSdkBridge, SessionCatalog
-    from .routing import GatewayService
-
-    bridge = PublicSdkBridge(
-        client,
-        SessionCatalog(catalog_path),
-        poll_interval_s=poll_interval_s,
-        event_buffer_size=event_buffer_size,
-    )
-    service = GatewayService(bridge.backend)
-    return PublicSdkGateway(
-        server=build_mcp_server(service),
-        service=service,
-        bridge=bridge,
-    )

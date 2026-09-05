@@ -101,23 +101,6 @@ https://gateway.example.com/mcp
 
 `GET /healthz` checks the gateway process. In harness mode, `GET /readyz` checks the loopback DSH capability bridge; it never probes an LLM provider.
 
-## Optional legacy DSH adapter
-
-Earlier development explored using DeepSeek Harness as a second autonomous Agent. That is no longer the default product direction. Legacy runtime paths are explicit opt-ins; starting the gateway without selecting a runtime now fails closed instead of silently creating a gateway-owned session runtime.
-
-The experimental DSH Web Host adapter is retained only as an opt-in compatibility/research path:
-
-```sh
-dsh-mcp-gateway \
-  --public-base-url https://gateway.example.com \
-  --dsh-web-url http://127.0.0.1:3080 \
-  --dsh-cwd /path/to/workspace
-```
-
-Only when this option is supplied are the legacy `dsh_*` MCP tools registered and `/readyz` made dependent on that Host. The older gateway-owned standalone `session_manage` runtime is available only with `--legacy-session-runtime` for migration/testing. Runtime modes are mutually exclusive, and `--tool-surface projected` is valid only with `--dsh-harness-url`. Historical evidence, goal-round experiments, deployment material, and rc6 restart notes are preserved in [`docs/legacy-dsh-prototype.md`](docs/legacy-dsh-prototype.md).
-
-No DeepSeek API key is required for the primary ChatGPT-to-DSH harness path.
-
 ## Development
 
 ```sh

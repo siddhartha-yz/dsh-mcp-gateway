@@ -1,6 +1,6 @@
 # Release checklist
 
-This checklist follows the repository contract in [`../AGENTS.md`](../AGENTS.md): the release target is **ChatGPT Web connected to a mature DSH Harness**, not an autonomous second-model runtime. Historical session/goal experiments remain documented in [`legacy-dsh-prototype.md`](legacy-dsh-prototype.md) and are not primary release gates.
+This checklist follows the repository contract in [`../AGENTS.md`](../AGENTS.md): the release target is **ChatGPT Web connected to a mature DSH Harness**, not an autonomous second-model runtime. The old gateway-owned session/goal prototypes were removed from the production tree in P0 and remain available through git history.
 
 A checked item requires executable or recorded integration evidence; documentation alone is not enough.
 

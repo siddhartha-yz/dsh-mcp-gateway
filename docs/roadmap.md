@@ -17,11 +17,11 @@ ChatGPT remains the primary reasoning agent. DSH remains the harness/runtime aut
 
 ## Priority order
 
-### P0 — Remove legacy harness baggage
+### P0 — Remove legacy harness baggage — COMPLETE
 
-Before adding major features, simplify the repository around the current architecture.
+Completed before adding major features: the repository is simplified around the current architecture.
 
-Target removals or isolation from the production path include:
+Removed from the production tree:
 
 - `--dsh-web-url`
 - `--legacy-session-runtime`
@@ -34,7 +34,7 @@ Target removals or isolation from the production path include:
 
 Historical design evidence may be retained in an archive document if useful, but it should not remain production complexity.
 
-Acceptance goal: the gateway production path is visibly dominated by OAuth/MCP transport plus the DSH Harness bridge.
+Acceptance result: the gateway production path now consists of OAuth/MCP transport plus the DSH Harness bridge; the old gateway-owned harness runtime is retained only in git history.
 
 ### P1 — Upgrade the DSH runtime baseline
 

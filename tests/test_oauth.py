@@ -14,8 +14,6 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from dsh_mcp_gateway import build_embedded_oauth_server
-from dsh_mcp_gateway.routing import GatewayService
-from dsh_mcp_gateway.types import SessionHandle, SessionPresence
 
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 
@@ -40,33 +38,20 @@ if MCP_AVAILABLE:
     )
 
 
-class FakeBackend:
-    def presence(self, session_id: str) -> SessionPresence:
-        return SessionPresence.ABSENT
+class FakeHarnessBridge:
+    base_url = "http://127.0.0.1:3080"
 
-    def reuse(self, session_id: str) -> SessionHandle:
-        return SessionHandle(session_id)
-
-    def resume(self, session_id: str) -> SessionHandle:
-        return SessionHandle(session_id)
-
-    def create(self, session_id: str | None = None) -> SessionHandle:
-        return SessionHandle(session_id or "generated")
-
-    def prompt(self, session_id: str, text: str) -> str:
-        return "message-1"
-
-    def status(self, session_id: str) -> dict[str, object]:
-        return {"session_id": session_id}
-
-    def history(self, session_id: str, *, limit: int = 100) -> list[dict[str, object]]:
+    def tools(self, *, timeout_s=None):
         return []
 
-    def list_sessions(self) -> list[dict[str, object]]:
+    def skills(self):
         return []
 
-    def cancel(self, session_id: str) -> dict[str, object]:
-        return {"session_id": session_id, "canceled": False}
+    def load_skill(self, name: str):
+        raise KeyError(name)
+
+    def call(self, name: str, arguments=None):
+        return {"isError": False, "value": None, "content": []}
 
 
 @unittest.skipUnless(MCP_AVAILABLE, "install dsh-mcp-gateway[server] to test OAuth")
@@ -1214,7 +1199,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
     def test_mcp_app_contains_oauth_resource_and_approval_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
             paths = [getattr(route, "path", None) for route in app.routes]
             self.assertIn("/.well-known/oauth-authorization-server", paths)
@@ -1235,7 +1220,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 admin_pin="test-admin-pin",
                 max_registration_request_bytes=512,
             )
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
 
             with TestClient(app) as client:
@@ -1260,7 +1245,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
     def test_oversized_approval_request_is_rejected_before_form_parse(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
 
             with TestClient(app) as client:
@@ -1278,7 +1263,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
     def test_oversized_standard_oauth_form_requests_are_rejected_before_sdk_parse(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
 
             with TestClient(app) as client:
@@ -1302,7 +1287,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 admin_pin="test-admin-pin",
                 max_client_metadata_bytes=512,
             )
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
 
             with TestClient(app) as client:
@@ -1332,7 +1317,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
     def test_pin_lockout_is_scoped_to_one_pending_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
             redirect_uri = "https://example.com/chatgpt-callback"
             challenge = "challenge"
@@ -1398,7 +1383,7 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
     def test_public_client_pkce_flow_reaches_protected_mcp_and_issues_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
-            server, _provider = build_embedded_oauth_server(GatewayService(FakeBackend()), config)
+            server, _provider = build_embedded_oauth_server(FakeHarnessBridge(), config)
             app = server.streamable_http_app(streamable_http_path="/mcp", json_response=True, host="127.0.0.1")
             verifier = "v" * 48
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
@@ -1567,8 +1552,10 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(tools.status_code, 200)
                 tool_names = {tool["name"] for tool in tools.json()["result"]["tools"]}
-                self.assertIn("dsh_messages", tool_names)
-                self.assertIn("dsh_list", tool_names)
+                self.assertEqual(
+                    tool_names,
+                    {"dsh_tool_catalog", "dsh_tool_call", "dsh_skill_catalog", "dsh_skill_load"},
+                )
 
                 list_call = client.post(
                     "/mcp",
@@ -1577,17 +1564,16 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                         "jsonrpc": "2.0",
                         "id": 3,
                         "method": "tools/call",
-                        "params": {"name": "dsh_list", "arguments": {"limit": 1}},
+                        "params": {"name": "dsh_tool_catalog", "arguments": {}},
                     },
                 )
                 self.assertEqual(list_call.status_code, 200)
                 structured = list_call.json()["result"]["structuredContent"]
-                self.assertEqual(structured["items"], [])
-                self.assertEqual(structured["total"], 0)
-                self.assertFalse(structured["has_more"])
+                self.assertEqual(structured["count"], 0)
+                self.assertEqual(structured["tools"], [])
 
             restarted_server, _restarted_provider = build_embedded_oauth_server(
-                GatewayService(FakeBackend()),
+                FakeHarnessBridge(),
                 config,
             )
             restarted_app = restarted_server.streamable_http_app(
@@ -1630,11 +1616,13 @@ class EmbeddedOAuthTests(unittest.IsolatedAsyncioTestCase):
                         "jsonrpc": "2.0",
                         "id": 4,
                         "method": "tools/call",
-                        "params": {"name": "dsh_list", "arguments": {"limit": 1}},
+                        "params": {"name": "dsh_tool_catalog", "arguments": {}},
                     },
                 )
                 self.assertEqual(restarted_list_call.status_code, 200)
-                self.assertEqual(restarted_list_call.json()["result"]["structuredContent"]["items"], [])
+                restarted_structured = restarted_list_call.json()["result"]["structuredContent"]
+                self.assertEqual(restarted_structured["count"], 0)
+                self.assertEqual(restarted_structured["tools"], [])
 
                 rotated = restarted_client.post(
                     "/token",

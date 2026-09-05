@@ -53,7 +53,7 @@ Upgrade conservatively: prefer a current release-candidate baseline over an alph
 
 Acceptance result: live runtime, deployment lockfile, bridge peer dependencies, tests, and the pinned local reference source all describe DSH `0.1.2-rc.1`. Post-upgrade verification from ChatGPT confirmed the four stable `dsh_*` meta tools, a 34-tool DSH ToolRuntime catalog, one native skill, live bridge/gateway readiness, and successful guarded tool execution.
 
-### P2 — Define an external ChatGPT capability profile
+### P2 — Define an external ChatGPT capability profile — COMPLETE
 
 Do not expose every DSH ToolRuntime entry blindly through `dsh_tool_catalog`.
 
@@ -80,7 +80,7 @@ Tools requiring special review before exposure include DSH-agent-oriented lifecy
 
 Acceptance goal: the catalog exposed to ChatGPT has clear semantics under the "ChatGPT is the agent" architecture.
 
-Implementation checkpoint: `chatgpt-external-v1` now filters both catalog discovery and generic execution in the DSH bridge. Its reviewed default set contains 21 external-agent tools; DSH AgentLoop lifecycle/orchestration tools and the duplicate ToolRuntime `skill` helper are reserved, while reviewed community tools can be admitted explicitly with `allowExtraTools`. The Python gateway contains no duplicate allowlist. Local regression is green; live production verification is still required before P2 is complete.
+Acceptance result: production now exposes the `chatgpt-external-v1` capability profile with 21 externally meaningful ToolRuntime entries. DSH AgentLoop/lifecycle tools are absent from discovery and direct guessed calls such as `workflow` and `create_goal` fail closed with `tool_unavailable` before execution. Approved filesystem, shell/jobs, deterministic utilities, web, plugin discovery, and `read_image` remain usable; native Skills continue through the separate SkillRegistry meta-tools. The Python gateway contains no duplicate allowlist. Live deployment commit `998999420463f5daf42634357d9195d7fc9e9a2f` passed service readiness, guarded `bash`, image materialization, and skill-catalog verification.
 
 ### P3 — Add a ChatGPT-oriented Logical Session / Plan capability
 

@@ -299,4 +299,12 @@ The verifier checks archive hashes, restores the selected workspace files, rebas
 
 For a real disaster restore, extract the archives at their documented absolute paths, restore ownership/modes, install the exact recorded software commit/runtime pins, then start DSH before the gateway and tunnel. The software trees under `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` remain reproducible from the pinned inputs and Git commit.
 
-Before upgrading MCP or DSH: update pins in a branch, run the full tests, rerun the DSH community-tool projection smoke and public OAuth smoke, review projected tool schemas, and deploy only after the primary Harness path remains model-provider-free.
+Before upgrading MCP or DSH: update pins in a branch, run the full tests, rerun the DSH community-tool projection smoke and public OAuth smoke, review projected tool schemas, and deploy only after the primary Harness path remains model-provider-free. The pinned runtime package also carries an explicit npm `allowScripts` policy for the small set of reviewed rc1 lifecycle scripts; `verify-dsh-runtime-lock.py` treats policy drift as a release failure.
+
+For an **already-productionized** host, do not rerun `bootstrap-target-host.sh` or `promote-live-host.sh`. Those scripts own first installation/migration and may reset default service ownership. Upgrade immutable runtime/source trees in place instead:
+
+```sh
+sudo ./scripts/upgrade-live-host.sh --source /home/ubuntu/workspace/dsh-mcp-gateway
+```
+
+`upgrade-live-host.sh` reads the effective systemd user/group/workspace (including drop-ins such as a personal-workspace override), stages the new `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` trees before stopping services, runs preflight against the existing mutable state, then switches the staged trees and checks DSH tool/Skill bridge readiness plus gateway readiness. It deliberately leaves `DSH_HOME`, OAuth/config state, systemd units/drop-ins, workspace ownership, and the tunnel untouched. If post-switch readiness fails, it restores the previous runtime/source trees and restarts the old services.

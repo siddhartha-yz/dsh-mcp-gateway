@@ -23,6 +23,7 @@ DEPLOYMENT_DOC = ROOT / "docs" / "deployment.md"
 DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
+UPGRADE_LIVE = ROOT / "scripts" / "upgrade-live-host.sh"
 BOOTSTRAP_HOST = ROOT / "scripts" / "bootstrap-target-host.sh"
 PUBLIC_ORIGIN_VALIDATOR = ROOT / "scripts" / "validate-public-origin.py"
 BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
@@ -1829,10 +1830,38 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("python3 scripts/verify-dsh-runtime-lock.py", deployment)
         self.assertIn("python3 scripts/preflight-deployment.py", deployment)
         self.assertIn("python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com", deployment)
+        self.assertIn("sudo ./scripts/upgrade-live-host.sh --source /home/ubuntu/workspace/dsh-mcp-gateway", deployment)
+        self.assertIn("do not rerun `bootstrap-target-host.sh` or `promote-live-host.sh`", deployment)
         self.assertLess(
             deployment.index("python3 scripts/preflight-deployment.py"),
             deployment.index("systemctl enable --now dsh-web-host.service"),
         )
+
+    def test_live_upgrade_stages_immutable_bits_and_preserves_personal_state(self) -> None:
+        script = UPGRADE_LIVE.read_text(encoding="utf-8")
+
+        self.assertIn('DSH_USER="$(systemctl show "$DSH_SERVICE" -p User --value)"', script)
+        self.assertIn('DSH_GROUP="$(systemctl show "$DSH_SERVICE" -p Group --value)"', script)
+        self.assertIn('WORKSPACE="$(systemctl show "$DSH_SERVICE" -p WorkingDirectory --value)"', script)
+        self.assertIn('--dsh-user "$DSH_USER"', script)
+        self.assertIn('--dsh-group "$DSH_GROUP"', script)
+        self.assertIn('--workspace-mode "$WORKSPACE_MODE"', script)
+        self.assertIn('RUNTIME_STAGE="/opt/.dsh-runtime-stage-$TMP_ID"', script)
+        self.assertIn('SOURCE_STAGE="/srv/.dsh-mcp-gateway-stage-$TMP_ID"', script)
+        self.assertIn('RUNTIME_OLD="/opt/.dsh-runtime-old-$TMP_ID"', script)
+        self.assertIn('SOURCE_OLD="/srv/.dsh-mcp-gateway-old-$TMP_ID"', script)
+        self.assertIn("rollback()", script)
+        self.assertIn("unset npm_config_store_dir npm_config_cache", script)
+        self.assertIn('"$SOURCE_STAGE[server]"', script)
+        self.assertNotIn('-e "$SOURCE_STAGE[server]"', script)
+        self.assertIn('lines[0] = f"#!{interpreter}\\n"', script)
+        self.assertIn("http://127.0.0.1:3080/api/chatgpt-bridge/tools", script)
+        self.assertIn("http://127.0.0.1:3080/api/chatgpt-bridge/skills", script)
+        self.assertIn("http://127.0.0.1:18766/readyz", script)
+        self.assertNotIn("bootstrap-target-host.sh", script)
+        self.assertNotIn("chown -R", script)
+        self.assertNotIn("/etc/dsh-mcp-gateway/dsh.env", script)
+        self.assertNotIn("/etc/dsh-mcp-gateway/gateway.env", script)
 
     def test_dsh_runtime_generation_is_synchronized_across_deployment_contract(self) -> None:
         bridge = json.loads((ROOT / "dsh-bridge-plugin" / "package.json").read_text(encoding="utf-8"))
@@ -1843,6 +1872,16 @@ class DeploymentTemplateTests(unittest.TestCase):
         verifier = DSH_LOCK_VERIFY.read_text(encoding="utf-8")
 
         self.assertEqual(DSH_VERSION, "0.1.2-rc.1")
+        self.assertEqual(
+            DSH_RUNTIME_PACKAGE["allowScripts"],
+            {
+                "@deepseek-ai/dsh-subprocess-local@0.1.2-rc.1": True,
+                "@google/genai": False,
+                "koffi@3.2.1": True,
+                "node-pty@1.2.0-beta.15": True,
+                "protobufjs": False,
+            },
+        )
         self.assertEqual(lock["packages"][""]["dependencies"]["@deepseek-ai/dsh"], DSH_VERSION)
         self.assertEqual(peers["@deepseek-ai/dsh-host-webserver"], DSH_VERSION)
         self.assertEqual(peers["@deepseek-ai/dsh-tools"], DSH_VERSION)
@@ -1880,6 +1919,24 @@ class DeploymentTemplateTests(unittest.TestCase):
             )
         self.assertEqual(rejected.returncode, 1)
         self.assertIn("exact tested DSH and pnpm dependencies", rejected.stderr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / "package.json", root / "package.json")
+            shutil.copy2(ROOT / "deploy" / "dsh-runtime" / "package-lock.json", root / "package-lock.json")
+            package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+            package["allowScripts"]["@google/genai"] = True
+            (root / "package.json").write_text(json.dumps(package), encoding="utf-8")
+            rejected_policy = subprocess.run(
+                [sys.executable, str(DSH_LOCK_VERIFY), "--root", str(root)],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(rejected_policy.returncode, 1)
+        self.assertIn("exact reviewed install-script policy", rejected_policy.stderr)
 
     def test_environment_examples_contain_no_committed_secret_values(self) -> None:
         gateway_env = (SYSTEMD / "gateway.env.example").read_text(encoding="utf-8")

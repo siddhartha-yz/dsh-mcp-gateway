@@ -12,6 +12,13 @@ from typing import Any
 EXPECTED_DSH_VERSION = "0.1.2-rc.1"
 EXPECTED_PNPM_VERSION = "10.34.5"
 EXPECTED_LOCKFILE_VERSION = 3
+EXPECTED_ALLOW_SCRIPTS = {
+    "@deepseek-ai/dsh-subprocess-local@0.1.2-rc.1": True,
+    "@google/genai": False,
+    "koffi@3.2.1": True,
+    "node-pty@1.2.0-beta.15": True,
+    "protobufjs": False,
+}
 
 
 def load_object(path: Path) -> dict[str, Any]:
@@ -39,6 +46,8 @@ def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str)
     }
     if not isinstance(dependencies, dict) or dependencies != expected_dependencies:
         raise ValueError("DSH runtime package.json must contain the exact tested DSH and pnpm dependencies")
+    if package.get("allowScripts") != EXPECTED_ALLOW_SCRIPTS:
+        raise ValueError("DSH runtime package.json must contain the exact reviewed install-script policy")
     if lock.get("lockfileVersion") != EXPECTED_LOCKFILE_VERSION:
         raise ValueError(f"package-lock.json must use lockfileVersion {EXPECTED_LOCKFILE_VERSION}")
 

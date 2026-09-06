@@ -3,10 +3,17 @@
 # The plugin exposes only loopback DSH Web Host routes; public OAuth remains
 # owned by dsh-mcp-gateway.
 - insert:
+    # Passive cross-conversation engineering task state. This plugin owns no
+    # AgentLoop/model/session execution; it persists records through DSH's
+    # native storageDomain service and registers one reviewed ToolRuntime entry.
+    - id: chatgpt-task-state
+      name: /srv/dsh-mcp-gateway/dsh-task-state-plugin/index.js
+
     - id: chatgpt-harness-bridge
       name: /srv/dsh-mcp-gateway/dsh-bridge-plugin/index.js
       config:
         # Community/plugin ToolRuntime entries are external-agent capabilities
         # only after explicit review. DSH AgentLoop lifecycle tools remain
         # reserved and cannot be exposed through this generic opt-in list.
-        allowExtraTools: []
+        allowExtraTools:
+          - task_state

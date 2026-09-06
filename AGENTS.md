@@ -47,6 +47,8 @@ The adapter may also contain the public-access engineering required by ChatGPT W
 
 DSH is the harness/runtime authority. Prefer DSH-native abstractions for tools, skills, sessions, jobs, policy, MCP clients, lifecycle, and other harness concerns when they exist and are suitable.
 
+Persistent ChatGPT task records may store passive engineering context and checkpoints in DSH-owned storage. They must never own an AgentLoop, invoke a model, choose the next action, automatically continue work, or turn task `resume` into process/session/model resumption. Goal/plan/next-step fields are data for a later ChatGPT conversation, not control flow.
+
 Do not independently rebuild a competing harness in the gateway merely because local-shell-mcp or an earlier prototype had such code.
 
 ### local-shell-mcp

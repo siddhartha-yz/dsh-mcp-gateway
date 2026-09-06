@@ -178,11 +178,15 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('node-version: "24.19.0"', workflow)
         self.assertIn("node --check dsh-bridge-plugin/chatgpt-capability-profile.js", workflow)
         self.assertIn("node --check dsh-bridge-plugin/index.js", workflow)
+        self.assertIn("node --check dsh-task-state-plugin/index.js", workflow)
+        self.assertIn("node --check dsh-task-state-plugin/task-store.js", workflow)
         self.assertIn("node --check deploy/dsh/plugins/lsm-tool-filter.mjs", workflow)
         self.assertIn("node --check tests/test_lsm_tool_filter.mjs", workflow)
         self.assertIn("node --check tests/test_chatgpt_bridge.mjs", workflow)
+        self.assertIn("node --check tests/test_task_state.mjs", workflow)
         self.assertIn("node tests/test_lsm_tool_filter.mjs", workflow)
         self.assertIn("node tests/test_chatgpt_bridge.mjs", workflow)
+        self.assertIn("node tests/test_task_state.mjs", workflow)
 
     def test_ci_smokes_pinned_dsh_runtime_not_removed_python_sdk(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")

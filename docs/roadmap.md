@@ -112,6 +112,8 @@ Explicit non-goals:
 
 Acceptance goal: after a ChatGPT conversation ends, a later ChatGPT conversation can load a compact task checkpoint and continue the work predictably, while all reasoning and next-action decisions remain in ChatGPT.
 
+Implementation checkpoint: `dsh-task-state-plugin` now provides one reviewed `task_state` ToolRuntime capability backed by DSH `storageDomain`. It supports create/get/list/update/checkpoint/pause/resume/complete, bounded checkpoint history, and optimistic `if_revision` writes. An isolated DSH `0.1.2-rc.1` host proved create/checkpoint, durable JSON storage, full Host restart/reopen, passive pause/resume, list-based recovery, and stale-revision rejection without any model credential. Production and a fresh ChatGPT-conversation resume test are still required before P3 is complete.
+
 ### P4 — Add persistent shell sessions
 
 Borrow LSM's persistent-shell ergonomics because DSH's current `bash` tool starts a fresh shell for each call.

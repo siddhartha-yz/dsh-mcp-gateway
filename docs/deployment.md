@@ -272,6 +272,8 @@ Canonical state domains are:
 <workspace>/                user/project data exposed to the Harness
 ```
 
+P3 `task_state` records are stored by DSH `storageDomain` beneath `DSH_HOME` (for the JSON backend, under `storages/chatgpt_tasks/`). They therefore fall inside the existing `/var/lib/dsh-harness` backup boundary; P3 adds no new gateway state directory or backup mechanism.
+
 The workspace is deployment-specific: the isolated template uses `/srv/dsh-workspace`, while the validated personal-host override uses `/home/ubuntu/workspace`. The gateway does not claim ownership of every project under that workspace, so a DSH release backup must not silently duplicate tens of gigabytes of unrelated repositories. Use each project's Git/storage policy for full project backup and pass explicit representative workspace paths to the DSH state drill.
 
 A consistent offline DSH backup can be created with:

@@ -76,14 +76,18 @@ jobs:
         run: |
           node --check dsh-bridge-plugin/chatgpt-capability-profile.js
           node --check dsh-bridge-plugin/index.js
+          node --check dsh-task-state-plugin/index.js
+          node --check dsh-task-state-plugin/task-store.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_lsm_tool_filter.mjs
           node --check tests/test_chatgpt_bridge.mjs
+          node --check tests/test_task_state.mjs
 
       - name: Test deployment JavaScript
         run: |
           node tests/test_lsm_tool_filter.mjs
           node tests/test_chatgpt_bridge.mjs
+          node tests/test_task_state.mjs
 
       - name: Verify systemd unit syntax
         run: ./scripts/verify-systemd.sh

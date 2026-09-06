@@ -40,6 +40,8 @@ class ArchitectureContractTests(unittest.TestCase):
     def test_dsh_bridge_uses_native_tool_runtime_seam(self) -> None:
         plugin = (ROOT / "dsh-bridge-plugin" / "index.js").read_text(encoding="utf-8")
         profile = (ROOT / "dsh-bridge-plugin" / "chatgpt-capability-profile.js").read_text(encoding="utf-8")
+        task_plugin = (ROOT / "dsh-task-state-plugin" / "index.js").read_text(encoding="utf-8")
+        task_store = (ROOT / "dsh-task-state-plugin" / "task-store.js").read_text(encoding="utf-8")
         gateway_bridge = (ROOT / "src" / "dsh_mcp_gateway" / "harness_bridge.py").read_text(encoding="utf-8")
         overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
 
@@ -84,6 +86,19 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertNotIn("DEFAULT_CHATGPT_TOOL_NAMES", gateway_bridge)
         self.assertNotIn("REVIEW_REQUIRED_DSH_AGENT_TOOL_NAMES", gateway_bridge)
 
+        self.assertIn("export const inject = ['storageDomain', 'tools']", task_plugin)
+        self.assertIn("ctx.storageDomain.open(taskDomainSpec)", task_plugin)
+        self.assertIn("ctx.tools.register(createTaskStateTool(store))", task_plugin)
+        self.assertIn("name: 'task_state'", task_plugin)
+        self.assertIn("layout: 'per-record'", task_plugin)
+        self.assertNotIn("ctx.llm", task_plugin)
+        self.assertNotIn("ctx.get('agents')", task_plugin)
+        self.assertNotIn("ctx.get(\"agents\")", task_plugin)
+        self.assertNotIn("sessionPersistence", task_plugin)
+        self.assertNotIn("app.sendMessage", task_plugin)
+        self.assertNotIn("fetch(", task_store)
+        self.assertNotIn("child_process", task_store)
+
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")
         dsh_unit = (ROOT / "deploy" / "systemd" / "dsh-web-host.service").read_text(encoding="utf-8")
         dsh_env = (ROOT / "deploy" / "systemd" / "dsh.env.example").read_text(encoding="utf-8")
@@ -92,8 +107,10 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertNotIn("--dsh-web-url", gateway_unit)
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", dsh_unit)
         self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
+        self.assertIn("dsh-task-state-plugin/index.js", overlay)
         self.assertIn("dsh-bridge-plugin/index.js", overlay)
-        self.assertIn("allowExtraTools: []", overlay)
+        self.assertIn("allowExtraTools:", overlay)
+        self.assertIn("- task_state", overlay)
 
 
 if __name__ == "__main__":

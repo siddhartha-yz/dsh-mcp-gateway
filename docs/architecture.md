@@ -40,6 +40,12 @@ The default profile admits deterministic utilities, filesystem operations, shell
 
 The optional `projected` surface is only a UX mode. It projects the same approved DSH tools as first-class MCP tools and publishes tool-list changes, but correctness must never depend on it.
 
+## Persistent ChatGPT task state
+
+`dsh-task-state-plugin` adds one reviewed external capability, `task_state`, for cross-conversation engineering context. Records live in DSH's native `storageDomain`, not in the OAuth gateway or an Agent Session. They contain passive task metadata, a compact current checkpoint, candidate next steps/references, status, revision, and a bounded checkpoint history.
+
+The plugin deliberately has no LLM, AgentLoop, session-persistence, network, subprocess, or continuation dependency. `pause`, `resume`, and `complete` are record-state transitions only. Every existing-task mutation carries an optimistic `if_revision`, so a stale ChatGPT conversation must reload before it can modify newer state.
+
 ## DSH bridge identity
 
 Discovery uses the default preset standing scope and does not start a model turn. DSH currently requires an Agent identity for some execution-time policy and modality checks, so the bridge lazily creates or resumes a metadata-only capability Agent for execution. Its route declares the external ChatGPT modalities but cannot perform inference. No model-provider credential is required.

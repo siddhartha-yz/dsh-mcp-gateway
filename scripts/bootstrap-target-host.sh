@@ -73,6 +73,7 @@ for path in \
   "$SOURCE_ROOT/deploy/systemd/dsh-web-host.service" \
   "$SOURCE_ROOT/deploy/systemd/dsh-mcp-gateway.service" \
   "$SOURCE_ROOT/scripts/preflight-deployment.py" \
+  "$SOURCE_ROOT/scripts/provision-browser-deps.sh" \
   "$SOURCE_ROOT/scripts/validate-public-origin.py"; do
   [[ -f "$path" ]] || { echo "required repository file is missing: $path" >&2; exit 1; }
 done
@@ -199,6 +200,16 @@ ACTUAL_DSH_VERSION="$(timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/
   echo "installed DSH version $ACTUAL_DSH_VERSION does not match $DSH_VERSION" >&2
   exit 1
 }
+
+"$SOURCE_ROOT/scripts/provision-browser-deps.sh" --source "$SOURCE_ROOT"
+PLAYWRIGHT_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["playwright-core"])' "$SOURCE_ROOT/deploy/dsh-runtime/package.json")"
+install -d -o root -g root -m 0755 /opt/dsh-runtime/browsers
+PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers \
+  timeout --signal=TERM --kill-after=30s 600s \
+  /opt/dsh-runtime/node_modules/.bin/playwright-core install --no-shell chromium
+PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers \
+  /opt/dsh-runtime/node/bin/node -e \
+  "const fs=require('node:fs'); const {chromium}=require('/opt/dsh-runtime/node_modules/playwright-core'); fs.accessSync(chromium.executablePath(), fs.constants.X_OK); console.log('playwright=' + '$PLAYWRIGHT_VERSION' + ' chromium=' + chromium.executablePath())"
 
 if [[ -e /srv/dsh-mcp-gateway ]]; then
   if ((REPLACE_SOURCE == 0)); then

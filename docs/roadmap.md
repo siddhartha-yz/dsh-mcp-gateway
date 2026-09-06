@@ -144,6 +144,8 @@ Target capabilities:
 
 Acceptance goal: browser automation is a normal DSH plugin capability reachable through the stable meta-tool path.
 
+Implementation checkpoint: P5 is implemented as a repository-local `browser_session` ToolRuntime plugin rather than adopting `dsh-browseruse` wholesale. The reviewed third-party plugin was rejected as the production surface because it carries its own LLM-driven `browser_task`, scheduler, and process-global browser singleton. The P5 plugin instead keeps ChatGPT as the only reasoning agent and exposes only open/list/status/snapshot/act/script/close. Each live browser session is owned by the exact DSH Agent, Chromium is wrapped by the current DSH `sandboxPolicy`/`sandbox.confine` path and launched through native `subprocess`, and Agent/Host disposal tears down the browser process tree. The deployment lock pins `playwright-core` 1.62.1 and installs the matching Chromium build; host browser libraries are an explicit root provisioning step. Fake-service adapter tests pass, but CI, isolated composition, production deployment, and live browser-session acceptance are still required before P5 is complete.
+
 ### P6 — Consider a Live Workspace experience
 
 Only after sessions, persistent shell, and browser are stable, evaluate a lightweight ChatGPT-facing workspace/status UI inspired by LSM Live Workspace.

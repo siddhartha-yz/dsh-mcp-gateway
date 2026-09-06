@@ -79,11 +79,13 @@ jobs:
           node --check dsh-task-state-plugin/index.js
           node --check dsh-task-state-plugin/task-store.js
           node --check dsh-shell-session-plugin/index.js
+          node --check dsh-browser-session-plugin/index.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_lsm_tool_filter.mjs
           node --check tests/test_chatgpt_bridge.mjs
           node --check tests/test_task_state.mjs
           node --check tests/test_shell_session.mjs
+          node --check tests/test_browser_session.mjs
 
       - name: Test deployment JavaScript
         run: |
@@ -91,6 +93,7 @@ jobs:
           node tests/test_chatgpt_bridge.mjs
           node tests/test_task_state.mjs
           node tests/test_shell_session.mjs
+          node tests/test_browser_session.mjs
 
       - name: Verify systemd unit syntax
         run: ./scripts/verify-systemd.sh
@@ -149,4 +152,21 @@ jobs:
         run: |
           test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"
           node -e "Promise.all([import('@deepseek-ai/dsh-terminal'), import('@deepseek-ai/dsh-terminal-bash')])"
+          node -e "const p=require('playwright-core/package.json'); if (p.version !== '1.62.1') process.exit(1)"
           npm ls --depth=0
+
+      - name: Verify pinned Chromium launch
+        working-directory: deploy/dsh-runtime
+        run: |
+          sudo node_modules/.bin/playwright-core install-deps chromium
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/dsh-playwright-browsers"
+          node_modules/.bin/playwright-core install --no-shell chromium
+          node <<'NODE'
+          const { chromium } = require('playwright-core')
+          const browser = await chromium.launch({ headless: true })
+          const page = await browser.newPage()
+          await page.setContent('<title>P5 browser smoke</title><button id="ok">ready</button>')
+          if (await page.title() !== 'P5 browser smoke') throw new Error('unexpected Chromium page title')
+          if (await page.locator('#ok').textContent() !== 'ready') throw new Error('unexpected Chromium DOM')
+          await browser.close()
+          NODE

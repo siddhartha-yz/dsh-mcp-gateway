@@ -183,6 +183,27 @@ ACTUAL_DSH="$(PATH="$RUNTIME_STAGE/node/bin:$RUNTIME_STAGE/node_modules/.bin:/us
   exit 1
 }
 
+PLAYWRIGHT_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["playwright-core"])' "$SOURCE_ROOT/deploy/dsh-runtime/package.json")"
+PLAYWRIGHT_CLI="$RUNTIME_STAGE/node_modules/.bin/playwright-core"
+[[ -x "$PLAYWRIGHT_CLI" ]] || { echo "staged playwright-core CLI is missing" >&2; exit 1; }
+if ! BROWSER_DEPS_OUTPUT="$("$PLAYWRIGHT_CLI" install-deps --dry-run chromium 2>&1)"; then
+  printf '%s\n' "$BROWSER_DEPS_OUTPUT" >&2
+  echo "Chromium host dependencies are missing." >&2
+  echo "Run: sudo $SOURCE_ROOT/scripts/provision-browser-deps.sh --source $SOURCE_ROOT" >&2
+  exit 1
+fi
+
+BROWSER_CACHE="/var/cache/dsh-playwright/$PLAYWRIGHT_VERSION"
+install -d -o root -g root -m 0755 /var/cache/dsh-playwright "$BROWSER_CACHE"
+PLAYWRIGHT_BROWSERS_PATH="$BROWSER_CACHE" \
+  timeout --signal=TERM --kill-after=30s 600s \
+  "$PLAYWRIGHT_CLI" install --no-shell chromium
+install -d -o root -g root -m 0755 "$RUNTIME_STAGE/browsers"
+cp -a "$BROWSER_CACHE/." "$RUNTIME_STAGE/browsers/"
+PLAYWRIGHT_BROWSERS_PATH="$RUNTIME_STAGE/browsers" \
+  "$RUNTIME_STAGE/node/bin/node" -e \
+  "const fs=require('node:fs'); const {chromium}=require('$RUNTIME_STAGE/node_modules/playwright-core'); fs.accessSync(chromium.executablePath(), fs.constants.X_OK); console.log('playwright-chromium=' + chromium.executablePath())"
+
 # Stage the exact source commit and a fresh gateway virtualenv. No mutable
 # production state lives in this tree.
 echo "Staging gateway source $TARGET_COMMIT..."

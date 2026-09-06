@@ -33,6 +33,20 @@
           name: /srv/dsh-mcp-gateway/dsh-shell-session-plugin/index.js
           disabled: !!js process.platform === 'win32'
 
+    # ChatGPT-only persistent browser surface. The plugin owns session/page
+    # bookkeeping and Playwright protocol control, but Chromium itself is
+    # confined with the current DSH sandbox policy and launched through DSH's
+    # native subprocess service. It has no model loop, scheduler, or autonomous
+    # browser-task runner.
+    - id: chatgpt-browser-session-tool
+      name: /srv/dsh-mcp-gateway/dsh-browser-session-plugin/index.js
+      disabled: !!js process.platform === 'win32'
+      config:
+        runtimeRoot: /opt/dsh-runtime
+        startupTimeoutMs: 15000
+        maxSessionsGlobal: 3
+        maxSessionsPerOwner: 2
+
     - id: chatgpt-harness-bridge
       name: /srv/dsh-mcp-gateway/dsh-bridge-plugin/index.js
       config:
@@ -42,3 +56,4 @@
         allowExtraTools:
           - task_state
           - shell_session
+          - browser_session

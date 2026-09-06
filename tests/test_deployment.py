@@ -243,10 +243,13 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["User"], "dsh-agent")
         self.assertEqual(service["Group"], "dsh-agent")
         self.assertEqual(service["EnvironmentFile"], "/etc/dsh-mcp-gateway/dsh.env")
-        self.assertEqual(
-            service["Environment"],
+        environment = service["Environment"]
+        self.assertIn(
             "PATH=/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin",
+            environment,
         )
+        self.assertIn("DSH_RUNTIME_ROOT=/opt/dsh-runtime", environment)
+        self.assertIn("PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers", environment)
         self.assertEqual(service["WorkingDirectory"], "/srv/dsh-workspace")
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", command)
         self.assertIn("--host 127.0.0.1", command)
@@ -1900,12 +1903,14 @@ class DeploymentTemplateTests(unittest.TestCase):
             },
         )
         self.assertEqual(lock["packages"][""]["dependencies"]["@deepseek-ai/dsh"], DSH_VERSION)
+        self.assertEqual(lock["packages"][""]["dependencies"]["playwright-core"], "1.62.1")
         self.assertEqual(peers["@deepseek-ai/dsh-host-webserver"], DSH_VERSION)
         self.assertEqual(peers["@deepseek-ai/dsh-tools"], DSH_VERSION)
         self.assertEqual(peers["@deepseek-ai/cordis"], "^4.0.2")
         self.assertIn(f'DSH_VERSION="{DSH_VERSION}"', bootstrap)
         self.assertIn(f'TESTED_DSH_VERSION = "{DSH_VERSION}"', preflight)
         self.assertIn(f'EXPECTED_DSH_VERSION = "{DSH_VERSION}"', verifier)
+        self.assertIn('EXPECTED_PLAYWRIGHT_VERSION = "1.62.1"', verifier)
 
     def test_dsh_runtime_lock_verifier_accepts_repository_lock_and_rejects_root_drift(self) -> None:
         accepted = subprocess.run(
@@ -1947,7 +1952,7 @@ class DeploymentTemplateTests(unittest.TestCase):
                 timeout=10,
             )
         self.assertEqual(rejected.returncode, 1)
-        self.assertIn("exact tested DSH and pnpm dependencies", rejected.stderr)
+        self.assertIn("exact reviewed DSH, Playwright, and pnpm dependencies", rejected.stderr)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

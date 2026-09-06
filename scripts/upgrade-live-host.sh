@@ -17,9 +17,9 @@ Usage: sudo ./scripts/upgrade-live-host.sh [--source PATH]
 
 Stage and atomically switch an already-productionized dsh-mcp-gateway host to
 one exact clean repository commit. Existing DSH_HOME, OAuth/config state,
-systemd units/drop-ins, workspace ownership, and public tunnel state are left
-untouched. If the new DSH Host or gateway fails readiness, the old runtime and
-source tree are restored automatically.
+systemd drop-ins, workspace ownership, and public tunnel state are left
+untouched. Versioned main systemd units are upgraded transactionally with the
+runtime/source tree and restored on rollback if the new release fails.
 EOF
 }
 
@@ -47,7 +47,7 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-for command in git tar python3 systemctl curl install stat timeout mktemp; do
+for command in git tar python3 systemctl curl install stat timeout mktemp cmp; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
 
@@ -66,6 +66,10 @@ for path in \
   "$SOURCE_ROOT/deploy/dsh-runtime/package.json" \
   "$SOURCE_ROOT/deploy/dsh-runtime/package-lock.json" \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
+  "$SOURCE_ROOT/deploy/systemd/$DSH_SERVICE" \
+  "$SOURCE_ROOT/deploy/systemd/$GATEWAY_SERVICE" \
+  "$SYSTEMD_DIR/$DSH_SERVICE" \
+  "$SYSTEMD_DIR/$GATEWAY_SERVICE" \
   "$SOURCE_ROOT/scripts/preflight-deployment.py" \
   "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py"; do
   [[ -e "$path" ]] || { echo "required live/source path missing: $path" >&2; exit 1; }
@@ -95,13 +99,15 @@ RUNTIME_STAGE="/opt/.dsh-runtime-stage-$TMP_ID"
 SOURCE_STAGE="/srv/.dsh-mcp-gateway-stage-$TMP_ID"
 RUNTIME_OLD="/opt/.dsh-runtime-old-$TMP_ID"
 SOURCE_OLD="/srv/.dsh-mcp-gateway-old-$TMP_ID"
+UNIT_BACKUP_DIR="/run/dsh-mcp-gateway-upgrade-$TMP_ID"
 SERVICES_STOPPED=0
+UNITS_SWAPPED=0
 RUNTIME_SWAPPED=0
 SOURCE_SWAPPED=0
 SUCCESS=0
 
 cleanup_paths() {
-  rm -rf "$RUNTIME_STAGE" "$SOURCE_STAGE"
+  rm -rf "$RUNTIME_STAGE" "$SOURCE_STAGE" "$UNIT_BACKUP_DIR"
   if ((SUCCESS)); then
     rm -rf "$RUNTIME_OLD" "$SOURCE_OLD"
   fi
@@ -134,6 +140,12 @@ rollback() {
     RUNTIME_SWAPPED=0
   elif [[ -d "$RUNTIME_OLD" && ! -e "$RUNTIME_LIVE" ]]; then
     mv "$RUNTIME_OLD" "$RUNTIME_LIVE"
+  fi
+
+  if ((UNITS_SWAPPED)); then
+    install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/$DSH_SERVICE" "$SYSTEMD_DIR/$DSH_SERVICE" || true
+    install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/$GATEWAY_SERVICE" "$SYSTEMD_DIR/$GATEWAY_SERVICE" || true
+    UNITS_SWAPPED=0
   fi
 
   if ((SERVICES_STOPPED)); then
@@ -230,15 +242,40 @@ python3 "$SOURCE_STAGE/scripts/preflight-deployment.py" \
   --gateway-state "$GATEWAY_STATE" \
   --config-dir "$CONFIG_DIR" \
   --systemd-dir "$SYSTEMD_DIR" \
+  --allow-systemd-unit-update \
   --dsh-user "$DSH_USER" \
   --dsh-group "$DSH_GROUP" \
   --gateway-user "$GATEWAY_USER" \
   --gateway-group "$GATEWAY_GROUP"
 
+# Preserve the currently installed versioned main units and prepare the exact
+# candidate files before interrupting the live services. Existing drop-ins are
+# intentionally outside this transaction and remain untouched.
+rm -rf "$UNIT_BACKUP_DIR"
+install -d -o root -g root -m 0700 "$UNIT_BACKUP_DIR"
+for service in "$DSH_SERVICE" "$GATEWAY_SERVICE"; do
+  [[ -f "$SYSTEMD_DIR/$service" && ! -L "$SYSTEMD_DIR/$service" ]] || {
+    echo "installed main unit is not a regular file: $SYSTEMD_DIR/$service" >&2
+    exit 1
+  }
+  [[ "$(stat -c '%h' "$SYSTEMD_DIR/$service")" == 1 ]] || {
+    echo "installed main unit has unexpected hard links: $SYSTEMD_DIR/$service" >&2
+    exit 1
+  }
+  install -o root -g root -m 0644 "$SYSTEMD_DIR/$service" "$UNIT_BACKUP_DIR/$service"
+  install -o root -g root -m 0644 "$SOURCE_STAGE/deploy/systemd/$service" "$UNIT_BACKUP_DIR/new-$service"
+done
+
 # Only the switch below interrupts the ChatGPT -> DSH path.
 echo "Stopping live DSH Host and gateway..."
 systemctl stop "$GATEWAY_SERVICE" "$DSH_SERVICE"
 SERVICES_STOPPED=1
+
+# Main units are versioned deployment artifacts. Drop-ins under *.service.d are
+# deliberately preserved, including the personal-workspace override.
+UNITS_SWAPPED=1
+install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/new-$DSH_SERVICE" "$SYSTEMD_DIR/$DSH_SERVICE"
+install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/new-$GATEWAY_SERVICE" "$SYSTEMD_DIR/$GATEWAY_SERVICE"
 
 mv "$RUNTIME_LIVE" "$RUNTIME_OLD"
 if ! mv "$RUNTIME_STAGE" "$RUNTIME_LIVE"; then
@@ -293,6 +330,8 @@ LIVE_DSH="$(PATH="$RUNTIME_LIVE/node/bin:$RUNTIME_LIVE/node_modules/.bin:/usr/bi
 LIVE_COMMIT="$(cat "$SOURCE_LIVE/.deployed-git-commit")"
 [[ "$LIVE_DSH" == "$EXPECTED_DSH" ]] || { echo "unexpected live DSH version: $LIVE_DSH" >&2; exit 1; }
 [[ "$LIVE_COMMIT" == "$TARGET_COMMIT" ]] || { echo "unexpected live source commit: $LIVE_COMMIT" >&2; exit 1; }
+cmp -s "$SYSTEMD_DIR/$DSH_SERVICE" "$SOURCE_LIVE/deploy/systemd/$DSH_SERVICE" || { echo "live DSH unit does not match deployed source" >&2; exit 1; }
+cmp -s "$SYSTEMD_DIR/$GATEWAY_SERVICE" "$SOURCE_LIVE/deploy/systemd/$GATEWAY_SERVICE" || { echo "live gateway unit does not match deployed source" >&2; exit 1; }
 [[ "$(systemctl is-active "$DSH_SERVICE")" == active ]]
 [[ "$(systemctl is-active "$GATEWAY_SERVICE")" == active ]]
 

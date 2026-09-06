@@ -1870,8 +1870,15 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn('python3 "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py" \\\n  --root "$SOURCE_ROOT/deploy/dsh-runtime"', script)
         self.assertIn('RUNTIME_OLD="/opt/.dsh-runtime-old-$TMP_ID"', script)
         self.assertIn('SOURCE_OLD="/srv/.dsh-mcp-gateway-old-$TMP_ID"', script)
+        self.assertIn('UNIT_BACKUP_DIR="/run/dsh-mcp-gateway-upgrade-$TMP_ID"', script)
         self.assertIn("rollback()", script)
         self.assertIn('if ((SERVICES_STOPPED)); then\n    systemctl stop "$GATEWAY_SERVICE" "$DSH_SERVICE"', script)
+        self.assertIn("--allow-systemd-unit-update", script)
+        self.assertIn('install -o root -g root -m 0644 "$SYSTEMD_DIR/$service" "$UNIT_BACKUP_DIR/$service"', script)
+        self.assertIn('install -o root -g root -m 0644 "$SOURCE_STAGE/deploy/systemd/$service" "$UNIT_BACKUP_DIR/new-$service"', script)
+        self.assertIn('install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/$DSH_SERVICE" "$SYSTEMD_DIR/$DSH_SERVICE" || true', script)
+        self.assertIn('cmp -s "$SYSTEMD_DIR/$DSH_SERVICE" "$SOURCE_LIVE/deploy/systemd/$DSH_SERVICE"', script)
+        self.assertNotIn('rm -rf "$SYSTEMD_DIR/$DSH_SERVICE.d"', script)
         self.assertIn('"$RUNTIME_STAGE/node/bin/node" "$PLAYWRIGHT_CLI" install-deps --dry-run chromium', script)
         self.assertIn('"$RUNTIME_STAGE/node/bin/node" "$PLAYWRIGHT_CLI" install --no-shell chromium', script)
         self.assertIn("unset npm_config_store_dir npm_config_cache", script)
@@ -2284,6 +2291,22 @@ class DeploymentPreflightTests(unittest.TestCase):
             self.assertIn("DSH pinned version", failed)
             self.assertIn("installed DSH package-lock.json", failed)
             self.assertIn("installed dsh-web-host.service", failed)
+
+    def test_preflight_allows_main_unit_drift_only_for_guarded_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            installed = paths["systemd_dir"] / "dsh-web-host.service"
+            installed.write_text(installed.read_text(encoding="utf-8") + "\n# prior release\n", encoding="utf-8")
+            command = self.preflight_command(paths)
+            command[command.index("--json"):command.index("--json")] = ["--allow-systemd-unit-update"]
+
+            result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads(result.stdout)
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(checks["installed dsh-web-host.service"]["ok"])
+            self.assertTrue(checks["staged dsh-web-host.service"]["ok"])
 
     def test_preflight_detects_gateway_release_version_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

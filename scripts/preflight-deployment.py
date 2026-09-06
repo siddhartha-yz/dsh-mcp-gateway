@@ -228,6 +228,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gateway-state", type=Path, default=Path("/var/lib/dsh-mcp-gateway"))
     parser.add_argument("--config-dir", type=Path, default=Path("/etc/dsh-mcp-gateway"))
     parser.add_argument("--systemd-dir", type=Path, default=Path("/etc/systemd/system"))
+    parser.add_argument(
+        "--allow-systemd-unit-update",
+        action="store_true",
+        help=(
+            "Allow installed main systemd units to differ from the staged release. "
+            "Only the guarded live-upgrade path should use this before atomically replacing them."
+        ),
+    )
     parser.add_argument("--dsh-user", default="dsh-agent")
     parser.add_argument("--dsh-group", default="dsh-agent")
     parser.add_argument("--gateway-user", default="dsh-gateway")
@@ -449,12 +457,18 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_systemd = args.gateway_root / "deploy" / "systemd"
     for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service"):
-        check_file_matches(
-            p,
-            f"installed {filename}",
-            args.systemd_dir / filename,
-            repo_systemd / filename,
-        )
+        installed_unit = args.systemd_dir / filename
+        staged_unit = repo_systemd / filename
+        if args.allow_systemd_unit_update:
+            p.require_path(f"installed {filename}", installed_unit, kind="file")
+            p.require_path(f"staged {filename}", staged_unit, kind="file")
+        else:
+            check_file_matches(
+                p,
+                f"installed {filename}",
+                installed_unit,
+                staged_unit,
+            )
 
     failures = [check for check in p.checks if not check.ok]
     if args.json:

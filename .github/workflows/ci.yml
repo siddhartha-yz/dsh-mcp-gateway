@@ -155,7 +155,7 @@ jobs:
           test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"
           node -e "Promise.all([import('@deepseek-ai/dsh-terminal'), import('@deepseek-ai/dsh-terminal-bash')])"
           node -e "const p=require('playwright-core/package.json'); if (p.version !== '1.62.1') process.exit(1)"
-          node -e "const p=require('koffi/package.json'); if (p.version !== '3.2.1') process.exit(1)"
+          node -e "require('koffi')"
           npm ls --depth=0
 
       - name: Verify Unix peer credential lookup

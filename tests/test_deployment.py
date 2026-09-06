@@ -198,7 +198,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("working-directory: deploy/dsh-runtime", workflow)
         self.assertIn("npm ci --no-audit --no-fund", workflow)
         self.assertIn('test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"', workflow)
-        self.assertIn("const p=require('koffi/package.json'); if (p.version !== '3.2.1') process.exit(1)", workflow)
+        self.assertIn("node -e \"require('koffi')\"", workflow)
         self.assertIn("Verify Unix peer credential lookup", workflow)
         self.assertIn("createPeerCredentialReader", workflow)
         self.assertNotIn("deepseek_harness", workflow)

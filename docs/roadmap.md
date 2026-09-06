@@ -82,20 +82,35 @@ Acceptance goal: the catalog exposed to ChatGPT has clear semantics under the "C
 
 Acceptance result: production now exposes the `chatgpt-external-v1` capability profile with 21 externally meaningful ToolRuntime entries. DSH AgentLoop/lifecycle tools are absent from discovery and direct guessed calls such as `workflow` and `create_goal` fail closed with `tool_unavailable` before execution. Approved filesystem, shell/jobs, deterministic utilities, web, plugin discovery, and `read_image` remain usable; native Skills continue through the separate SkillRegistry meta-tools. The Python gateway contains no duplicate allowlist. Live deployment commit `998999420463f5daf42634357d9195d7fc9e9a2f` passed service readiness, guarded `bash`, image materialization, and skill-catalog verification.
 
-### P3 — Add a ChatGPT-oriented Logical Session / Plan capability
+### P3 — Persistent Task State for ChatGPT
 
-Borrow the useful concepts from local-shell-mcp without importing its whole harness.
+Borrow only the useful task-state concepts from local-shell-mcp. P3 is a durable state container for work owned by ChatGPT, not a Logical Session runtime, Goal Mode, or second harness.
+
+Hard architectural constraint:
+
+> A task stores state only. It must never own an AgentLoop, invoke a model, choose the next action, automatically continue execution, spawn reasoning agents, or become a second reasoning agent.
 
 Desired properties:
 
-- durable logical task identity
+- durable task identity
 - resumable state across ChatGPT conversations/reconnections
-- compact checkpoints rather than full model ownership
-- optional Goal/Plan state attached to the logical task
-- explicit status, resume, pause, completion, and recovery semantics
+- compact checkpoints describing what happened, current progress, and candidate next steps
+- optional goal/plan fields as passive data only, never control flow
+- explicit create/get/list/update/checkpoint/pause/complete semantics
+- workspace and related commit/reference metadata where useful
 - state owned by DSH/plugin storage, not by a new gateway-side harness
 
-Acceptance goal: a long-running ChatGPT task can be resumed predictably without requiring DSH to become a second reasoning agent.
+Explicit non-goals:
+
+- no autonomous DSH AgentLoop
+- no model/API-provider invocation
+- no `while goal incomplete -> decide -> execute` loop
+- no automatic ChatGPT continuation or `app.sendMessage`
+- no subagent orchestration
+- no persistent shell state; that belongs to P4
+- no browser-session state; that belongs to P5
+
+Acceptance goal: after a ChatGPT conversation ends, a later ChatGPT conversation can load a compact task checkpoint and continue the work predictably, while all reasoning and next-action decisions remain in ChatGPT.
 
 ### P4 — Add persistent shell sessions
 

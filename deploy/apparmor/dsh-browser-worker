@@ -5,7 +5,7 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-profile dsh-browser-worker flags=(default_allow) {
+profile dsh-browser-worker flags=(unconfined) {
   userns,
 
   include if exists <local/dsh-browser-worker>

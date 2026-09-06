@@ -80,6 +80,8 @@ if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
     echo "AppArmor user-namespace restriction is present but apparmor_parser is unavailable" >&2
     exit 1
   }
+  command -v aa-exec >/dev/null 2>&1 || { echo "aa-exec is required to verify the browser worker userns profile" >&2; exit 1; }
+  command -v unshare >/dev/null 2>&1 || { echo "unshare is required to verify the browser worker userns profile" >&2; exit 1; }
   apparmor_parser -Q -K "$APPARMOR_PROFILE_SOURCE"
   if [[ -f "$LEGACY_APPARMOR_PROFILE" ]]; then
     apparmor_parser -R -K "$LEGACY_APPARMOR_PROFILE" >/dev/null 2>&1 || true
@@ -95,6 +97,19 @@ DSH_GROUP="$(systemctl show "$DSH_SERVICE" -p Group --value)"
 [[ -n "$DSH_USER" && -n "$DSH_GROUP" ]] || { echo "cannot resolve effective DSH service identity" >&2; exit 1; }
 id "$DSH_USER" >/dev/null 2>&1 || { echo "DSH service user does not exist: $DSH_USER" >&2; exit 1; }
 getent group "$DSH_GROUP" >/dev/null 2>&1 || { echo "DSH service group does not exist: $DSH_GROUP" >&2; exit 1; }
+DSH_UID="$(id -u "$DSH_USER")"
+DSH_GID="$(getent group "$DSH_GROUP" | cut -d: -f3)"
+[[ "$DSH_UID" =~ ^[0-9]+$ && "$DSH_GID" =~ ^[0-9]+$ ]] || { echo "cannot resolve numeric DSH service identity" >&2; exit 1; }
+
+if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+  if ! aa-exec -p dsh-browser-worker -- \
+    setpriv --reuid "$DSH_UID" --regid "$DSH_GID" --clear-groups --no-new-privs \
+    unshare --user --map-root-user /usr/bin/true; then
+    echo "browser-worker AppArmor profile does not permit unprivileged user namespaces under NoNewPrivileges" >&2
+    exit 1
+  fi
+  echo "Browser worker AppArmor userns probe passed under NoNewPrivileges."
+fi
 
 if [[ -e "$LEGACY_BROWSER_CREDENTIAL" || -L "$LEGACY_BROWSER_CREDENTIAL" ]]; then
   [[ -f "$LEGACY_BROWSER_CREDENTIAL" && ! -L "$LEGACY_BROWSER_CREDENTIAL" ]] || {

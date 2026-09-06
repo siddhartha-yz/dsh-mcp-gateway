@@ -329,7 +329,7 @@ try {
     assert.match(workerService, /DSH_BROWSER_PROFILE_ROOT=\/tmp\/dsh-browser-worker/)
 
     const apparmor = await readFile(new URL('../deploy/apparmor/dsh-browser-worker', import.meta.url), 'utf8')
-    assert.match(apparmor, /profile dsh-browser-worker flags=\(default_allow\)/)
+    assert.match(apparmor, /profile dsh-browser-worker flags=\(unconfined\)/)
     assert.match(apparmor, /userns,/)
     assert.doesNotMatch(apparmor, /apparmor_restrict_unprivileged_userns=0/)
 
@@ -343,6 +343,10 @@ try {
     const provision = await readFile(new URL('../scripts/provision-browser-deps.sh', import.meta.url), 'utf8')
     assert.match(provision, /timeout --foreground --signal=TERM --kill-after=30s 1200s/)
     assert.match(provision, /apparmor_parser -r -K "\$APPARMOR_PROFILE_TARGET"/)
+    assert.match(provision, /aa-exec -p dsh-browser-worker --/)
+    assert.match(provision, /setpriv --reuid "\$DSH_UID" --regid "\$DSH_GID" --clear-groups --no-new-privs/)
+    assert.match(provision, /unshare --user --map-root-user \/usr\/bin\/true/)
+    assert.match(provision, /Browser worker AppArmor userns probe passed under NoNewPrivileges/)
     assert.match(provision, /LEGACY_BROWSER_CREDENTIAL=.*browser-worker\.key/)
     assert.match(provision, /authorization now uses Unix SO_PEERCRED/)
     assert.match(provision, /identity\.conf/)

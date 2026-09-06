@@ -369,3 +369,28 @@ The extension itself never receives the DSH bridge capability token. Its backgro
 Bridge store version 3 keeps observer identity/state separate from the B1 companion. `observer_heartbeat` updates liveness without filling lifecycle history, while durable observation events include `observer_ready`, `turn_started`, `assistant_message`, `turn_completed`, `blocked`, `bridge_degraded`, and `error`. The DSH Bridge panel now has a separate Read observer status card and labels companion/observer event sources distinctly.
 
 The initial B2 static/protocol gate passes 10/10 bridge tests plus syntax checks for all extension and bridge scripts. Live acceptance is intentionally still pending: deploy bridge v3, temporarily load the extension in the user's Firefox, refresh the ChatGPT and DSH GUI tabs, verify `observer_ready`/heartbeats, and then run a real generated turn to confirm `turn_started -> assistant_message -> turn_completed` without false completion. Only after that evidence should mechanical auto-continuation be enabled.
+
+## Multi-turn continuation controller checkpoint
+
+The bridge now has a mechanical controller for the original long-running-task requirement. It does not inspect the goal text or make planning decisions. The DSH GUI must explicitly arm it with one `task_state` id; the model-facing bridge tool can report controller status but cannot arm or stop it.
+
+On each B2 `turn_completed` event, the controller checks only lifecycle/state invariants:
+
+```text
+same ChatGPT conversation
++ companion healthy
++ read observer healthy and not degraded
++ no outbound message already active
++ selected task_state is still active
++ task_state revision advanced during the completed turn
++ this turn key has never been continued
+=> enqueue one fixed B1 continuation message
+```
+
+`completed` stops with `task_completed`; `paused` stops with `task_paused`. Conversation drift, blocked/error/degraded observer state, stale task revision, missing transport health, or queue ambiguity all stop fail-closed. Controller armed state is intentionally in-memory and defaults to disabled after DSH Host restart.
+
+`task_state` exposes the controller only a Cordis-internal read-only service with `get`; it exposes no mutation methods. ChatGPT remains responsible for deciding whether the goal is complete and updating `task_state` before ending each turn. The controller merely checks the recorded status/revision and starts another ChatGPT Web turn through the already-proven B1 `ui/message` path.
+
+Protocol tests now simulate three consecutive completed turns, settle each automatically queued continuation through the companion mailbox, then change the task to `completed`; the fourth completion event stops the controller with exactly three continuations and no remaining outbound message. A separate regression proves that an active task whose revision did not advance causes `task_state_not_advanced` instead of an unbounded loop.
+
+An isolated real DSH Web runtime also booted bridge version 4 with the new hard read-service dependency and returned a disabled controller in `/state`. Live ChatGPT acceptance is still required: prove B2's DOM lifecycle signal first, then arm a dedicated test task and demonstrate at least 3-5 real automatic turns ending because the task becomes completed.

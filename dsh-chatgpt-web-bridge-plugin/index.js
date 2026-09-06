@@ -1,10 +1,14 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 
+import { ContinuationController, ContinuationControllerError } from './continuation-controller.js'
+
+const TASK_STATE_READ_SERVICE = 'chatgptTaskStateRead'
+
 export const name = 'dsh-chatgpt-web-bridge-experiment'
-export const inject = ['webServer', 'tools']
+export const inject = ['webServer', 'tools', TASK_STATE_READ_SERVICE]
 
 export const BRIDGE_BASE_PATH = '/plugins/chatgpt-web-bridge'
-export const BRIDGE_VERSION = 3
+export const BRIDGE_VERSION = 4
 
 const MAX_BODY_BYTES = 16 * 1024
 const MAX_MESSAGE_CHARS = 8_000
@@ -311,7 +315,7 @@ const TOOL_PARAMETERS = Object.freeze({
   additionalProperties: false,
 })
 
-export function createBridgeTool(store) {
+export function createBridgeTool(store, controller = null) {
   return {
     name: 'chatgpt_web_bridge',
     description: [
@@ -329,7 +333,7 @@ export function createBridgeTool(store) {
       if (!isPlainObject(args)) throw new BridgeError('invalid_request', 'arguments must be an object')
       switch (args.action) {
         case 'status':
-          return store.status()
+          return { ...store.status(), controller: controller?.status() ?? null }
         case 'poll':
           return store.poll(args.client_id)
         case 'heartbeat':
@@ -383,7 +387,7 @@ async function readJsonBody(req) {
   return parsed
 }
 
-function routeHandler({ token, store, mode }) {
+function routeHandler({ token, store, controller, mode }) {
   return async (req, res) => {
     if (!tokenMatches(token, req.headers['x-dsh-chatgpt-bridge-token'])) {
       writeJson(res, 403, { error: 'forbidden' })
@@ -400,7 +404,7 @@ function routeHandler({ token, store, mode }) {
           res.end()
           return
         }
-        writeJson(res, 200, store.status())
+        writeJson(res, 200, { ...store.status(), controller: controller.status() })
         return
       }
       if (mode === 'enqueue') {
@@ -410,6 +414,19 @@ function routeHandler({ token, store, mode }) {
         }
         const body = await readJsonBody(req)
         writeJson(res, 201, { message: store.enqueue(body.text, 'dsh-gui') })
+        return
+      }
+      if (mode === 'controller') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method_not_allowed' })
+          return
+        }
+        const body = await readJsonBody(req)
+        const controllerState = controller.configure({
+          enabled: body.enabled,
+          taskId: body.task_id ?? null,
+        })
+        writeJson(res, 200, { controller: controllerState })
         return
       }
       if (mode === 'observer') {
@@ -425,18 +442,21 @@ function routeHandler({ token, store, mode }) {
           }))
           return
         }
-        writeJson(res, 201, store.publishObserver({
+        const published = store.publishObserver({
           observerId: body.observer_id,
           eventType: body.event_type,
           text: body.text,
           payload: body.payload ?? null,
-        }))
+        })
+        const controllerState = await controller.onObserverEvent(published.event)
+        writeJson(res, 201, { ...published, controller: controllerState })
         return
       }
       writeJson(res, 404, { error: 'not_found' })
     } catch (error) {
-      if (error instanceof BridgeError) {
-        writeJson(res, error.code === 'queue_full' ? 409 : 400, { error: error.code, message: error.message })
+      if (error instanceof BridgeError || error instanceof ContinuationControllerError) {
+        const conflict = error.code === 'queue_full' || error.code === 'queue_not_empty'
+        writeJson(res, conflict ? 409 : 400, { error: error.code, message: error.message })
         return
       }
       writeJson(res, 500, { error: 'internal_error' })
@@ -446,6 +466,11 @@ function routeHandler({ token, store, mode }) {
 
 export function apply(ctx) {
   const store = new ChatGPTWebBridgeStore()
+  const taskReader = ctx.get(TASK_STATE_READ_SERVICE)
+  if (!taskReader || typeof taskReader.get !== 'function') {
+    throw new Error('chatgpt web bridge requires the read-only task_state service')
+  }
+  const controller = new ContinuationController({ store, taskReader })
   const token = randomBytes(24).toString('base64url')
 
   ctx.on('webserver/index-inject', (table) => {
@@ -464,24 +489,30 @@ export function apply(ctx) {
     const disposeState = ctx.webServer.register({
       kind: 'exact',
       path: `${BRIDGE_BASE_PATH}/state`,
-      handler: routeHandler({ token, store, mode: 'state' }),
+      handler: routeHandler({ token, store, controller, mode: 'state' }),
     })
     const disposeEnqueue = ctx.webServer.register({
       kind: 'exact',
       path: `${BRIDGE_BASE_PATH}/enqueue`,
-      handler: routeHandler({ token, store, mode: 'enqueue' }),
+      handler: routeHandler({ token, store, controller, mode: 'enqueue' }),
+    })
+    const disposeController = ctx.webServer.register({
+      kind: 'exact',
+      path: `${BRIDGE_BASE_PATH}/controller`,
+      handler: routeHandler({ token, store, controller, mode: 'controller' }),
     })
     const disposeObserver = ctx.webServer.register({
       kind: 'exact',
       path: `${BRIDGE_BASE_PATH}/observer`,
-      handler: routeHandler({ token, store, mode: 'observer' }),
+      handler: routeHandler({ token, store, controller, mode: 'observer' }),
     })
     return () => {
       disposeObserver()
+      disposeController()
       disposeEnqueue()
       disposeState()
     }
   }, 'chatgpt-web-bridge.http')
 
-  ctx.effect(() => ctx.tools.register(createBridgeTool(store)), 'chatgpt-web-bridge.tool')
+  ctx.effect(() => ctx.tools.register(createBridgeTool(store, controller)), 'chatgpt-web-bridge.tool')
 }

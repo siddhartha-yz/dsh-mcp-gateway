@@ -65,6 +65,8 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState(null)
       const [text, setText] = React.useState(DEFAULT_MESSAGE)
       const [sending, setSending] = React.useState(false)
+      const [taskId, setTaskId] = React.useState('')
+      const [controllerBusy, setControllerBusy] = React.useState(false)
       const [now, setNow] = React.useState(Date.now())
 
       const refresh = React.useCallback(async () => {
@@ -98,6 +100,8 @@ window.__ModuleLoader__.load({
       const observerOnline = typeof observerAge === 'number' && now - observerAge < 15_000
       const observerDegraded = state?.observer?.lastEventType === 'bridge_degraded' || state?.observer?.lastEventType === 'error'
       const pending = Number(state?.counts?.pending || 0) + Number(state?.counts?.claimed || 0) + Number(state?.counts?.dispatching || 0)
+      const controller = state?.controller
+      const controllerEnabled = controller?.enabled === true
 
       const send = async () => {
         if (sending || text.trim() === '') return
@@ -110,6 +114,23 @@ window.__ModuleLoader__.load({
           setError(reason instanceof Error ? reason.message : String(reason))
         } finally {
           setSending(false)
+        }
+      }
+
+      const configureController = async (enabled) => {
+        if (controllerBusy) return
+        setControllerBusy(true)
+        try {
+          await bridgeFetch('/controller', {
+            method: 'POST',
+            body: JSON.stringify(enabled ? { enabled: true, task_id: taskId.trim() } : { enabled: false }),
+          })
+          setError(null)
+          await refresh()
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : String(reason))
+        } finally {
+          setControllerBusy(false)
         }
       }
 
@@ -175,7 +196,7 @@ window.__ModuleLoader__.load({
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 } },
         React.createElement('div', null,
           React.createElement('strong', { style: { display: 'block', fontSize: 15, marginBottom: 3 } }, 'ChatGPT Web Bridge'),
-          React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, 'B1 official send + B2 read observer · DSH remains the harness')
+          React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, 'B1 official send + B2 read observer + mechanical multi-turn controller')
         ),
         React.createElement('button', {
           type: 'button',
@@ -198,8 +219,39 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 4 } }, 'Read observer'),
           React.createElement('div', { style: { fontWeight: 600 } }, observerDegraded ? 'Degraded' : observerOnline ? 'Connected' : 'Waiting'),
           React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, marginTop: 3 } }, `${ageLabel(state?.observer?.lastSeenAt, now)}${state?.observer?.lastEventType ? ` · ${String(state.observer.lastEventType).replaceAll('_', ' ')}` : ''}`)
+        ),
+        React.createElement('div', { style: { gridColumn: '1 / -1', padding: 10, borderRadius: 10, background: 'var(--dsw-alias-button-ghost-active-fill)' } },
+          React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 4 } }, 'Auto continue'),
+          React.createElement('div', { style: { fontWeight: 600 } }, controllerEnabled ? 'Armed' : 'Stopped'),
+          React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, marginTop: 3 } }, controllerEnabled
+            ? `${controller?.taskId || ''} · ${Number(controller?.continuationCount || 0)} continuations`
+            : `${controller?.stopReason || controller?.lastDecision || 'disabled'}${controller?.continuationCount ? ` · ${controller.continuationCount} continuations` : ''}`)
         )
       ),
+      React.createElement('label', { style: { display: 'block', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 5 } }, 'Task state ID for mechanical auto-continue'),
+      React.createElement('input', {
+        value: controllerEnabled ? (controller?.taskId || taskId) : taskId,
+        disabled: controllerEnabled,
+        onChange: (event) => setTaskId(event.target.value),
+        placeholder: 'task_...',
+        style: {
+          width: '100%', boxSizing: 'border-box', padding: 9, marginBottom: 8,
+          border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 9,
+          background: 'var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base))', color: 'var(--dsw-alias-label-primary)', font: 'inherit', outline: 'none',
+        },
+      }),
+      React.createElement('button', {
+        type: 'button',
+        disabled: controllerBusy || (!controllerEnabled && taskId.trim() === ''),
+        onClick: () => configureController(!controllerEnabled),
+        style: {
+          border: controllerEnabled ? '0.5px solid var(--dsw-alias-border-l3)' : 0,
+          borderRadius: 9,
+          background: controllerEnabled ? 'transparent' : 'var(--dsw-alias-button-primary-fill, var(--dsw-alias-label-primary))',
+          color: controllerEnabled ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-button-primary-label, var(--dsw-alias-label-primary-inverted))',
+          padding: '8px 12px', cursor: controllerBusy ? 'wait' : 'pointer', fontWeight: 600, marginBottom: 14,
+        },
+      }, controllerBusy ? 'Updating…' : controllerEnabled ? 'Stop auto-continue' : 'Arm auto-continue'),
       React.createElement('label', { style: { display: 'block', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 5 } }, 'Message to the hidden ChatGPT conversation'),
       React.createElement('textarea', {
         value: text,

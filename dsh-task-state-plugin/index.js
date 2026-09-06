@@ -2,6 +2,7 @@ import { MAX_CHECKPOINTS, parseStoredTask, TaskStateError, TaskStore } from './t
 
 export const name = 'dsh-chatgpt-task-state'
 export const inject = ['storageDomain', 'tools']
+export const TASK_STATE_READ_SERVICE = 'chatgptTaskStateRead'
 
 // storageDomain only requires a valueSchema.parse() contract at runtime. Keeping
 // this tiny validator local avoids making a repository-local plugin depend on
@@ -205,5 +206,8 @@ export async function apply(ctx) {
   ctx.effect(() => () => domain.close(), 'chatgpt-task-state.domain-close')
 
   const store = new TaskStore(domain.table('tasks'))
+  ctx.provide(TASK_STATE_READ_SERVICE, Object.freeze({
+    get: (id) => store.get({ id, includeHistory: false }),
+  }))
   ctx.effect(() => ctx.tools.register(createTaskStateTool(store)), 'chatgpt-task-state.tool')
 }

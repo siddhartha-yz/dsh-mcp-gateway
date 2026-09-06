@@ -83,6 +83,7 @@ jobs:
           node --check dsh-browser-session-plugin/worker-client.js
           node --check dsh-browser-worker/index.js
           node --check dsh-chatgpt-web-bridge-plugin/index.js
+          node --check dsh-chatgpt-web-bridge-plugin/continuation-controller.js
           node --check dsh-chatgpt-web-bridge-plugin/lib/client.js
           node --check browser-extension/dsh-chatgpt-web-observer/background.js
           node --check browser-extension/dsh-chatgpt-web-observer/chatgpt-observer.js

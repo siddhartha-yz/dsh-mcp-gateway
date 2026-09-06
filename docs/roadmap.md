@@ -82,7 +82,7 @@ Acceptance goal: the catalog exposed to ChatGPT has clear semantics under the "C
 
 Acceptance result: production now exposes the `chatgpt-external-v1` capability profile with 21 externally meaningful ToolRuntime entries. DSH AgentLoop/lifecycle tools are absent from discovery and direct guessed calls such as `workflow` and `create_goal` fail closed with `tool_unavailable` before execution. Approved filesystem, shell/jobs, deterministic utilities, web, plugin discovery, and `read_image` remain usable; native Skills continue through the separate SkillRegistry meta-tools. The Python gateway contains no duplicate allowlist. Live deployment commit `998999420463f5daf42634357d9195d7fc9e9a2f` passed service readiness, guarded `bash`, image materialization, and skill-catalog verification.
 
-### P3 — Persistent Task State for ChatGPT
+### P3 — Persistent Task State for ChatGPT — COMPLETE
 
 Borrow only the useful task-state concepts from local-shell-mcp. P3 is a durable state container for work owned by ChatGPT, not a Logical Session runtime, Goal Mode, or second harness.
 
@@ -112,7 +112,7 @@ Explicit non-goals:
 
 Acceptance goal: after a ChatGPT conversation ends, a later ChatGPT conversation can load a compact task checkpoint and continue the work predictably, while all reasoning and next-action decisions remain in ChatGPT.
 
-Implementation checkpoint: `dsh-task-state-plugin` now provides one reviewed `task_state` ToolRuntime capability backed by DSH `storageDomain`. It supports create/get/list/update/checkpoint/pause/resume/complete, bounded checkpoint history, and optimistic `if_revision` writes. An isolated DSH `0.1.2-rc.1` host proved create/checkpoint, durable JSON storage, full Host restart/reopen, passive pause/resume, list-based recovery, and stale-revision rejection without any model credential. Production and a fresh ChatGPT-conversation resume test are still required before P3 is complete.
+Acceptance result: `dsh-task-state-plugin` provides one reviewed `task_state` ToolRuntime capability backed by DSH `storageDomain`, with create/get/list/update/checkpoint/pause/resume/complete, bounded checkpoint history, and optimistic `if_revision` writes. Isolated-host tests proved durable JSON storage across full Host restart/reopen, passive pause/resume, list-based recovery, and stale-revision rejection without any model credential. Live production at commit `5a4c035343c8b19992b8b638dd7588621148bacc` exposed 22 external tools including `task_state`, and a completely fresh ChatGPT conversation recovered the repository, deployed commit, status, and remaining acceptance exclusively through `task_state` list/get. This validates cross-conversation resume while keeping all reasoning and next-action decisions in ChatGPT.
 
 ### P4 — Add persistent shell sessions
 

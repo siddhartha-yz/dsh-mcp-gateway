@@ -164,7 +164,9 @@ jobs:
           node <<'NODE'
           const { chromium } = require('playwright-core')
           ;(async () => {
-            const browser = await chromium.launch({ headless: true })
+            const executablePath = chromium.executablePath()
+            console.log('chromium-executable=' + executablePath)
+            const browser = await chromium.launch({ headless: true, executablePath })
             const page = await browser.newPage()
             await page.setContent('<title>P5 browser smoke</title><button id="ok">ready</button>')
             if (await page.title() !== 'P5 browser smoke') throw new Error('unexpected Chromium page title')

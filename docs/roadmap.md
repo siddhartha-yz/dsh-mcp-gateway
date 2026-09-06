@@ -146,11 +146,17 @@ Acceptance goal: browser automation is a normal DSH plugin capability reachable 
 
 Acceptance result: P5 is implemented as a repository-local `browser_session` ToolRuntime plugin rather than adopting `dsh-browseruse` wholesale. The reviewed third-party plugin was rejected as the production surface because it carries its own LLM-driven `browser_task`, scheduler, and process-global browser singleton. The P5 plugin instead keeps ChatGPT as the only reasoning agent and exposes only open/list/status/snapshot/act/script/close. Each live browser session is owned by the exact DSH Agent. DSH remains the file-effect policy authority: the plugin resolves `sandboxPolicy` and asks the configured sandbox provider to validate the policy fail-closed. On this Ubuntu host the generic DSH Linux fallback is Landlock, but production testing proved that Landlock blocks `/proc/self/uid_map`, so Chromium cannot initialize its own userns sandbox inside that wrapper. For `workspace-write`, the plugin therefore uses the exact reviewed `@deepseek-ai/dsh-sandbox-local` 0.1.2-rc.1 bwrap mount profile derived from the same DSH policy: root read-only, private `/proc`, private `/tmp`, and only the DSH workspace bind-mounted writable. A narrow `dsh-browser-worker` systemd boundary has AppArmor attach the dedicated `userns` profile before the worker sets `NoNewPrivs=1`; the worker accepts spawn requests only from the live DSH Host MainPID using Unix `SO_PEERCRED`, validates the exact bwrap profile and pinned Chromium (or pinned Chromium directly for danger-full-access), rejects `--no-sandbox`, and owns process cleanup. Browser profile data lives inside bwrap's private `/tmp`. Root provisioning now verifies the complete AppArmor + effective DSH uid/gid + NNP + bwrap + nested-userns chain before reporting success. The runtime lock pins `playwright-core` 1.62.1 and Koffi 3.2.1. Local CI-equivalent gates pass 196 Python tests plus the JS/systemd/runtime-lock suites. Production at commit `e9c5f5b873e58d5303e326ff601350e6029dad3c` exposes 24 external tools including `browser_session`; live acceptance proved full-enforcement workspace-write Chromium startup, lossless snapshot refs, ref-driven fill/click, cross-call DOM/JavaScript persistence, two-page lifecycle, screenshot attachment rendering, clean close/not-found semantics, an empty owner session list after close, and no surviving Chromium process for the closed session. CI run `34031556400` passed 5/5. This completes P5 without adding another model loop, autonomous browser agent, scheduler, `--no-sandbox`, or a global weakening of Ubuntu userns policy.
 
-### P6 — Consider a Live Workspace experience
+### P6 — Experimental DSH GUI control surface for ChatGPT Web
 
-Only after sessions, persistent shell, and browser are stable, evaluate a lightweight ChatGPT-facing workspace/status UI inspired by LSM Live Workspace.
+P6 is now being explored on the isolated branch `experiment/dsh-gui-chat-resume` rather than directly on production `main`.
 
-The UI must remain an observer/control surface over DSH state, not become another harness implementation.
+The preferred user-facing surface is the official DSH Web GUI, with only a small client-plugin/overlay modification where possible. ChatGPT Web chat remains the primary reasoning agent, but its real frontend may run hidden/background while DSH GUI becomes the panel the human actually uses.
+
+The transport experiments are intentionally ordered from least to most invasive: official MCP App `ui/message` bridge, hybrid official-send plus injected read observer, full ChatGPT frontend injection, robust browser automation, and only then a disposable timer/click proof. Workspace Agents API and Responses API are explicitly out of scope because they replace the current ChatGPT-Web reasoning plane.
+
+Detailed experiment plan and fallback ladder: [`experiments/dsh-gui-chatgpt-web.md`](experiments/dsh-gui-chatgpt-web.md).
+
+The GUI/bridge must remain a control and transport surface over the existing ChatGPT + DSH architecture, not become another model loop or harness implementation.
 
 ### P7 — Remote workers only when a real need appears
 

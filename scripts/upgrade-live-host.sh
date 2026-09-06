@@ -66,6 +66,7 @@ for path in \
   "$SOURCE_ROOT/deploy/dsh-runtime/package.json" \
   "$SOURCE_ROOT/deploy/dsh-runtime/package-lock.json" \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
+  "$SOURCE_ROOT/deploy/apparmor/dsh-chromium" \
   "$SOURCE_ROOT/deploy/systemd/$DSH_SERVICE" \
   "$SOURCE_ROOT/deploy/systemd/$GATEWAY_SERVICE" \
   "$SYSTEMD_DIR/$DSH_SERVICE" \
@@ -77,6 +78,25 @@ done
 
 python3 "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py" \
   --root "$SOURCE_ROOT/deploy/dsh-runtime"
+
+APPARMOR_PROFILE_SOURCE="$SOURCE_ROOT/deploy/apparmor/dsh-chromium"
+APPARMOR_PROFILE_TARGET=/etc/apparmor.d/dsh-chromium
+if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+  [[ -f "$APPARMOR_PROFILE_TARGET" && ! -L "$APPARMOR_PROFILE_TARGET" ]] || {
+    echo "Chromium AppArmor userns profile is missing; run browser host provisioning first" >&2
+    echo "Run: sudo $SOURCE_ROOT/scripts/provision-browser-deps.sh --source $SOURCE_ROOT" >&2
+    exit 1
+  }
+  [[ "$(stat -c '%u:%g:%a:%h' "$APPARMOR_PROFILE_TARGET")" == "0:0:644:1" ]] || {
+    echo "Chromium AppArmor profile has unsafe ownership/mode/link count: $APPARMOR_PROFILE_TARGET" >&2
+    exit 1
+  }
+  cmp -s "$APPARMOR_PROFILE_TARGET" "$APPARMOR_PROFILE_SOURCE" || {
+    echo "Chromium AppArmor profile differs from this release; rerun browser host provisioning" >&2
+    echo "Run: sudo $SOURCE_ROOT/scripts/provision-browser-deps.sh --source $SOURCE_ROOT" >&2
+    exit 1
+  }
+fi
 
 DSH_USER="$(systemctl show "$DSH_SERVICE" -p User --value)"
 DSH_GROUP="$(systemctl show "$DSH_SERVICE" -p Group --value)"

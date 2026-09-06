@@ -224,6 +224,7 @@ function makeHarness({ mode = 'workspace-write' } = {}) {
 {
   const source = await readFile(new URL('../dsh-browser-session-plugin/index.js', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /ctx\.llm|browser_task|browser_schedule/)
+  assert.doesNotMatch(source, /--no-sandbox/)
   assert.match(source, /sandboxPolicy/)
   assert.match(source, /sandbox\.confine/)
   assert.match(source, /subprocess\.spawn/)
@@ -239,13 +240,22 @@ function makeHarness({ mode = 'workspace-write' } = {}) {
   assert.match(service, /PLAYWRIGHT_BROWSERS_PATH=\/opt\/dsh-runtime\/browsers/)
   assert.match(service, /DSH_RUNTIME_ROOT=\/opt\/dsh-runtime/)
 
+  const apparmor = await readFile(new URL('../deploy/apparmor/dsh-chromium', import.meta.url), 'utf8')
+  assert.match(apparmor, /\/opt\/dsh-runtime\/browsers\/chromium-\*\/chrome-linux64\/chrome/)
+  assert.match(apparmor, /userns,/)
+  assert.doesNotMatch(apparmor, /apparmor_restrict_unprivileged_userns=0/)
+
   const upgrade = await readFile(new URL('../scripts/upgrade-live-host.sh', import.meta.url), 'utf8')
   assert.match(upgrade, /playwright-core/)
   assert.match(upgrade, /install --no-shell chromium/)
   assert.match(upgrade, /provision-browser-deps\.sh/)
+  assert.match(upgrade, /APPARMOR_PROFILE_TARGET=\/etc\/apparmor\.d\/dsh-chromium/)
+  assert.match(upgrade, /cmp -s "\$APPARMOR_PROFILE_TARGET" "\$APPARMOR_PROFILE_SOURCE"/)
 
   const provision = await readFile(new URL('../scripts/provision-browser-deps.sh', import.meta.url), 'utf8')
   assert.match(provision, /timeout --foreground --signal=TERM --kill-after=30s 1200s/)
+  assert.match(provision, /apparmor_parser -Q -K "\$APPARMOR_PROFILE_SOURCE"/)
+  assert.match(provision, /apparmor_parser -r -K "\$APPARMOR_PROFILE_TARGET"/)
 }
 
 console.log('chatgpt-browser-session-adapter-ok')

@@ -163,10 +163,15 @@ jobs:
           node_modules/.bin/playwright-core install --no-shell chromium
           node <<'NODE'
           const { chromium } = require('playwright-core')
-          const browser = await chromium.launch({ headless: true })
-          const page = await browser.newPage()
-          await page.setContent('<title>P5 browser smoke</title><button id="ok">ready</button>')
-          if (await page.title() !== 'P5 browser smoke') throw new Error('unexpected Chromium page title')
-          if (await page.locator('#ok').textContent() !== 'ready') throw new Error('unexpected Chromium DOM')
-          await browser.close()
+          ;(async () => {
+            const browser = await chromium.launch({ headless: true })
+            const page = await browser.newPage()
+            await page.setContent('<title>P5 browser smoke</title><button id="ok">ready</button>')
+            if (await page.title() !== 'P5 browser smoke') throw new Error('unexpected Chromium page title')
+            if (await page.locator('#ok').textContent() !== 'ready') throw new Error('unexpected Chromium DOM')
+            await browser.close()
+          })().catch(error => {
+            console.error(error)
+            process.exit(1)
+          })
           NODE

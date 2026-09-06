@@ -191,7 +191,7 @@ sudo systemctl start dsh-web-host.service
 sudo systemctl start dsh-mcp-gateway.service
 ```
 
-The browser worker is not a second agent or shell. It accepts only a fixed browser spawn protocol from the live DSH Host MainPID (verified with Unix `SO_PEERCRED`), permits the pinned Chromium/DSH Landlock launcher only, rejects `--no-sandbox`, and sets `NoNewPrivs=1` before its Node worker runs.
+The browser worker is not a second agent or shell. It accepts only a fixed browser spawn protocol from the live DSH Host MainPID (verified with Unix `SO_PEERCRED`), permits only the pinned Chromium directly or the exact reviewed DSH 0.1.2-rc.1 bwrap file profile followed by that Chromium, rejects `--no-sandbox`, and sets `NoNewPrivs=1` before its Node worker runs. Provisioning runs the same AppArmor + NNP + bwrap chain with a nested user-namespace probe and fails closed if that execution model is unavailable.
 
 The DSH unit launches:
 

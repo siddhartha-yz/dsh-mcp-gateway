@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   BrowserSessionError,
   BrowserSessionManager,
+  browserBwrapArgv,
   createBrowserSessionTool,
   validateBrowserSessionArguments,
 } from '../dsh-browser-session-plugin/index.js'
@@ -184,7 +185,7 @@ try {
     assert.equal(opened.name, 'primary')
     assert.equal(opened.status, 'running')
     assert.equal(opened.sandbox_mode, 'workspace-write')
-    assert.equal(opened.sandbox_enforcement, 'partial')
+    assert.equal(opened.sandbox_enforcement, 'full')
     assert.equal(opened.pages.length, 1)
     assert.equal(opened.pages[0].url, 'https://example.com/')
     assert.equal(h.confined.length, 1)
@@ -194,7 +195,11 @@ try {
     assert.equal(h.launched[0].cwd, '/workspace')
     assert.equal(h.launched[0].socketPath, '/run/dsh-browser-worker/browser.sock')
     assert.equal(h.launched[0].signal, controller.signal)
-    assert.equal(h.launched[0].argv[0], '/usr/bin/landlock-run')
+    assert.equal(h.launched[0].argv[0], '/usr/bin/bwrap')
+    assert.deepEqual(h.launched[0].argv.slice(0, 16), [
+      '/usr/bin/bwrap', '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc',
+      '--die-with-parent', '--tmpfs', '/tmp', '--bind', '/workspace', '/workspace', '--',
+    ])
     assert.ok(h.launched[0].argv.includes('--remote-debugging-port=0'))
     assert.ok(h.launched[0].argv.some(arg => arg.startsWith(`--user-data-dir=${h.profileRoot}/`)))
 
@@ -237,23 +242,27 @@ try {
   {
     const expectedExecutable = '/runtime/browsers/chromium/chrome'
     const profileRoot = '/tmp/dsh-browser-worker'
-    const expectedLauncher = '/usr/bin/landlock-run'
+    const expectedBwrap = '/usr/bin/bwrap'
+    const browserArgv = [
+      expectedExecutable,
+      '--headless=new',
+      '--remote-debugging-port=0',
+      '--user-data-dir=/tmp/dsh-browser-worker/session-abc',
+      'about:blank',
+    ]
+    const wrapped = browserBwrapArgv(browserArgv, { mode: 'workspace-write', workspaceRoot: '/workspace' })
+    assert.deepEqual(wrapped.slice(0, 16), [
+      expectedBwrap, '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc',
+      '--die-with-parent', '--tmpfs', '/tmp', '--bind', '/workspace', '/workspace', '--',
+    ])
     const valid = {
       op: 'spawn',
       id: 'browser-12345678-1234-1234-1234-123456789abc',
       cwd: '/workspace',
       startupTimeoutMs: 15000,
-      argv: [
-        '/usr/bin/landlock-run',
-        '--',
-        expectedExecutable,
-        '--headless=new',
-        '--remote-debugging-port=0',
-        '--user-data-dir=/tmp/dsh-browser-worker/session-abc',
-        'about:blank',
-      ],
+      argv: wrapped,
     }
-    const checked = validateSpawnRequest(valid, { expectedExecutable, profileRoot, expectedLauncher })
+    const checked = validateSpawnRequest(valid, { expectedExecutable, profileRoot, expectedBwrap })
     assert.equal(checked.profileDir, '/tmp/dsh-browser-worker/session-abc')
     for (const request of [
       { ...valid, auth: 'obsolete-token' },
@@ -262,10 +271,12 @@ try {
       { ...valid, argv: valid.argv.filter(arg => arg !== '--remote-debugging-port=0') },
       { ...valid, argv: [...valid.argv.slice(0, -1), '--no-sandbox', 'about:blank'] },
       { ...valid, argv: valid.argv.map(arg => arg.startsWith('--user-data-dir=') ? '--user-data-dir=/tmp/escape' : arg) },
-      { ...valid, argv: ['/bin/sh', '--', ...valid.argv.slice(2)] },
-      { ...valid, argv: ['/workspace/landlock-run', '--', ...valid.argv.slice(2)] },
+      { ...valid, argv: ['/bin/sh', ...valid.argv.slice(1)] },
+      { ...valid, argv: ['/workspace/bwrap', ...valid.argv.slice(1)] },
+      { ...valid, argv: valid.argv.map((arg, index) => index === 13 ? '/tmp' : arg) },
+      { ...valid, cwd: '/other-workspace' },
     ]) {
-      assert.throws(() => validateSpawnRequest(request, { expectedExecutable, profileRoot, expectedLauncher }))
+      assert.throws(() => validateSpawnRequest(request, { expectedExecutable, profileRoot, expectedBwrap }))
     }
 
     const uid = process.getuid?.() ?? 1000
@@ -293,6 +304,8 @@ try {
     assert.doesNotMatch(source, /--no-sandbox/)
     assert.match(source, /sandboxPolicy/)
     assert.match(source, /sandbox\.confine/)
+    assert.match(source, /browserBwrapArgv/)
+    assert.match(source, /Mirrors the reviewed @deepseek-ai\/dsh-sandbox-local 0\.1\.2-rc\.1 bwrap/)
     assert.match(source, /launchBrowser/)
     assert.doesNotMatch(workerClient, /CREDENTIALS_DIRECTORY|browser-worker\.key/)
     assert.match(worker, /SO_PEERCRED/)
@@ -301,6 +314,7 @@ try {
     assert.match(worker, /MainPID/)
     assert.match(worker, /koffi/)
     assert.match(worker, /--no-sandbox is forbidden/)
+    assert.match(worker, /pinned DSH bwrap profile/)
     assert.match(worker, /NoNewPrivs/)
     assert.match(worker, /await mkdir\(profileDir/)
     assert.doesNotMatch(source, /mkdtemp|mkdir\(this\.config\.profileRoot|rm\(state\.profileDir/)
@@ -345,8 +359,9 @@ try {
     assert.match(provision, /apparmor_parser -r -K "\$APPARMOR_PROFILE_TARGET"/)
     assert.match(provision, /aa-exec -p dsh-browser-worker --/)
     assert.match(provision, /setpriv --reuid "\$DSH_UID" --regid "\$DSH_GID" --clear-groups --no-new-privs/)
+    assert.match(provision, /bwrap[\s\S]*--ro-bind \/ \/[\s\S]*--proc \/proc[\s\S]*--tmpfs \/tmp[\s\S]*--bind "\$DSH_WORKSPACE" "\$DSH_WORKSPACE"/)
     assert.match(provision, /unshare --user --map-root-user \/usr\/bin\/true/)
-    assert.match(provision, /Browser worker AppArmor userns probe passed under NoNewPrivileges/)
+    assert.match(provision, /Browser worker AppArmor\+bwrap nested-userns probe passed under NoNewPrivileges/)
     assert.match(provision, /LEGACY_BROWSER_CREDENTIAL=.*browser-worker\.key/)
     assert.match(provision, /authorization now uses Unix SO_PEERCRED/)
     assert.match(provision, /identity\.conf/)

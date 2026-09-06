@@ -58,6 +58,7 @@ done
   exit 1
 }
 command -v setpriv >/dev/null 2>&1 || { echo "setpriv is required for the browser worker" >&2; exit 1; }
+command -v bwrap >/dev/null 2>&1 || { echo "bubblewrap is required for browser workspace confinement" >&2; exit 1; }
 
 PLAYWRIGHT_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["playwright-core"])' "$PACKAGE_JSON")"
 [[ "$PLAYWRIGHT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
@@ -94,9 +95,11 @@ fi
 
 DSH_USER="$(systemctl show "$DSH_SERVICE" -p User --value)"
 DSH_GROUP="$(systemctl show "$DSH_SERVICE" -p Group --value)"
+DSH_WORKSPACE="$(systemctl show "$DSH_SERVICE" -p WorkingDirectory --value)"
 [[ -n "$DSH_USER" && -n "$DSH_GROUP" ]] || { echo "cannot resolve effective DSH service identity" >&2; exit 1; }
 id "$DSH_USER" >/dev/null 2>&1 || { echo "DSH service user does not exist: $DSH_USER" >&2; exit 1; }
 getent group "$DSH_GROUP" >/dev/null 2>&1 || { echo "DSH service group does not exist: $DSH_GROUP" >&2; exit 1; }
+[[ "$DSH_WORKSPACE" = /* && -d "$DSH_WORKSPACE" ]] || { echo "cannot resolve DSH workspace for browser bwrap probe" >&2; exit 1; }
 DSH_UID="$(id -u "$DSH_USER")"
 DSH_GID="$(getent group "$DSH_GROUP" | cut -d: -f3)"
 [[ "$DSH_UID" =~ ^[0-9]+$ && "$DSH_GID" =~ ^[0-9]+$ ]] || { echo "cannot resolve numeric DSH service identity" >&2; exit 1; }
@@ -104,11 +107,20 @@ DSH_GID="$(getent group "$DSH_GROUP" | cut -d: -f3)"
 if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
   if ! aa-exec -p dsh-browser-worker -- \
     setpriv --reuid "$DSH_UID" --regid "$DSH_GID" --clear-groups --no-new-privs \
-    unshare --user --map-root-user /usr/bin/true; then
-    echo "browser-worker AppArmor profile does not permit unprivileged user namespaces under NoNewPrivileges" >&2
+    bwrap \
+      --ro-bind / / \
+      --dev /dev \
+      --unshare-pid \
+      --proc /proc \
+      --die-with-parent \
+      --tmpfs /tmp \
+      --bind "$DSH_WORKSPACE" "$DSH_WORKSPACE" \
+      -- \
+      unshare --user --map-root-user /usr/bin/true; then
+    echo "browser-worker AppArmor/bwrap profile does not support Chromium-style nested user namespaces under NoNewPrivileges" >&2
     exit 1
   fi
-  echo "Browser worker AppArmor userns probe passed under NoNewPrivileges."
+  echo "Browser worker AppArmor+bwrap nested-userns probe passed under NoNewPrivileges."
 fi
 
 if [[ -e "$LEGACY_BROWSER_CREDENTIAL" || -L "$LEGACY_BROWSER_CREDENTIAL" ]]; then

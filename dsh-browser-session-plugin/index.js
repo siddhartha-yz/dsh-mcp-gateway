@@ -18,6 +18,7 @@ const MAX_METADATA_CHARS = 2_000
 const STARTUP_TIMEOUT_MS = 15_000
 const ACTION_TIMEOUT_MS = 30_000
 const MAX_ACTION_TIMEOUT_MS = 60_000
+const BWRAP_PATH = '/usr/bin/bwrap'
 
 const ACTION_FIELDS = Object.freeze({
   open: Object.freeze(['action', 'name', 'url']),
@@ -38,6 +39,27 @@ const REQUIRED_FIELDS = Object.freeze({
   script: Object.freeze(['id', 'script']),
   close: Object.freeze(['id']),
 })
+
+export function browserBwrapArgv(argv, policy) {
+  if (!policy || policy.mode !== 'workspace-write') throw new BrowserSessionError('sandbox_unavailable', 'browser bwrap confinement requires workspace-write policy')
+  const workspaceRoot = resolve(policy.workspaceRoot)
+  if (!workspaceRoot.startsWith('/')) throw new BrowserSessionError('sandbox_unavailable', 'browser workspace root must be absolute')
+  // Mirrors the reviewed @deepseek-ai/dsh-sandbox-local 0.1.2-rc.1 bwrap
+  // profile. DSH remains the policy authority; this browser-specific execution
+  // rung avoids Landlock denying Chromium userns writes to its private /proc.
+  return [
+    BWRAP_PATH,
+    '--ro-bind', '/', '/',
+    '--dev', '/dev',
+    '--unshare-pid',
+    '--proc', '/proc',
+    '--die-with-parent',
+    '--tmpfs', '/tmp',
+    '--bind', workspaceRoot, workspaceRoot,
+    '--',
+    ...argv,
+  ]
+}
 
 export class BrowserSessionError extends Error {
   constructor(code, message) {
@@ -342,9 +364,12 @@ export class BrowserSessionManager {
       if (policy.mode !== 'danger-full-access') {
         const sandbox = this.ctx.get?.('sandbox')
         if (!sandbox) throw new BrowserSessionError('sandbox_unavailable', `browser_session requires a DSH sandbox provider under mode ${policy.mode}`)
-        const confined = sandbox.confine(baseArgv, { ...policy, mode: policy.mode })
-        argv = confined.argv
-        enforcement = confined.enforcement
+        // Ask the DSH sandbox provider to validate the resolved policy fail-closed.
+        // Its Linux fallback is Landlock on this host, but Landlock intentionally
+        // blocks /proc uid_map writes required by Chromium's own userns sandbox.
+        sandbox.confine(baseArgv, { ...policy, mode: policy.mode })
+        argv = browserBwrapArgv(baseArgv, policy)
+        enforcement = 'full'
       }
       const launched = await this.config.launchBrowser({
         socketPath: this.config.workerSocket,
@@ -775,7 +800,7 @@ export function createBrowserSessionTool(manager) {
       'Actions: open, list, status, snapshot, act, script, close.',
       'Browser page/cookie/DOM state persists across tool calls until close or Agent disposal.',
       'The plugin contains no model loop, autonomous task runner, or scheduler.',
-      'DSH computes the sandbox-confined Chromium argv; a narrow local browser worker launches that argv under a dedicated AppArmor userns profile and NoNewPrivileges.',
+      'DSH owns the resolved sandbox policy; workspace-write browser sessions use the reviewed DSH 0.1.2-rc.1 bwrap file profile so Chromium can retain its own userns sandbox, and a narrow local worker launches only that validated argv under AppArmor plus NoNewPrivileges.',
     ].join(' '),
     parameters: BROWSER_SESSION_PARAMETERS,
     output: {

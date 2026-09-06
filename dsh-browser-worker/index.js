@@ -30,27 +30,34 @@ function playwrightChromiumExecutable(runtimeRoot = runtimeRootFromProcess()) {
   return resolve(chromium.executablePath())
 }
 
-function expectedLandlockLauncher(runtimeRoot = runtimeRootFromProcess()) {
-  const arch = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : null
-  if (!arch || process.platform !== 'linux') throw new Error(`unsupported browser worker platform: ${process.platform}/${process.arch}`)
-  return resolve(runtimeRoot, 'node_modules', '@deepseek-ai', `node-addon-landlock-run-linux-${arch}`, 'bin', 'landlock-run')
-}
-
 function boundedAppend(current, chunk, maxBytes) {
   const next = current + chunk.toString('utf8')
   if (Buffer.byteLength(next, 'utf8') <= maxBytes) return next
   return Buffer.from(next, 'utf8').subarray(-maxBytes).toString('utf8')
 }
 
-function parseProfileDir(argv, expectedExecutable, profileRoot, expectedLauncher) {
+function parseProfileDir(argv, expectedExecutable, profileRoot, expectedBwrap, cwd) {
   const executableIndex = argv.indexOf(expectedExecutable)
   if (executableIndex < 0) throw new Error('argv does not contain the pinned Chromium executable')
   if (argv.indexOf(expectedExecutable, executableIndex + 1) >= 0) throw new Error('argv contains Chromium executable more than once')
 
   if (executableIndex !== 0) {
-    if (resolve(argv[0]) !== resolve(expectedLauncher)) throw new Error('wrapped browser argv must begin with the pinned DSH landlock-run launcher')
-    const separator = argv.lastIndexOf('--', executableIndex)
-    if (separator < 0 || executableIndex !== separator + 1) throw new Error('wrapped browser argv must place Chromium immediately after landlock-run separator')
+    const expectedPrefix = [
+      resolve(expectedBwrap),
+      '--ro-bind', '/', '/',
+      '--dev', '/dev',
+      '--unshare-pid',
+      '--proc', '/proc',
+      '--die-with-parent',
+      '--tmpfs', '/tmp',
+      '--bind', resolve(cwd), resolve(cwd),
+      '--',
+    ]
+    if (executableIndex !== expectedPrefix.length) throw new Error('wrapped browser argv has unexpected bwrap profile length')
+    for (let index = 0; index < expectedPrefix.length; index += 1) {
+      const actual = index === 0 ? resolve(argv[index]) : argv[index]
+      if (actual !== expectedPrefix[index]) throw new Error(`wrapped browser argv does not match pinned DSH bwrap profile at index ${index}`)
+    }
   }
 
   const browserArgs = argv.slice(executableIndex + 1)
@@ -67,7 +74,7 @@ function parseProfileDir(argv, expectedExecutable, profileRoot, expectedLauncher
 export function validateSpawnRequest(request, {
   expectedExecutable = playwrightChromiumExecutable(),
   profileRoot = process.env.DSH_BROWSER_PROFILE_ROOT ?? '/tmp/dsh-browser-worker',
-  expectedLauncher = expectedLandlockLauncher(),
+  expectedBwrap = '/usr/bin/bwrap',
 } = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('request must be an object')
   const keys = Object.keys(request).sort()
@@ -83,7 +90,7 @@ export function validateSpawnRequest(request, {
   const startupTimeoutMs = request.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
   if (!Number.isInteger(startupTimeoutMs) || startupTimeoutMs < 1 || startupTimeoutMs > MAX_STARTUP_TIMEOUT_MS) throw new Error('startupTimeoutMs is out of range')
   const executable = resolve(expectedExecutable)
-  const profileDir = parseProfileDir(request.argv.map(arg => arg === expectedExecutable ? executable : arg), executable, profileRoot, expectedLauncher)
+  const profileDir = parseProfileDir(request.argv.map(arg => arg === expectedExecutable ? executable : arg), executable, profileRoot, expectedBwrap, request.cwd)
   return { ...request, argv: request.argv.map(arg => arg === expectedExecutable ? executable : arg), startupTimeoutMs, profileDir, expectedExecutable: executable }
 }
 
@@ -301,7 +308,7 @@ export async function main() {
   const profileRoot = process.env.DSH_BROWSER_PROFILE_ROOT ?? '/tmp/dsh-browser-worker'
   const runtimeRoot = runtimeRootFromProcess()
   const expectedExecutable = playwrightChromiumExecutable(runtimeRoot)
-  const expectedLauncher = expectedLandlockLauncher(runtimeRoot)
+  const expectedBwrap = '/usr/bin/bwrap'
   const peerCredentials = createPeerCredentialReader(runtimeRoot)
   const security = await assertWorkerSecurity()
   await rm(socketPath, { force: true })
@@ -309,7 +316,7 @@ export async function main() {
   const server = createServer(socket => {
     sockets.add(socket)
     socket.once('close', () => sockets.delete(socket))
-    void handleConnection(socket, { expectedExecutable, expectedLauncher, profileRoot, peerCredentials })
+    void handleConnection(socket, { expectedExecutable, expectedBwrap, profileRoot, peerCredentials })
   })
   server.maxConnections = 8
   await new Promise((resolvePromise, reject) => {

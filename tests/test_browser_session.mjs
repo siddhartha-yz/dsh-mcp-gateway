@@ -203,6 +203,11 @@ try {
     assert.ok(h.launched[0].argv.includes('--remote-debugging-port=0'))
     assert.ok(h.launched[0].argv.some(arg => arg.startsWith(`--user-data-dir=${h.profileRoot}/`)))
 
+    manager._captureInteractiveElements = async () => []
+    const snapshot = await manager.snapshot(ownerA, opened.session_id, { include_text: false, screenshot: false })
+    assert.equal(snapshot.screenshot, null)
+    assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), snapshot)
+
     assert.equal((await manager.list(ownerA)).sessions.length, 1)
     assert.equal((await manager.list(ownerB)).sessions.length, 0)
     await assert.rejects(

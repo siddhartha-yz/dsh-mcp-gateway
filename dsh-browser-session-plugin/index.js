@@ -467,7 +467,7 @@ export class BrowserSessionManager {
       text = bounded.text
       textTruncated = bounded.truncated
     }
-    let screenshot
+    let screenshot = null
     if (options.screenshot ?? true) screenshot = await this._saveScreenshot(page, options.full_page ?? false)
     await this._syncPages(state)
     const pageId = this._pageId(state, page)
@@ -774,7 +774,7 @@ export class BrowserSessionManager {
 
   async _saveScreenshot(page, fullPage) {
     const attachments = this.ctx.get?.('attachments')
-    if (!attachments) return undefined
+    if (!attachments) return null
     const limits = attachments.imageLimits ?? {}
     const maxBytes = Math.min(limits.maxImageBytes ?? 4_000_000, limits.maxMessageImageBytes ?? 4_000_000)
     let data = await page.screenshot({ type: 'png', fullPage: Boolean(fullPage) })

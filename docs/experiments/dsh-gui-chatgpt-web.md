@@ -302,27 +302,53 @@ An isolated official `dsh web` profile was started on loopback using a separate 
 
 This proves the intended GUI extension strategy is viable: P6 can stay inside the official DSH Web/theme/plugin ecosystem rather than maintaining a separate frontend.
 
-## B1 implementation checkpoint — ChatGPT companion prepared
+## B1 implementation checkpoint — real `ui/message` proven
 
-The gateway now also contains an **opt-in only** MCP App probe in `src/dsh_mcp_gateway/chatgpt_web_companion.py`.
+The opt-in MCP App companion was deployed on the experiment branch and exercised in a real ChatGPT Web conversation.
 
-Normal mode remains the frozen four-tool MCP surface. When `enable_chatgpt_web_companion=True` (or the CLI experiment flag is used), one temporary fifth tool, `open_chatgpt_web_bridge_companion`, is added through the Python MCP SDK's `Apps` extension and binds a self-contained `text/html;profile=mcp-app` resource.
+One ChatGPT product detail matters for the bridge lifecycle: the connected plugin did not automatically hot-refresh its MCP tool snapshot after deployment, but using the plugin settings **Refresh** action updated the same conversation from four model-visible tools to five. A fresh conversation is therefore not intrinsically required after an experimental tool-surface change; an explicit connector refresh is sufficient.
 
-The companion intentionally implements only the standard ext-apps wire sequence observed in the LSM reference implementation:
+The initial companion rendered a deliberately manual `Send follow-up probe` control. Clicking it sent the exact standard MCP Apps host request `ui/message`; ChatGPT inserted the supplied user message into the current real conversation and immediately started another model turn. The resulting assistant turn returned the expected `B1_UI_MESSAGE_OK` marker. This proves the central B1 assumption: a rendered MCP App can start a genuine next ChatGPT Web turn without DOM automation or direct undocumented ChatGPT backend calls.
+
+The manual button was only a transport proof and is not part of the intended architecture.
+
+## B1 implementation checkpoint — automatic outbound relay
+
+After the real host proof, the companion was changed from a button-driven probe into an automatic transport relay.
+
+The experiment path is now:
 
 ```text
-ui/initialize
-ui/notifications/initialized
-ui/message
+DSH Web GUI
+  -> DSH-owned bridge mailbox
+  -> app-only MCP transport tool
+  -> rendered companion polls automatically
+  -> ui/message
+  -> real next ChatGPT Web turn
 ```
 
-It verifies that the ChatGPT host advertises `hostCapabilities.message`, then exposes one explicit `Send follow-up probe` button. It contains no OpenAI API request, direct model call, timer loop, DSH execution, or undocumented ChatGPT backend endpoint.
+The production DSH Host patch on this experiment branch now loads `dsh-chatgpt-web-bridge-plugin/` directly, so the visible DSH Web GUI and the public gateway share the same in-process mailbox instead of using separate isolated test stores. The DSH Harness bridge explicitly reviews and exposes `chatgpt_web_bridge` to the gateway. The gateway then exposes a separate `chatgpt_web_bridge_transport` MCP tool with `visibility=["app"]`; it is callable by the companion but is not intended to expand the model-facing tool surface.
 
-Local acceptance proves:
+The rendered companion has no message textarea and no send button. After `ui/initialize` it requires both `hostCapabilities.message` and app-initiated `serverTools`, publishes `companion_ready`, and continuously uses non-overlapping `setTimeout` polls. When the DSH GUI queues a message, it automatically performs:
 
-- default gateway mode still exposes exactly the original four stable MCP tools;
-- opt-in mode exposes those four plus the single UI-bound probe tool;
-- the `ui://` resource is served with the MCP App MIME type and carries the expected visibility metadata;
-- the complete repository gate passes 199 Python tests plus the existing JS adapters and the new DSH GUI mailbox tests.
+```text
+poll
+-> begin_send
+-> ui/message
+-> ack(sent | failed)
+```
 
-The remaining B1 risk is now narrow and product-host-specific: deploy the opt-in companion to a real ChatGPT Web connection, render it, and verify that pressing the button causes an actual new ChatGPT turn. Only after that host behavior is proven should the companion be connected to the DSH GUI mailbox automatically.
+`begin_send` introduces a fail-closed `dispatching` state. Ordinary un-dispatched claims may expire and return to the queue, but once a message is about to cross the `ui/message` boundary it never automatically requeues. If the iframe disappears after ChatGPT accepted the message but before the acknowledgement reaches DSH, the queue remains visibly `dispatching` rather than risking a duplicate ChatGPT turn.
+
+The companion remains transport-only: it contains no model invocation, task planner, AgentLoop, provider API, shell, or autonomous reasoning logic. Its resource declares an explicit empty external-resource CSP because the current implementation is self-contained.
+
+### What B1 still does not prove
+
+Automatic **outbound** forwarding is not yet the same as automatic long-task continuation. The unresolved question is the receive/lifecycle side: can the official MCP App surface reliably tell us that the assistant's newly started turn has finished, whether it stopped for genuine human input, and whether the same companion iframe remains alive across multiple ChatGPT turns?
+
+The next production acceptance must therefore prove two things separately:
+
+1. Queue a message only from the DSH GUI and confirm the hidden ChatGPT conversation starts the next turn with no ChatGPT-side click.
+2. After that assistant turn completes, queue a second DSH-GUI message without reopening the companion and verify the original companion remains alive.
+
+If outbound relay works but reliable turn-completion/assistant-text observation is unavailable through the official App bridge, retain B1 for sending and move only the receive side to B2's minimal injected observer. Do not fall back to timer-based blind `continue`.

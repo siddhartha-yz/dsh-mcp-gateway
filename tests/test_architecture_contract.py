@@ -42,6 +42,8 @@ class ArchitectureContractTests(unittest.TestCase):
         profile = (ROOT / "dsh-bridge-plugin" / "chatgpt-capability-profile.js").read_text(encoding="utf-8")
         task_plugin = (ROOT / "dsh-task-state-plugin" / "index.js").read_text(encoding="utf-8")
         task_store = (ROOT / "dsh-task-state-plugin" / "task-store.js").read_text(encoding="utf-8")
+        gui_bridge = (ROOT / "dsh-chatgpt-web-bridge-plugin" / "index.js").read_text(encoding="utf-8")
+        companion = (ROOT / "src" / "dsh_mcp_gateway" / "chatgpt_web_companion.py").read_text(encoding="utf-8")
         gateway_bridge = (ROOT / "src" / "dsh_mcp_gateway" / "harness_bridge.py").read_text(encoding="utf-8")
         overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
 
@@ -99,6 +101,16 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertNotIn("fetch(", task_store)
         self.assertNotIn("child_process", task_store)
 
+        self.assertIn("name: 'chatgpt_web_bridge'", gui_bridge)
+        self.assertIn("begin_send", gui_bridge)
+        self.assertNotIn("ctx.llm", gui_bridge)
+        self.assertNotIn("child_process", gui_bridge)
+        self.assertIn("ui/message", companion)
+        self.assertIn('visibility=["app"]', companion)
+        self.assertIn("chatgpt_web_bridge_transport", companion)
+        self.assertNotIn("api.openai.com", companion)
+        self.assertNotIn("workspace_agents", companion)
+
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")
         dsh_unit = (ROOT / "deploy" / "systemd" / "dsh-web-host.service").read_text(encoding="utf-8")
         dsh_env = (ROOT / "deploy" / "systemd" / "dsh.env.example").read_text(encoding="utf-8")
@@ -108,9 +120,11 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", dsh_unit)
         self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
         self.assertIn("dsh-task-state-plugin/index.js", overlay)
+        self.assertIn("dsh-chatgpt-web-bridge-plugin/index.js", overlay)
         self.assertIn("dsh-bridge-plugin/index.js", overlay)
         self.assertIn("allowExtraTools:", overlay)
         self.assertIn("- task_state", overlay)
+        self.assertIn("- chatgpt_web_bridge", overlay)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ def build_mcp_server(
     """Build the ChatGPT-facing MCP surface over one DSH Harness bridge."""
     if project_dsh_tools and harness_bridge is None:
         raise ValueError("project_dsh_tools requires harness_bridge")
+    if enable_chatgpt_web_companion and harness_bridge is None:
+        raise ValueError("enable_chatgpt_web_companion requires harness_bridge")
 
     try:
         from mcp.server import MCPServer
@@ -95,7 +97,7 @@ def build_mcp_server(
     if enable_chatgpt_web_companion:
         from .chatgpt_web_companion import build_chatgpt_web_companion_apps
 
-        extensions = [build_chatgpt_web_companion_apps()]
+        extensions = [build_chatgpt_web_companion_apps(harness_bridge.call)]
 
     mcp = server_cls(
         "dsh-mcp-gateway",

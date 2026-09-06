@@ -49,6 +49,12 @@
         maxSessionsGlobal: 3
         maxSessionsPerOwner: 2
 
+    # Experimental DSH GUI <-> hidden ChatGPT Web transport. The plugin owns
+    # only a bounded mailbox plus Web GUI status/control UI; it contains no
+    # model invocation or autonomous reasoning loop.
+    - id: chatgpt-web-bridge-experiment
+      name: /srv/dsh-mcp-gateway/dsh-chatgpt-web-bridge-plugin/index.js
+
     - id: chatgpt-harness-bridge
       name: /srv/dsh-mcp-gateway/dsh-bridge-plugin/index.js
       config:
@@ -59,3 +65,4 @@
           - task_state
           - shell_session
           - browser_session
+          - chatgpt_web_bridge

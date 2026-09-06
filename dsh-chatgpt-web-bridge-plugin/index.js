@@ -4,7 +4,7 @@ export const name = 'dsh-chatgpt-web-bridge-experiment'
 export const inject = ['webServer', 'tools']
 
 export const BRIDGE_BASE_PATH = '/plugins/chatgpt-web-bridge'
-export const BRIDGE_VERSION = 1
+export const BRIDGE_VERSION = 2
 
 const MAX_BODY_BYTES = 16 * 1024
 const MAX_MESSAGE_CHARS = 8_000
@@ -68,7 +68,7 @@ export class ChatGPTWebBridgeStore {
 
   enqueue(text, source = 'dsh-gui') {
     const normalizedText = requireNonEmptyString(text, 'text', MAX_MESSAGE_CHARS)
-    const active = this.messages.filter((message) => message.status === 'pending' || message.status === 'claimed')
+    const active = this.messages.filter((message) => ['pending', 'claimed', 'dispatching'].includes(message.status))
     if (active.length >= MAX_QUEUE) throw new BridgeError('queue_full', `bridge queue is limited to ${MAX_QUEUE} active messages`)
     const now = this.now()
     const message = {
@@ -115,6 +115,22 @@ export class ChatGPTWebBridgeStore {
     return { companion: this.publicCompanion() }
   }
 
+  beginSend({ clientId, messageId }) {
+    const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
+    const normalizedMessageId = requireNonEmptyString(messageId, 'message_id', 128)
+    const message = this.messages.find((candidate) => candidate.id === normalizedMessageId)
+    if (message === undefined) throw new BridgeError('message_not_found', 'bridge message not found')
+    if (message.status !== 'claimed' || message.claimedBy !== normalizedClientId) {
+      throw new BridgeError('claim_mismatch', 'bridge message is not claimed by this companion')
+    }
+    const now = this.now()
+    message.status = 'dispatching'
+    message.updatedAt = now
+    message.claimExpiresAt = null
+    this.touchCompanion(normalizedClientId, null, now)
+    return { message: this.publicMessage(message), companion: this.publicCompanion() }
+  }
+
   ack({ clientId, messageId, outcome, error = null }) {
     const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
     const normalizedMessageId = requireNonEmptyString(messageId, 'message_id', 128)
@@ -123,8 +139,8 @@ export class ChatGPTWebBridgeStore {
     }
     const message = this.messages.find((candidate) => candidate.id === normalizedMessageId)
     if (message === undefined) throw new BridgeError('message_not_found', 'bridge message not found')
-    if (message.status !== 'claimed' || message.claimedBy !== normalizedClientId) {
-      throw new BridgeError('claim_mismatch', 'bridge message is not claimed by this companion')
+    if (message.status !== 'dispatching' || message.claimedBy !== normalizedClientId) {
+      throw new BridgeError('dispatch_mismatch', 'bridge message is not dispatching through this companion')
     }
     const now = this.now()
     message.status = outcome
@@ -163,7 +179,7 @@ export class ChatGPTWebBridgeStore {
   status() {
     const now = this.now()
     this.releaseExpiredClaims(now)
-    const counts = { pending: 0, claimed: 0, sent: 0, failed: 0 }
+    const counts = { pending: 0, claimed: 0, dispatching: 0, sent: 0, failed: 0 }
     for (const message of this.messages) counts[message.status] += 1
     return {
       version: BRIDGE_VERSION,
@@ -171,7 +187,7 @@ export class ChatGPTWebBridgeStore {
       counts,
       companion: this.publicCompanion(),
       activeMessages: this.messages
-        .filter((message) => message.status === 'pending' || message.status === 'claimed')
+        .filter((message) => ['pending', 'claimed', 'dispatching'].includes(message.status))
         .map((message) => this.publicMessage(message)),
       recentEvents: this.events.slice(-RECENT_EVENT_LIMIT).map((event) => ({ ...event })),
     }
@@ -215,7 +231,7 @@ export class ChatGPTWebBridgeStore {
 
   trimSettledMessages() {
     if (this.messages.length <= MAX_QUEUE * 2) return
-    const active = this.messages.filter((message) => message.status === 'pending' || message.status === 'claimed')
+    const active = this.messages.filter((message) => ['pending', 'claimed', 'dispatching'].includes(message.status))
     const settled = this.messages.filter((message) => message.status === 'sent' || message.status === 'failed').slice(-MAX_QUEUE)
     this.messages = [...settled, ...active]
   }
@@ -224,7 +240,7 @@ export class ChatGPTWebBridgeStore {
 const TOOL_PARAMETERS = Object.freeze({
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['status', 'poll', 'heartbeat', 'ack', 'publish'] },
+    action: { type: 'string', enum: ['status', 'poll', 'heartbeat', 'begin_send', 'ack', 'publish'] },
     client_id: { type: 'string' },
     message_id: { type: 'string' },
     outcome: { type: 'string', enum: ['sent', 'failed'] },
@@ -243,8 +259,8 @@ export function createBridgeTool(store) {
     description: [
       'Experimental mechanical bridge between a DSH Web GUI and a companion running inside the real ChatGPT Web conversation.',
       'It does not invoke a model or choose next actions.',
-      'Actions: status, poll, heartbeat, ack, publish.',
-      'poll leases one GUI-originated message to a named companion; ack settles that lease; publish reports ChatGPT-side lifecycle observations back to DSH.',
+      'Actions: status, poll, heartbeat, begin_send, ack, publish.',
+      'poll leases one GUI-originated message; begin_send makes dispatch fail-closed against duplicate turns; ack settles the dispatch; publish reports ChatGPT-side lifecycle observations back to DSH.',
     ].join(' '),
     parameters: TOOL_PARAMETERS,
     output: {
@@ -260,6 +276,8 @@ export function createBridgeTool(store) {
           return store.poll(args.client_id)
         case 'heartbeat':
           return store.heartbeat(args.client_id)
+        case 'begin_send':
+          return store.beginSend({ clientId: args.client_id, messageId: args.message_id })
         case 'ack':
           return store.ack({ clientId: args.client_id, messageId: args.message_id, outcome: args.outcome, error: args.error })
         case 'publish':

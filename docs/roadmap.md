@@ -154,6 +154,8 @@ The preferred user-facing surface is the official DSH Web GUI, with only a small
 
 The transport experiments are intentionally ordered from least to most invasive: official MCP App `ui/message` bridge, hybrid official-send plus injected read observer, full ChatGPT frontend injection, robust browser automation, and only then a disposable timer/click proof. Workspace Agents API and Responses API are explicitly out of scope because they replace the current ChatGPT-Web reasoning plane.
 
+Current experiment evidence: the official DSH Web client-plugin seam is proven, and a real ChatGPT MCP App `ui/message` request has been proven to create the next turn in the same ChatGPT Web conversation. The original manual proof button is being replaced by an automatic outbound relay from a DSH-owned GUI mailbox through an app-only MCP transport tool. The remaining B1 question is receive-side lifecycle observation: automatic sending alone does not yet prove that the bridge can reliably detect completed turns and decide when a mechanical continuation is safe.
+
 Detailed experiment plan and fallback ladder: [`experiments/dsh-gui-chatgpt-web.md`](experiments/dsh-gui-chatgpt-web.md).
 
 The GUI/bridge must remain a control and transport surface over the existing ChatGPT + DSH architecture, not become another model loop or harness implementation.

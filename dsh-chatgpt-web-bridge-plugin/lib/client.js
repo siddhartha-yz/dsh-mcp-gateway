@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
 
       const companionAge = state?.companion?.lastSeenAt
       const companionOnline = typeof companionAge === 'number' && now - companionAge < 15_000
-      const pending = Number(state?.counts?.pending || 0) + Number(state?.counts?.claimed || 0)
+      const pending = Number(state?.counts?.pending || 0) + Number(state?.counts?.claimed || 0) + Number(state?.counts?.dispatching || 0)
 
       const send = async () => {
         if (sending || text.trim() === '') return

@@ -15,7 +15,7 @@ import {
 const clientPath = new URL('../dsh-chatgpt-web-bridge-plugin/lib/client.js', import.meta.url)
 const packagePath = new URL('../dsh-chatgpt-web-bridge-plugin/package.json', import.meta.url)
 
-test('bridge store leases, acknowledges, and reports messages', () => {
+test('bridge store leases, begins fail-closed dispatch, acknowledges, and reports messages', () => {
   let now = 1_000
   const store = new ChatGPTWebBridgeStore({ now: () => now })
   const queued = store.enqueue('continue current task')
@@ -28,14 +28,30 @@ test('bridge store leases, acknowledges, and reports messages', () => {
   assert.equal(leased.message.attempts, 1)
 
   assert.throws(
-    () => store.ack({ clientId: 'companion-b', messageId: queued.id, outcome: 'sent' }),
+    () => store.beginSend({ clientId: 'companion-b', messageId: queued.id }),
     (error) => error instanceof BridgeError && error.code === 'claim_mismatch',
   )
+  assert.throws(
+    () => store.ack({ clientId: 'companion-a', messageId: queued.id, outcome: 'sent' }),
+    (error) => error instanceof BridgeError && error.code === 'dispatch_mismatch',
+  )
 
-  now += 100
+  now += 50
+  const dispatching = store.beginSend({ clientId: 'companion-a', messageId: queued.id })
+  assert.equal(dispatching.message.status, 'dispatching')
+  assert.equal(dispatching.message.claimExpiresAt, null)
+  assert.equal(store.status().counts.dispatching, 1)
+
+  assert.throws(
+    () => store.ack({ clientId: 'companion-b', messageId: queued.id, outcome: 'sent' }),
+    (error) => error instanceof BridgeError && error.code === 'dispatch_mismatch',
+  )
+
+  now += 50
   const settled = store.ack({ clientId: 'companion-a', messageId: queued.id, outcome: 'sent' })
   assert.equal(settled.message.status, 'sent')
   assert.equal(store.status().counts.sent, 1)
+  assert.equal(store.status().counts.dispatching, 0)
   assert.equal(store.status().counts.pending, 0)
 })
 
@@ -50,6 +66,24 @@ test('expired claims return to the queue and can be reclaimed', () => {
   assert.equal(reclaimed.message.id, queued.id)
   assert.equal(reclaimed.message.claimedBy, 'companion-b')
   assert.equal(reclaimed.message.attempts, 2)
+})
+
+test('dispatching messages never auto-requeue after the claim TTL', () => {
+  let now = 50_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const queued = store.enqueue('one turn only')
+  store.poll('companion-a')
+  const dispatching = store.beginSend({ clientId: 'companion-a', messageId: queued.id })
+  assert.equal(dispatching.message.status, 'dispatching')
+
+  now += 31_000
+  const otherPoll = store.poll('companion-b')
+  assert.equal(otherPoll.message, null)
+  const status = store.status()
+  assert.equal(status.counts.dispatching, 1)
+  assert.equal(status.counts.pending, 0)
+  assert.equal(status.activeMessages[0].id, queued.id)
+  assert.equal(status.activeMessages[0].attempts, 1)
 })
 
 test('companion lifecycle events are bounded and visible in status', () => {
@@ -70,8 +104,9 @@ test('bridge tool is mechanical and exposes only transport actions', async () =>
   const store = new ChatGPTWebBridgeStore()
   const tool = createBridgeTool(store)
   assert.equal(tool.name, 'chatgpt_web_bridge')
-  assert.deepEqual(tool.parameters.properties.action.enum, ['status', 'poll', 'heartbeat', 'ack', 'publish'])
+  assert.deepEqual(tool.parameters.properties.action.enum, ['status', 'poll', 'heartbeat', 'begin_send', 'ack', 'publish'])
   assert.match(tool.description, /does not invoke a model or choose next actions/)
+  assert.match(tool.description, /fail-closed against duplicate turns/)
   const status = await tool.execute({ action: 'status' })
   assert.equal(status.version, BRIDGE_VERSION)
 })
@@ -89,5 +124,6 @@ test('plugin is a DSH web dual-face plugin with a sidebar client surface', async
   assert.match(client, /window\.__ModuleLoader__\.load/)
   assert.match(client, /sidebar\.footer\.action/)
   assert.match(client, /__DSH_CHATGPT_WEB_BRIDGE__/)
+  assert.match(client, /counts\?\.dispatching/)
   assert.doesNotMatch(client, /Responses API|workspace_agents|api\.openai\.com/)
 })

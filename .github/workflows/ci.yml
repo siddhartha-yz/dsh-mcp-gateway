@@ -82,7 +82,10 @@ jobs:
           node --check dsh-browser-session-plugin/index.js
           node --check dsh-browser-session-plugin/worker-client.js
           node --check dsh-browser-worker/index.js
+          node --check dsh-chatgpt-web-bridge-plugin/index.js
+          node --check dsh-chatgpt-web-bridge-plugin/lib/client.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
+          node --check tests/test_gui_chatgpt_bridge.mjs
           node --check tests/test_lsm_tool_filter.mjs
           node --check tests/test_chatgpt_bridge.mjs
           node --check tests/test_task_state.mjs
@@ -91,6 +94,7 @@ jobs:
 
       - name: Test deployment JavaScript
         run: |
+          node --test tests/test_gui_chatgpt_bridge.mjs
           node tests/test_lsm_tool_filter.mjs
           node tests/test_chatgpt_bridge.mjs
           node tests/test_task_state.mjs

@@ -4,13 +4,18 @@ import unittest
 
 from dsh_mcp_gateway import build_mcp_server
 from dsh_mcp_gateway.chatgpt_web_companion import (
+    BRIDGE_DSH_TOOL_NAME,
     COMPANION_HTML,
     COMPANION_RESOURCE_URI,
     COMPANION_TOOL_NAME,
+    TRANSPORT_TOOL_NAME,
 )
 
 
 class _FakeBridge:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict | None]] = []
+
     def tools(self):
         return []
 
@@ -21,7 +26,12 @@ class _FakeBridge:
         raise AssertionError(name)
 
     def call(self, name, arguments=None):
-        raise AssertionError((name, arguments))
+        self.calls.append((name, arguments))
+        return {
+            "isError": False,
+            "value": {"forwarded": {"name": name, "arguments": arguments}},
+            "content": [],
+        }
 
 
 class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
@@ -33,8 +43,13 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await server.list_resources(), [])
 
-    async def test_opt_in_companion_adds_one_ui_bound_probe_tool(self) -> None:
-        server = build_mcp_server(_FakeBridge(), enable_chatgpt_web_companion=True)
+    async def test_companion_requires_a_real_harness_bridge(self) -> None:
+        with self.assertRaisesRegex(ValueError, "enable_chatgpt_web_companion requires harness_bridge"):
+            build_mcp_server(None, enable_chatgpt_web_companion=True)
+
+    async def test_opt_in_companion_adds_model_ui_and_app_only_transport(self) -> None:
+        bridge = _FakeBridge()
+        server = build_mcp_server(bridge, enable_chatgpt_web_companion=True)
         tools = {tool.name: tool for tool in await server.list_tools()}
         self.assertEqual(
             set(tools),
@@ -44,33 +59,59 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_skill_catalog",
                 "dsh_skill_load",
                 COMPANION_TOOL_NAME,
+                TRANSPORT_TOOL_NAME,
             },
         )
 
         companion = tools[COMPANION_TOOL_NAME]
         self.assertEqual(companion.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)
         self.assertEqual(companion.meta["ui"]["visibility"], ["model", "app"])
+        transport = tools[TRANSPORT_TOOL_NAME]
+        self.assertEqual(transport.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)
+        self.assertEqual(transport.meta["ui"]["visibility"], ["app"])
 
         resources = await server.list_resources()
         self.assertEqual(len(resources), 1)
         self.assertEqual(str(resources[0].uri), COMPANION_RESOURCE_URI)
         self.assertEqual(resources[0].mime_type, "text/html;profile=mcp-app")
 
-        result = await server.call_tool(COMPANION_TOOL_NAME, {})
-        self.assertFalse(result.is_error)
-        self.assertEqual(result.structured_content["status"], "ready")
-        self.assertEqual(result.structured_content["experiment"], "B1-ui-message")
+        opened = await server.call_tool(COMPANION_TOOL_NAME, {})
+        self.assertFalse(opened.is_error)
+        self.assertEqual(opened.structured_content["status"], "armed")
+        self.assertEqual(opened.structured_content["experiment"], "B1-auto-relay")
 
-    async def test_companion_html_is_self_contained_official_ui_message_probe(self) -> None:
+        relayed = await server.call_tool(
+            TRANSPORT_TOOL_NAME,
+            {"action": "poll", "client_id": "companion-test"},
+        )
+        self.assertFalse(relayed.is_error)
+        self.assertEqual(
+            bridge.calls,
+            [(BRIDGE_DSH_TOOL_NAME, {"action": "poll", "client_id": "companion-test"})],
+        )
+        self.assertEqual(
+            relayed.structured_content["value"]["forwarded"]["name"],
+            BRIDGE_DSH_TOOL_NAME,
+        )
+
+    async def test_companion_html_is_automatic_official_host_relay(self) -> None:
         self.assertIn("ui/initialize", COMPANION_HTML)
         self.assertIn("ui/notifications/initialized", COMPANION_HTML)
         self.assertIn("ui/message", COMPANION_HTML)
-        self.assertIn("hostCapabilities.message", COMPANION_HTML)
+        self.assertIn("tools/call", COMPANION_HTML)
+        self.assertIn("capabilities.message", COMPANION_HTML)
+        self.assertIn("capabilities.serverTools", COMPANION_HTML)
+        self.assertIn(TRANSPORT_TOOL_NAME, COMPANION_HTML)
+        self.assertIn("begin_send", COMPANION_HTML)
+        self.assertIn("window.setTimeout", COMPANION_HTML)
+        self.assertIn("automatic relay armed", COMPANION_HTML)
         self.assertIn("window.parent.postMessage", COMPANION_HTML)
+        self.assertNotIn("Send follow-up probe", COMPANION_HTML)
+        self.assertNotIn("<textarea", COMPANION_HTML)
+        self.assertNotIn("setInterval", COMPANION_HTML)
         self.assertNotIn("api.openai.com", COMPANION_HTML)
         self.assertNotIn("workspace_agents", COMPANION_HTML)
         self.assertNotIn("Responses API", COMPANION_HTML)
-        self.assertNotIn("setInterval", COMPANION_HTML)
 
 
 if __name__ == "__main__":

@@ -59,7 +59,7 @@ export npm_config_registry=https://registry.npmjs.org/
 export npm_config_cache="$CACHE_DIR"
 
 echo "Installing host dependencies for playwright-core=$PLAYWRIGHT_VERSION Chromium..."
-timeout --signal=TERM --kill-after=30s 1200s \
+timeout --foreground --signal=TERM --kill-after=30s 1200s \
   "$RUNTIME_NODE/npx" --yes "playwright-core@$PLAYWRIGHT_VERSION" install-deps chromium
 
 echo "Browser host dependencies provisioned for playwright-core=$PLAYWRIGHT_VERSION"

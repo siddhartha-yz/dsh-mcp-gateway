@@ -243,6 +243,9 @@ function makeHarness({ mode = 'workspace-write' } = {}) {
   assert.match(upgrade, /playwright-core/)
   assert.match(upgrade, /install --no-shell chromium/)
   assert.match(upgrade, /provision-browser-deps\.sh/)
+
+  const provision = await readFile(new URL('../scripts/provision-browser-deps.sh', import.meta.url), 'utf8')
+  assert.match(provision, /timeout --foreground --signal=TERM --kill-after=30s 1200s/)
 }
 
 console.log('chatgpt-browser-session-adapter-ok')

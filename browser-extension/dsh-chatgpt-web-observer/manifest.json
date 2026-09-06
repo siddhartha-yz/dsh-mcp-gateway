@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "DSH ChatGPT Web Observer",
+  "version": "0.1.0",
+  "description": "Experimental read-only B2 observer for relaying ChatGPT Web turn lifecycle into the local DSH GUI.",
+  "permissions": [],
+  "background": {
+    "scripts": ["background.js"],
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["chatgpt-observer.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://127.0.0.1:3080/*", "http://localhost:3080/*"],
+      "js": ["dsh-gui-relay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "dsh-chatgpt-web-observer@siddhartha-yz.local"
+    }
+  }
+}

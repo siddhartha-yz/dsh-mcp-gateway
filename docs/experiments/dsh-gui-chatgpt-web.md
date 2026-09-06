@@ -342,13 +342,30 @@ poll
 
 The companion remains transport-only: it contains no model invocation, task planner, AgentLoop, provider API, shell, or autonomous reasoning logic. Its resource declares an explicit empty external-resource CSP because the current implementation is self-contained.
 
-### What B1 still does not prove
+### B1 real-host acceptance result
 
-Automatic **outbound** forwarding is not yet the same as automatic long-task continuation. The unresolved question is the receive/lifecycle side: can the official MCP App surface reliably tell us that the assistant's newly started turn has finished, whether it stopped for genuine human input, and whether the same companion iframe remains alive across multiple ChatGPT turns?
+B1 outbound has now been proven end-to-end in the real ChatGPT Web host. With the v2 companion rendered once, a message queued through the production DSH GUI bridge path was automatically claimed, moved into fail-closed `dispatching`, forwarded through official `ui/message`, acknowledged `sent`, inserted as a real user message in the same ChatGPT conversation, and started the next model turn without any ChatGPT-side click. The turn returned the expected `B1_AUTO_RELAY_OK_1` marker. The companion heartbeat also remained live across the resulting ChatGPT turn, so the iframe was not destroyed merely because another model turn ran.
 
-The next production acceptance must therefore prove two things separately:
+The official Apps receive surface is nevertheless insufficient for safe automatic continuation. The App receives tool-input/result/cancellation and host-context lifecycle, while `ui/message` hands the follow-up back to the host; the subsequent assistant transcript and a reliable assistant-turn-completed notification are not exposed back to the App. Therefore B1 is retained as the preferred outbound transport, but it is not used to guess completion on a timer.
 
-1. Queue a message only from the DSH GUI and confirm the hidden ChatGPT conversation starts the next turn with no ChatGPT-side click.
-2. After that assistant turn completes, queue a second DSH-GUI message without reopening the companion and verify the original companion remains alive.
+## B2 implementation checkpoint — minimal read-only observer prepared
 
-If outbound relay works but reliable turn-completion/assistant-text observation is unavailable through the official App bridge, retain B1 for sending and move only the receive side to B2's minimal injected observer. Do not fall back to timer-based blind `continue`.
+B2 keeps the proven B1 send path unchanged and adds only the missing receive side. The experimental observer lives at `browser-extension/dsh-chatgpt-web-observer/` and follows this path:
+
+```text
+hidden chatgpt.com tab
+  -> read-only content script
+  -> extension background relay
+  -> localhost DSH GUI content script
+  -> window.postMessage
+  -> DSH client plugin
+  -> authenticated local bridge observer route
+```
+
+The ChatGPT content script observes semantic DOM signals only. It uses `MutationObserver` plus a low-rate watchdog to identify generation start, a completed assistant message, completion, retry/error ambiguity, and SPA conversation-path changes. It never clicks, types, submits, invokes a model, or performs a network request. If the expected assistant/turn identity cannot be established after generation stops, it emits `bridge_degraded` instead of declaring completion.
+
+The extension itself never receives the DSH bridge capability token. Its background process accepts observer events only from `https://chatgpt.com` and relays them only to extension ports originating from `http://127.0.0.1` or `http://localhost`. The localhost relay first verifies that the page contains the DSH bridge boot marker, then sends a bounded `window.postMessage`; only the already-loaded DSH client plugin validates that message and writes it to the authenticated local `/plugins/chatgpt-web-bridge/observer` route.
+
+Bridge store version 3 keeps observer identity/state separate from the B1 companion. `observer_heartbeat` updates liveness without filling lifecycle history, while durable observation events include `observer_ready`, `turn_started`, `assistant_message`, `turn_completed`, `blocked`, `bridge_degraded`, and `error`. The DSH Bridge panel now has a separate Read observer status card and labels companion/observer event sources distinctly.
+
+The initial B2 static/protocol gate passes 10/10 bridge tests plus syntax checks for all extension and bridge scripts. Live acceptance is intentionally still pending: deploy bridge v3, temporarily load the extension in the user's Firefox, refresh the ChatGPT and DSH GUI tabs, verify `observer_ready`/heartbeats, and then run a real generated turn to confirm `turn_started -> assistant_message -> turn_completed` without false completion. Only after that evidence should mechanical auto-continuation be enabled.

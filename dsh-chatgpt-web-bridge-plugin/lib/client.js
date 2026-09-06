@@ -38,7 +38,25 @@ window.__ModuleLoader__.load({
 
     function eventLabel(event) {
       if (!event || typeof event !== 'object') return 'event'
-      return String(event.type || 'event').replaceAll('_', ' ')
+      const source = event.source === 'observer' ? 'observer · ' : event.source === 'companion' ? 'companion · ' : ''
+      return `${source}${String(event.type || 'event').replaceAll('_', ' ')}`
+    }
+
+    const OBSERVER_EVENT_TYPES = new Set(['observer_ready', 'observer_heartbeat', 'turn_started', 'assistant_message', 'turn_completed', 'blocked', 'bridge_degraded', 'error'])
+
+    function normalizeObserverEvent(value) {
+      if (value === null || typeof value !== 'object') return null
+      if (typeof value.observerId !== 'string' || value.observerId.length < 1 || value.observerId.length > 128) return null
+      if (!OBSERVER_EVENT_TYPES.has(value.eventType)) return null
+      if (value.text !== null && value.text !== undefined && (typeof value.text !== 'string' || value.text.length > 8000)) return null
+      if (value.payload === null || typeof value.payload !== 'object' || Array.isArray(value.payload)) return null
+      if (typeof value.payload.conversationId !== 'string' || value.payload.conversationId.length > 512) return null
+      return {
+        observer_id: value.observerId,
+        event_type: value.eventType,
+        text: value.text ?? null,
+        payload: value.payload,
+      }
     }
 
     function BridgeFooterAction({ wide }) {
@@ -76,6 +94,9 @@ window.__ModuleLoader__.load({
 
       const companionAge = state?.companion?.lastSeenAt
       const companionOnline = typeof companionAge === 'number' && now - companionAge < 15_000
+      const observerAge = state?.observer?.lastSeenAt
+      const observerOnline = typeof observerAge === 'number' && now - observerAge < 15_000
+      const observerDegraded = state?.observer?.lastEventType === 'bridge_degraded' || state?.observer?.lastEventType === 'error'
       const pending = Number(state?.counts?.pending || 0) + Number(state?.counts?.claimed || 0) + Number(state?.counts?.dispatching || 0)
 
       const send = async () => {
@@ -154,7 +175,7 @@ window.__ModuleLoader__.load({
       React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 } },
         React.createElement('div', null,
           React.createElement('strong', { style: { display: 'block', fontSize: 15, marginBottom: 3 } }, 'ChatGPT Web Bridge'),
-          React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, 'B1 experimental transport · DSH remains the harness')
+          React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, 'B1 official send + B2 read observer · DSH remains the harness')
         ),
         React.createElement('button', {
           type: 'button',
@@ -172,6 +193,11 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 4 } }, 'Outbound queue'),
           React.createElement('div', { style: { fontWeight: 600 } }, `${pending} active`),
           React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, marginTop: 3 } }, `sent ${Number(state?.counts?.sent || 0)} · failed ${Number(state?.counts?.failed || 0)}`)
+        ),
+        React.createElement('div', { style: { gridColumn: '1 / -1', padding: 10, borderRadius: 10, background: 'var(--dsw-alias-button-ghost-active-fill)' } },
+          React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 4 } }, 'Read observer'),
+          React.createElement('div', { style: { fontWeight: 600 } }, observerDegraded ? 'Degraded' : observerOnline ? 'Connected' : 'Waiting'),
+          React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, marginTop: 3 } }, `${ageLabel(state?.observer?.lastSeenAt, now)}${state?.observer?.lastEventType ? ` · ${String(state.observer.lastEventType).replaceAll('_', ' ')}` : ''}`)
         )
       ),
       React.createElement('label', { style: { display: 'block', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 5 } }, 'Message to the hidden ChatGPT conversation'),
@@ -234,6 +260,22 @@ window.__ModuleLoader__.load({
         id: 'chatgpt-web-bridge',
         order: 20,
       }, BridgeFooterAction))
+
+      ctx.effect(() => {
+        const onObserverMessage = (event) => {
+          if (event.source !== window || event.origin !== location.origin) return
+          const message = event.data
+          if (message === null || typeof message !== 'object') return
+          if (message.source !== 'dsh-chatgpt-web-observer-extension' || message.type !== 'observer-event') return
+          const body = normalizeObserverEvent(message.event)
+          if (body === null) return
+          void bridgeFetch('/observer', { method: 'POST', body: JSON.stringify(body) }).catch((reason) => {
+            console.warn('chatgpt-web-bridge: observer relay failed', reason)
+          })
+        }
+        window.addEventListener('message', onObserverMessage)
+        return () => window.removeEventListener('message', onObserverMessage)
+      }, 'chatgpt-web-bridge.observer-relay')
     }
 
     exports.apply = apply

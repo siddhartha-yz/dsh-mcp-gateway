@@ -14,6 +14,7 @@ import {
 
 const clientPath = new URL('../dsh-chatgpt-web-bridge-plugin/lib/client.js', import.meta.url)
 const packagePath = new URL('../dsh-chatgpt-web-bridge-plugin/package.json', import.meta.url)
+const extensionRoot = new URL('../browser-extension/dsh-chatgpt-web-observer/', import.meta.url)
 
 test('bridge store leases, begins fail-closed dispatch, acknowledges, and reports messages', () => {
   let now = 1_000
@@ -100,6 +101,71 @@ test('companion lifecycle events are bounded and visible in status', () => {
   assert.equal(store.status().recentEvents.at(-1).payload.turn, 1)
 })
 
+test('observer events stay separate from companion lifecycle and heartbeat is history-free', () => {
+  let now = 30_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  store.publish({ clientId: 'companion-a', eventType: 'companion_ready', payload: { relay: 'automatic' } })
+
+  now += 10
+  const ready = store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'observer_ready',
+    payload: { conversationId: '/c/example', transport: 'read-only-dom-observer' },
+  })
+  assert.equal(ready.event.source, 'observer')
+  assert.equal(store.status().observer.observerId, 'observer-a')
+  assert.equal(store.status().observer.conversationId, '/c/example')
+  assert.equal(store.status().companion.clientId, 'companion-a')
+  assert.equal(store.status().recentEvents.length, 2)
+
+  now += 5_000
+  store.observerHeartbeat({ observerId: 'observer-a', payload: { conversationId: '/c/example' } })
+  const status = store.status()
+  assert.equal(status.observer.lastSeenAt, now)
+  assert.equal(status.observer.lastEventType, 'observer_ready')
+  assert.equal(status.recentEvents.length, 2)
+})
+
+test('observer accepts completion and fail-closed degradation events', () => {
+  const store = new ChatGPTWebBridgeStore()
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'assistant_message',
+    text: 'finished answer',
+    payload: { conversationId: '/c/example', turnKey: 'conversation-turn-4' },
+  })
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'turn_completed',
+    payload: { conversationId: '/c/example', turnKey: 'conversation-turn-4' },
+  })
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'bridge_degraded',
+    text: 'selector drift',
+    payload: { conversationId: '/c/example', reason: 'assistant_message_missing_after_run' },
+  })
+  const status = store.status()
+  assert.deepEqual(status.recentEvents.slice(-3).map((event) => event.type), ['assistant_message', 'turn_completed', 'bridge_degraded'])
+  assert.equal(status.observer.lastEventType, 'bridge_degraded')
+})
+
+test('observer rejects malformed identity and payloads', () => {
+  const store = new ChatGPTWebBridgeStore()
+  assert.throws(
+    () => store.publishObserver({ observerId: '', eventType: 'observer_ready', payload: { conversationId: '/c/example' } }),
+    (error) => error instanceof BridgeError && error.code === 'invalid_request',
+  )
+  assert.throws(
+    () => store.publishObserver({ observerId: 'observer-a', eventType: 'unknown', payload: { conversationId: '/c/example' } }),
+    (error) => error instanceof BridgeError && error.code === 'invalid_request',
+  )
+  assert.throws(
+    () => store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: [] }),
+    (error) => error instanceof BridgeError && error.code === 'invalid_request',
+  )
+})
+
 test('bridge tool is mechanical and exposes only transport actions', async () => {
   const store = new ChatGPTWebBridgeStore()
   const tool = createBridgeTool(store)
@@ -125,5 +191,39 @@ test('plugin is a DSH web dual-face plugin with a sidebar client surface', async
   assert.match(client, /sidebar\.footer\.action/)
   assert.match(client, /__DSH_CHATGPT_WEB_BRIDGE__/)
   assert.match(client, /counts\?\.dispatching/)
+  assert.match(client, /dsh-chatgpt-web-observer-extension/)
+  assert.match(client, /bridgeFetch\('\/observer'/)
+  assert.match(client, /Read observer/)
   assert.doesNotMatch(client, /Responses API|workspace_agents|api\.openai\.com/)
+})
+
+test('B2 extension is narrow read-only relay with cross-browser MV3 background declarations', async () => {
+  const manifest = JSON.parse(await readFile(new URL('manifest.json', extensionRoot), 'utf8'))
+  assert.equal(manifest.manifest_version, 3)
+  assert.deepEqual(manifest.permissions, [])
+  assert.equal(manifest.background.service_worker, 'background.js')
+  assert.deepEqual(manifest.background.scripts, ['background.js'])
+  assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*'])
+  assert.deepEqual(manifest.content_scripts[1].matches, ['http://127.0.0.1:3080/*', 'http://localhost:3080/*'])
+
+  const background = await readFile(new URL('background.js', extensionRoot), 'utf8')
+  const observer = await readFile(new URL('chatgpt-observer.js', extensionRoot), 'utf8')
+  const relay = await readFile(new URL('dsh-gui-relay.js', extensionRoot), 'utf8')
+
+  assert.match(observer, /MutationObserver/)
+  assert.match(observer, /data-message-author-role="assistant"/)
+  assert.match(observer, /stop-button/)
+  assert.match(observer, /turn_completed/)
+  assert.match(observer, /bridge_degraded/)
+  assert.match(observer, /observer_heartbeat/)
+  assert.doesNotMatch(observer, /\.click\(|\.submit\(|fetch\(|XMLHttpRequest|api\.openai\.com/)
+
+  assert.match(background, /https:\/\/chatgpt\.com/)
+  assert.match(background, /127\.0\.0\.1/)
+  assert.match(background, /localhost/)
+  assert.doesNotMatch(background, /fetch\(|XMLHttpRequest|tabs\.update|scripting\.executeScript/)
+
+  assert.match(relay, /__DSH_CHATGPT_WEB_BRIDGE__/)
+  assert.match(relay, /window\.postMessage/)
+  assert.doesNotMatch(relay, /fetch\(|XMLHttpRequest|x-dsh-chatgpt-bridge-token/)
 })

@@ -4,7 +4,7 @@ export const name = 'dsh-chatgpt-web-bridge-experiment'
 export const inject = ['webServer', 'tools']
 
 export const BRIDGE_BASE_PATH = '/plugins/chatgpt-web-bridge'
-export const BRIDGE_VERSION = 2
+export const BRIDGE_VERSION = 3
 
 const MAX_BODY_BYTES = 16 * 1024
 const MAX_MESSAGE_CHARS = 8_000
@@ -16,10 +16,12 @@ const RECENT_EVENT_LIMIT = 20
 
 const EVENT_TYPES = Object.freeze([
   'companion_ready',
+  'observer_ready',
   'turn_started',
   'assistant_message',
   'turn_completed',
   'blocked',
+  'bridge_degraded',
   'error',
 ])
 
@@ -63,6 +65,12 @@ export class ChatGPTWebBridgeStore {
       clientId: null,
       lastSeenAt: null,
       lastEventType: null,
+    }
+    this.observer = {
+      observerId: null,
+      lastSeenAt: null,
+      lastEventType: null,
+      conversationId: null,
     }
   }
 
@@ -165,6 +173,7 @@ export class ChatGPTWebBridgeStore {
     const event = {
       seq: this.nextEventSeq++,
       ts: now,
+      source: 'companion',
       clientId: normalizedClientId,
       type: eventType,
       text: normalizedText,
@@ -174,6 +183,43 @@ export class ChatGPTWebBridgeStore {
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
     this.touchCompanion(normalizedClientId, eventType, now)
     return { event: { ...event }, companion: this.publicCompanion() }
+  }
+
+  observerHeartbeat({ observerId, payload = null }) {
+    const normalizedObserverId = requireNonEmptyString(observerId, 'observer_id', 128)
+    if (payload !== null && !isPlainObject(payload)) {
+      throw new BridgeError('invalid_request', 'payload must be an object or null')
+    }
+    const conversationId = optionalString(payload?.conversationId, 'payload.conversationId', 512)
+    const now = this.now()
+    this.touchObserver(normalizedObserverId, this.observer.lastEventType, conversationId, now)
+    return { observer: this.publicObserver() }
+  }
+
+  publishObserver({ observerId, eventType, text = null, payload = null }) {
+    const normalizedObserverId = requireNonEmptyString(observerId, 'observer_id', 128)
+    if (!EVENT_TYPES.includes(eventType)) {
+      throw new BridgeError('invalid_request', `event_type must be one of: ${EVENT_TYPES.join(', ')}`)
+    }
+    const normalizedText = optionalString(text, 'text', MAX_MESSAGE_CHARS)
+    if (payload !== null && !isPlainObject(payload)) {
+      throw new BridgeError('invalid_request', 'payload must be an object or null')
+    }
+    const conversationId = optionalString(payload?.conversationId, 'payload.conversationId', 512)
+    const now = this.now()
+    const event = {
+      seq: this.nextEventSeq++,
+      ts: now,
+      source: 'observer',
+      observerId: normalizedObserverId,
+      type: eventType,
+      text: normalizedText,
+      payload,
+    }
+    this.events.push(event)
+    if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
+    this.touchObserver(normalizedObserverId, eventType, conversationId, now)
+    return { event: { ...event }, observer: this.publicObserver() }
   }
 
   status() {
@@ -186,6 +232,7 @@ export class ChatGPTWebBridgeStore {
       now,
       counts,
       companion: this.publicCompanion(),
+      observer: this.publicObserver(),
       activeMessages: this.messages
         .filter((message) => ['pending', 'claimed', 'dispatching'].includes(message.status))
         .map((message) => this.publicMessage(message)),
@@ -195,6 +242,10 @@ export class ChatGPTWebBridgeStore {
 
   publicCompanion() {
     return { ...this.companion }
+  }
+
+  publicObserver() {
+    return { ...this.observer }
   }
 
   publicMessage(message) {
@@ -217,6 +268,13 @@ export class ChatGPTWebBridgeStore {
     this.companion.clientId = clientId
     this.companion.lastSeenAt = now
     if (eventType !== null) this.companion.lastEventType = eventType
+  }
+
+  touchObserver(observerId, eventType, conversationId, now) {
+    this.observer.observerId = observerId
+    this.observer.lastSeenAt = now
+    this.observer.lastEventType = eventType
+    if (conversationId !== null) this.observer.conversationId = conversationId
   }
 
   releaseExpiredClaims(now) {
@@ -354,6 +412,27 @@ function routeHandler({ token, store, mode }) {
         writeJson(res, 201, { message: store.enqueue(body.text, 'dsh-gui') })
         return
       }
+      if (mode === 'observer') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'method_not_allowed' })
+          return
+        }
+        const body = await readJsonBody(req)
+        if (body.event_type === 'observer_heartbeat') {
+          writeJson(res, 200, store.observerHeartbeat({
+            observerId: body.observer_id,
+            payload: body.payload ?? null,
+          }))
+          return
+        }
+        writeJson(res, 201, store.publishObserver({
+          observerId: body.observer_id,
+          eventType: body.event_type,
+          text: body.text,
+          payload: body.payload ?? null,
+        }))
+        return
+      }
       writeJson(res, 404, { error: 'not_found' })
     } catch (error) {
       if (error instanceof BridgeError) {
@@ -392,7 +471,13 @@ export function apply(ctx) {
       path: `${BRIDGE_BASE_PATH}/enqueue`,
       handler: routeHandler({ token, store, mode: 'enqueue' }),
     })
+    const disposeObserver = ctx.webServer.register({
+      kind: 'exact',
+      path: `${BRIDGE_BASE_PATH}/observer`,
+      handler: routeHandler({ token, store, mode: 'observer' }),
+    })
     return () => {
+      disposeObserver()
       disposeEnqueue()
       disposeState()
     }

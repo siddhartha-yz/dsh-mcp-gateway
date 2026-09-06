@@ -84,6 +84,9 @@ jobs:
           node --check dsh-browser-worker/index.js
           node --check dsh-chatgpt-web-bridge-plugin/index.js
           node --check dsh-chatgpt-web-bridge-plugin/lib/client.js
+          node --check browser-extension/dsh-chatgpt-web-observer/background.js
+          node --check browser-extension/dsh-chatgpt-web-observer/chatgpt-observer.js
+          node --check browser-extension/dsh-chatgpt-web-observer/dsh-gui-relay.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_gui_chatgpt_bridge.mjs
           node --check tests/test_lsm_tool_filter.mjs

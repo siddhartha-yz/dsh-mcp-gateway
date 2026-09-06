@@ -6,7 +6,7 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-profile dsh-chromium /opt/dsh-runtime/browsers/chromium-*/chrome-linux64/chrome flags=(unconfined) {
+profile dsh-chromium /opt/dsh-runtime/browsers/chromium-*/chrome-linux64/chrome flags=(default_allow) {
   userns,
 
   include if exists <local/dsh-chromium>

@@ -242,7 +242,9 @@ function makeHarness({ mode = 'workspace-write' } = {}) {
 
   const apparmor = await readFile(new URL('../deploy/apparmor/dsh-chromium', import.meta.url), 'utf8')
   assert.match(apparmor, /\/opt\/dsh-runtime\/browsers\/chromium-\*\/chrome-linux64\/chrome/)
+  assert.match(apparmor, /flags=\(default_allow\)/)
   assert.match(apparmor, /userns,/)
+  assert.doesNotMatch(apparmor, /flags=\(unconfined\)/)
   assert.doesNotMatch(apparmor, /apparmor_restrict_unprivileged_userns=0/)
 
   const upgrade = await readFile(new URL('../scripts/upgrade-live-host.sh', import.meta.url), 'utf8')

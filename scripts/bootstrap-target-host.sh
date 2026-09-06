@@ -70,8 +70,11 @@ for path in \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
   "$SOURCE_ROOT/deploy/dsh/chatgpt-bridge.cordis.yml" \
   "$SOURCE_ROOT/dsh-bridge-plugin/index.js" \
+  "$SOURCE_ROOT/dsh-browser-worker/index.js" \
+  "$SOURCE_ROOT/deploy/apparmor/dsh-browser-worker" \
   "$SOURCE_ROOT/deploy/systemd/dsh-web-host.service" \
   "$SOURCE_ROOT/deploy/systemd/dsh-mcp-gateway.service" \
+  "$SOURCE_ROOT/deploy/systemd/dsh-browser-worker.service" \
   "$SOURCE_ROOT/scripts/preflight-deployment.py" \
   "$SOURCE_ROOT/scripts/provision-browser-deps.sh" \
   "$SOURCE_ROOT/scripts/validate-public-origin.py"; do
@@ -201,7 +204,6 @@ ACTUAL_DSH_VERSION="$(timeout --signal=TERM --kill-after=2s 5s /opt/dsh-runtime/
   exit 1
 }
 
-"$SOURCE_ROOT/scripts/provision-browser-deps.sh" --source "$SOURCE_ROOT"
 PLAYWRIGHT_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dependencies"]["playwright-core"])' "$SOURCE_ROOT/deploy/dsh-runtime/package.json")"
 install -d -o root -g root -m 0755 /opt/dsh-runtime/browsers
 PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers \
@@ -210,6 +212,8 @@ PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers \
 PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers \
   /opt/dsh-runtime/node/bin/node -e \
   "const fs=require('node:fs'); const {chromium}=require('/opt/dsh-runtime/node_modules/playwright-core'); fs.accessSync(chromium.executablePath(), fs.constants.X_OK); console.log('playwright=' + '$PLAYWRIGHT_VERSION' + ' chromium=' + chromium.executablePath())"
+install -d -o root -g root -m 0755 /opt/dsh-runtime/dsh-browser-worker
+install -o root -g root -m 0644 "$SOURCE_ROOT/dsh-browser-worker/index.js" /opt/dsh-runtime/dsh-browser-worker/index.js
 
 if [[ -e /srv/dsh-mcp-gateway ]]; then
   if ((REPLACE_SOURCE == 0)); then
@@ -261,12 +265,16 @@ chown root:root /etc/dsh-mcp-gateway/dsh.env /etc/dsh-mcp-gateway/gateway.env
 
 install -m 0644 /srv/dsh-mcp-gateway/deploy/systemd/dsh-web-host.service /etc/systemd/system/dsh-web-host.service
 install -m 0644 /srv/dsh-mcp-gateway/deploy/systemd/dsh-mcp-gateway.service /etc/systemd/system/dsh-mcp-gateway.service
+systemctl daemon-reload
+"/srv/dsh-mcp-gateway/scripts/provision-browser-deps.sh" --source /srv/dsh-mcp-gateway
 
 python3 /srv/dsh-mcp-gateway/scripts/preflight-deployment.py
 
 if ((START_SERVICES)); then
-  systemctl daemon-reload
-  systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
+  systemctl enable dsh-browser-worker.service dsh-web-host.service dsh-mcp-gateway.service
+  systemctl start dsh-browser-worker.service
+  systemctl start dsh-web-host.service
+  systemctl start dsh-mcp-gateway.service
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/healthz
   echo
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://127.0.0.1:18766/readyz

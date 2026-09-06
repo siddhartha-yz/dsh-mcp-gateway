@@ -10,6 +10,8 @@ CONFIG_DIR=/etc/dsh-mcp-gateway
 SYSTEMD_DIR=/etc/systemd/system
 DSH_SERVICE=dsh-web-host.service
 GATEWAY_SERVICE=dsh-mcp-gateway.service
+BROWSER_SERVICE=dsh-browser-worker.service
+BROWSER_SOCKET=/run/dsh-browser-worker/browser.sock
 
 usage() {
   cat <<'EOF'
@@ -66,11 +68,14 @@ for path in \
   "$SOURCE_ROOT/deploy/dsh-runtime/package.json" \
   "$SOURCE_ROOT/deploy/dsh-runtime/package-lock.json" \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
-  "$SOURCE_ROOT/deploy/apparmor/dsh-chromium" \
+  "$SOURCE_ROOT/deploy/apparmor/dsh-browser-worker" \
+  "$SOURCE_ROOT/dsh-browser-worker/index.js" \
   "$SOURCE_ROOT/deploy/systemd/$DSH_SERVICE" \
   "$SOURCE_ROOT/deploy/systemd/$GATEWAY_SERVICE" \
+  "$SOURCE_ROOT/deploy/systemd/$BROWSER_SERVICE" \
   "$SYSTEMD_DIR/$DSH_SERVICE" \
   "$SYSTEMD_DIR/$GATEWAY_SERVICE" \
+  "$SYSTEMD_DIR/$BROWSER_SERVICE" \
   "$SOURCE_ROOT/scripts/preflight-deployment.py" \
   "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py"; do
   [[ -e "$path" ]] || { echo "required live/source path missing: $path" >&2; exit 1; }
@@ -79,20 +84,20 @@ done
 python3 "$SOURCE_ROOT/scripts/verify-dsh-runtime-lock.py" \
   --root "$SOURCE_ROOT/deploy/dsh-runtime"
 
-APPARMOR_PROFILE_SOURCE="$SOURCE_ROOT/deploy/apparmor/dsh-chromium"
-APPARMOR_PROFILE_TARGET=/etc/apparmor.d/dsh-chromium
+APPARMOR_PROFILE_SOURCE="$SOURCE_ROOT/deploy/apparmor/dsh-browser-worker"
+APPARMOR_PROFILE_TARGET=/etc/apparmor.d/dsh-browser-worker
 if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
   [[ -f "$APPARMOR_PROFILE_TARGET" && ! -L "$APPARMOR_PROFILE_TARGET" ]] || {
-    echo "Chromium AppArmor userns profile is missing; run browser host provisioning first" >&2
+    echo "browser-worker AppArmor profile is missing; run browser host provisioning first" >&2
     echo "Run: sudo $SOURCE_ROOT/scripts/provision-browser-deps.sh --source $SOURCE_ROOT" >&2
     exit 1
   }
   [[ "$(stat -c '%u:%g:%a:%h' "$APPARMOR_PROFILE_TARGET")" == "0:0:644:1" ]] || {
-    echo "Chromium AppArmor profile has unsafe ownership/mode/link count: $APPARMOR_PROFILE_TARGET" >&2
+    echo "browser-worker AppArmor profile has unsafe ownership/mode/link count: $APPARMOR_PROFILE_TARGET" >&2
     exit 1
   }
   cmp -s "$APPARMOR_PROFILE_TARGET" "$APPARMOR_PROFILE_SOURCE" || {
-    echo "Chromium AppArmor profile differs from this release; rerun browser host provisioning" >&2
+    echo "browser-worker AppArmor profile differs from this release; rerun browser host provisioning" >&2
     echo "Run: sudo $SOURCE_ROOT/scripts/provision-browser-deps.sh --source $SOURCE_ROOT" >&2
     exit 1
   }
@@ -111,8 +116,16 @@ GATEWAY_GROUP="$(systemctl show "$GATEWAY_SERVICE" -p Group --value)"
   echo "cannot resolve effective gateway service identity" >&2
   exit 1
 }
+BROWSER_USER="$(systemctl show "$BROWSER_SERVICE" -p User --value)"
+BROWSER_GROUP="$(systemctl show "$BROWSER_SERVICE" -p Group --value)"
+[[ "$BROWSER_USER" == "$DSH_USER" && "$BROWSER_GROUP" == "$DSH_GROUP" ]] || {
+  echo "browser worker identity must match effective DSH identity; rerun browser host provisioning" >&2
+  exit 1
+}
 [[ -d "$WORKSPACE" ]] || { echo "effective DSH workspace is missing: $WORKSPACE" >&2; exit 1; }
 WORKSPACE_MODE="$(stat -c '%a' "$WORKSPACE")"
+BROWSER_WAS_ACTIVE=0
+if systemctl is-active --quiet "$BROWSER_SERVICE"; then BROWSER_WAS_ACTIVE=1; fi
 
 TMP_ID="$$-$(date +%s)"
 RUNTIME_STAGE="/opt/.dsh-runtime-stage-$TMP_ID"
@@ -134,6 +147,7 @@ cleanup_paths() {
 }
 
 start_old_or_new_services() {
+  if ((BROWSER_WAS_ACTIVE)); then systemctl start "$BROWSER_SERVICE"; fi
   systemctl start "$DSH_SERVICE"
   systemctl start "$GATEWAY_SERVICE"
 }
@@ -143,7 +157,7 @@ rollback() {
   set +e
   echo "live upgrade failed; rolling back" >&2
   if ((SERVICES_STOPPED)); then
-    systemctl stop "$GATEWAY_SERVICE" "$DSH_SERVICE" >/dev/null 2>&1 || true
+    systemctl stop "$GATEWAY_SERVICE" "$DSH_SERVICE" "$BROWSER_SERVICE" >/dev/null 2>&1 || true
   fi
 
   if ((SOURCE_SWAPPED)); then
@@ -165,6 +179,7 @@ rollback() {
   if ((UNITS_SWAPPED)); then
     install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/$DSH_SERVICE" "$SYSTEMD_DIR/$DSH_SERVICE" || true
     install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/$GATEWAY_SERVICE" "$SYSTEMD_DIR/$GATEWAY_SERVICE" || true
+    install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/$BROWSER_SERVICE" "$SYSTEMD_DIR/$BROWSER_SERVICE" || true
     UNITS_SWAPPED=0
   fi
 
@@ -237,6 +252,8 @@ cp -a "$BROWSER_CACHE/." "$RUNTIME_STAGE/browsers/"
 PLAYWRIGHT_BROWSERS_PATH="$RUNTIME_STAGE/browsers" \
   "$RUNTIME_STAGE/node/bin/node" -e \
   "const fs=require('node:fs'); const {chromium}=require('$RUNTIME_STAGE/node_modules/playwright-core'); fs.accessSync(chromium.executablePath(), fs.constants.X_OK); console.log('playwright-chromium=' + chromium.executablePath())"
+install -d -o root -g root -m 0755 "$RUNTIME_STAGE/dsh-browser-worker"
+install -o root -g root -m 0644 "$SOURCE_ROOT/dsh-browser-worker/index.js" "$RUNTIME_STAGE/dsh-browser-worker/index.js"
 
 # Stage the exact source commit and a fresh gateway virtualenv. No mutable
 # production state lives in this tree.
@@ -273,7 +290,7 @@ python3 "$SOURCE_STAGE/scripts/preflight-deployment.py" \
 # intentionally outside this transaction and remain untouched.
 rm -rf "$UNIT_BACKUP_DIR"
 install -d -o root -g root -m 0700 "$UNIT_BACKUP_DIR"
-for service in "$DSH_SERVICE" "$GATEWAY_SERVICE"; do
+for service in "$DSH_SERVICE" "$GATEWAY_SERVICE" "$BROWSER_SERVICE"; do
   [[ -f "$SYSTEMD_DIR/$service" && ! -L "$SYSTEMD_DIR/$service" ]] || {
     echo "installed main unit is not a regular file: $SYSTEMD_DIR/$service" >&2
     exit 1
@@ -287,8 +304,8 @@ for service in "$DSH_SERVICE" "$GATEWAY_SERVICE"; do
 done
 
 # Only the switch below interrupts the ChatGPT -> DSH path.
-echo "Stopping live DSH Host and gateway..."
-systemctl stop "$GATEWAY_SERVICE" "$DSH_SERVICE"
+echo "Stopping live DSH Host, gateway, and browser worker..."
+systemctl stop "$GATEWAY_SERVICE" "$DSH_SERVICE" "$BROWSER_SERVICE"
 SERVICES_STOPPED=1
 
 # Main units are versioned deployment artifacts. Drop-ins under *.service.d are
@@ -296,6 +313,7 @@ SERVICES_STOPPED=1
 UNITS_SWAPPED=1
 install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/new-$DSH_SERVICE" "$SYSTEMD_DIR/$DSH_SERVICE"
 install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/new-$GATEWAY_SERVICE" "$SYSTEMD_DIR/$GATEWAY_SERVICE"
+install -o root -g root -m 0644 "$UNIT_BACKUP_DIR/new-$BROWSER_SERVICE" "$SYSTEMD_DIR/$BROWSER_SERVICE"
 
 mv "$RUNTIME_LIVE" "$RUNTIME_OLD"
 if ! mv "$RUNTIME_STAGE" "$RUNTIME_LIVE"; then
@@ -325,6 +343,30 @@ script.write_text("".join(lines), encoding="utf-8")
 PY
 
 systemctl daemon-reload
+systemctl start "$BROWSER_SERVICE"
+for _ in $(seq 1 30); do
+  if [[ -S "$BROWSER_SOCKET" ]] && systemctl is-active --quiet "$BROWSER_SERVICE"; then break; fi
+  sleep 1
+done
+[[ -S "$BROWSER_SOCKET" ]] || { echo "browser worker socket did not become ready" >&2; exit 1; }
+python3 - "$BROWSER_SOCKET" <<'PY_WORKER'
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(3)
+s.connect(sys.argv[1])
+s.sendall(b'{"op":"ping"}\n')
+data = b''
+while b'\n' not in data:
+    chunk = s.recv(65536)
+    if not chunk:
+        raise SystemExit('browser worker closed ping connection')
+    data += chunk
+reply = json.loads(data.split(b'\n', 1)[0])
+security = reply.get('security') or {}
+if reply.get('ok') is not True or security.get('noNewPrivileges') is not True or not str(security.get('apparmor', '')).startswith('dsh-browser-worker'):
+    raise SystemExit(f'unsafe browser worker security state: {reply!r}')
+print('browser-worker-security-ok')
+PY_WORKER
 systemctl start "$DSH_SERVICE"
 for _ in $(seq 1 30); do
   if curl -fsS --connect-timeout 1 --max-time 3 http://127.0.0.1:3080/api/chatgpt-bridge/tools >/dev/null 2>&1 \
@@ -352,6 +394,8 @@ LIVE_COMMIT="$(cat "$SOURCE_LIVE/.deployed-git-commit")"
 [[ "$LIVE_COMMIT" == "$TARGET_COMMIT" ]] || { echo "unexpected live source commit: $LIVE_COMMIT" >&2; exit 1; }
 cmp -s "$SYSTEMD_DIR/$DSH_SERVICE" "$SOURCE_LIVE/deploy/systemd/$DSH_SERVICE" || { echo "live DSH unit does not match deployed source" >&2; exit 1; }
 cmp -s "$SYSTEMD_DIR/$GATEWAY_SERVICE" "$SOURCE_LIVE/deploy/systemd/$GATEWAY_SERVICE" || { echo "live gateway unit does not match deployed source" >&2; exit 1; }
+cmp -s "$SYSTEMD_DIR/$BROWSER_SERVICE" "$SOURCE_LIVE/deploy/systemd/$BROWSER_SERVICE" || { echo "live browser worker unit does not match deployed source" >&2; exit 1; }
+[[ "$(systemctl is-active "$BROWSER_SERVICE")" == active ]]
 [[ "$(systemctl is-active "$DSH_SERVICE")" == active ]]
 [[ "$(systemctl is-active "$GATEWAY_SERVICE")" == active ]]
 

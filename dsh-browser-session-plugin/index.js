@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { launchBrowserViaWorker } from './worker-client.js'
 
 export const name = 'dsh-chatgpt-browser-session'
-export const inject = ['tools', 'sandboxPolicy', 'sessionProjections', 'subprocess']
+export const inject = ['tools', 'sandboxPolicy', 'sessionProjections']
 
 const REF_ATTRIBUTE = 'data-dsh-browser-ref'
 const MAX_SESSIONS_GLOBAL = 3
@@ -217,10 +216,6 @@ export function loadPlaywrightCore(runtimeRoot = runtimeRootFromProcess()) {
   return require('playwright-core')
 }
 
-function delay(ms) {
-  return new Promise(resolvePromise => setTimeout(resolvePromise, ms))
-}
-
 async function settleWithin(promise, timeoutMs) {
   let timer
   try {
@@ -232,32 +227,6 @@ async function settleWithin(promise, timeoutMs) {
     ])
   } finally {
     if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
-function abortError(signal) {
-  return signal?.reason instanceof Error ? signal.reason : new Error(String(signal?.reason ?? 'operation aborted'))
-}
-
-async function waitForDevtoolsEndpoint(handle, timeoutMs, signal) {
-  const startedAt = Date.now()
-  for (;;) {
-    signal?.throwIfAborted?.()
-    const stderr = handle.collected?.stderr?.readFrom(0)?.text ?? ''
-    const stdout = handle.collected?.stdout?.readFrom(0)?.text ?? ''
-    const match = `${stderr}\n${stdout}`.match(/DevTools listening on (ws:\/\/[^\s]+)/)
-    if (match) return match[1]
-    if (Date.now() - startedAt >= timeoutMs) {
-      throw new BrowserSessionError('browser_start_failed', `Chromium did not expose a DevTools endpoint within ${timeoutMs} ms; stderr tail: ${stderr.slice(-2000)}`)
-    }
-    const outcome = await Promise.race([
-      handle.done.then(value => ({ done: true, value }), error => ({ done: true, error })),
-      delay(60).then(() => ({ done: false })),
-    ])
-    if (outcome.done) {
-      const detail = outcome.error ? String(outcome.error) : JSON.stringify(outcome.value)
-      throw new BrowserSessionError('browser_start_failed', `Chromium exited before DevTools became ready (${detail}); stderr tail: ${stderr.slice(-2000)}`)
-    }
   }
 }
 
@@ -274,6 +243,9 @@ export class BrowserSessionManager {
       startupTimeoutMs: config.startupTimeoutMs ?? STARTUP_TIMEOUT_MS,
       maxSessionsGlobal: config.maxSessionsGlobal ?? MAX_SESSIONS_GLOBAL,
       maxSessionsPerOwner: config.maxSessionsPerOwner ?? MAX_SESSIONS_PER_OWNER,
+      workerSocket: config.workerSocket ?? '/run/dsh-browser-worker/browser.sock',
+      profileRoot: config.profileRoot ?? '/tmp/dsh-browser-worker',
+      launchBrowser: config.launchBrowser ?? launchBrowserViaWorker,
     }
     this.sessions = new Map()
     this.ownerSessions = new WeakMap()
@@ -345,7 +317,7 @@ export class BrowserSessionManager {
     }
     const executable = this.chromium.executablePath()
     const id = `browser-${randomUUID()}`
-    const profileDir = await mkdtemp(join(tmpdir(), 'dsh-browser-'))
+    const profileDir = join(this.config.profileRoot, id)
     let handle
     let browser
     try {
@@ -374,26 +346,16 @@ export class BrowserSessionManager {
         argv = confined.argv
         enforcement = confined.enforcement
       }
-      handle = this.ctx.subprocess.spawn({
+      const launched = await this.config.launchBrowser({
+        socketPath: this.config.workerSocket,
         argv,
         cwd: policy.workspaceRoot,
-        stdio: {
-          stdin: 'ignore',
-          stdout: { maxBytes: 64 * 1024 },
-          stderr: { maxBytes: 128 * 1024 },
-        },
-        graceMs: 3000,
-        // The request signal gates startup only. Binding it to the raw DSH
-        // subprocess would let one completed/cancelled MCP request own the
-        // lifetime of a browser that is intentionally persistent.
-        env: {
-          HOME: profileDir,
-          XDG_CACHE_HOME: join(profileDir, '.cache'),
-          XDG_CONFIG_HOME: join(profileDir, '.config'),
-          DSH_BROWSER_SESSION_ID: id,
-        },
+        id,
+        startupTimeoutMs: this.config.startupTimeoutMs,
+        signal,
       })
-      const endpoint = await waitForDevtoolsEndpoint(handle, this.config.startupTimeoutMs, signal)
+      handle = launched.handle
+      const endpoint = launched.endpoint
       browser = await this.chromium.connectOverCDP(endpoint, { timeout: this.config.startupTimeoutMs })
       const context = browser.contexts()[0]
       if (!context) throw new BrowserSessionError('browser_start_failed', 'Chromium CDP connection exposed no default browser context')
@@ -435,7 +397,6 @@ export class BrowserSessionManager {
       try { await settleWithin(browser?.close?.(), 2000) } catch {}
       try { handle?.terminate?.() } catch {}
       try { await handle?.waitForExit?.(AbortSignal.timeout(4000)) } catch {}
-      await rm(profileDir, { recursive: true, force: true }).catch(() => {})
       throw error
     }
   }
@@ -587,7 +548,6 @@ export class BrowserSessionManager {
     try { await settleWithin(state.browser?.close?.(), 2500) } catch {}
     try { state.process?.terminate?.() } catch {}
     try { await state.process?.waitForExit?.(AbortSignal.timeout(5000)) } catch {}
-    await rm(state.profileDir, { recursive: true, force: true }).catch(() => {})
   }
 
   _assertAlive(state) {
@@ -815,7 +775,7 @@ export function createBrowserSessionTool(manager) {
       'Actions: open, list, status, snapshot, act, script, close.',
       'Browser page/cookie/DOM state persists across tool calls until close or Agent disposal.',
       'The plugin contains no model loop, autonomous task runner, or scheduler.',
-      'Chromium is launched through DSH sandboxPolicy/sandbox/subprocess so DSH retains process-tree and file-effect authority.',
+      'DSH computes the sandbox-confined Chromium argv; a narrow local browser worker launches that argv under a dedicated AppArmor userns profile and NoNewPrivileges.',
     ].join(' '),
     parameters: BROWSER_SESSION_PARAMETERS,
     output: {
@@ -855,6 +815,8 @@ export function apply(ctx, config = {}) {
     startupTimeoutMs: positiveInteger(config.startupTimeoutMs, STARTUP_TIMEOUT_MS, 'startupTimeoutMs'),
     maxSessionsGlobal: positiveInteger(config.maxSessionsGlobal, MAX_SESSIONS_GLOBAL, 'maxSessionsGlobal'),
     maxSessionsPerOwner: positiveInteger(config.maxSessionsPerOwner, MAX_SESSIONS_PER_OWNER, 'maxSessionsPerOwner'),
+    workerSocket: config.workerSocket ?? '/run/dsh-browser-worker/browser.sock',
+    profileRoot: config.profileRoot ?? '/tmp/dsh-browser-worker',
   })
   ctx.on('agent/disposed', ({ agent }) => {
     void manager.closeOwner(agent)

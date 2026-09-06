@@ -1,0 +1,30 @@
+[Unit]
+Description=DSH persistent browser execution worker
+Documentation=https://github.com/siddhartha-yz/dsh-mcp-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dsh-agent
+Group=dsh-agent
+Environment=PATH=/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin DSH_RUNTIME_ROOT=/opt/dsh-runtime DSH_BROWSER_WORKER_SOCKET=/run/dsh-browser-worker/browser.sock DSH_BROWSER_PROFILE_ROOT=/tmp/dsh-browser-worker PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-runtime/browsers
+RuntimeDirectory=dsh-browser-worker
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/setpriv --no-new-privs /opt/dsh-runtime/node/bin/node /opt/dsh-runtime/dsh-browser-worker/index.js
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0077
+AppArmorProfile=dsh-browser-worker
+# AppArmor must attach before no_new_privs is set. setpriv applies NNP inside
+# the already-confined worker before Node starts, and the worker refuses to run
+# unless /proc/self/status confirms NoNewPrivs=1.
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

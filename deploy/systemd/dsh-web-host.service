@@ -1,8 +1,8 @@
 [Unit]
 Description=DeepSeek Harness Web Host for dsh-mcp-gateway
 Documentation=https://github.com/siddhartha-yz/dsh-mcp-gateway
-After=network-online.target
-Wants=network-online.target
+After=network-online.target dsh-browser-worker.service
+Wants=network-online.target dsh-browser-worker.service
 
 [Service]
 Type=simple

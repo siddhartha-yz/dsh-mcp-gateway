@@ -180,6 +180,8 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("node --check dsh-bridge-plugin/index.js", workflow)
         self.assertIn("node --check dsh-task-state-plugin/index.js", workflow)
         self.assertIn("node --check dsh-task-state-plugin/task-store.js", workflow)
+        self.assertIn("node --check dsh-browser-session-plugin/worker-client.js", workflow)
+        self.assertIn("node --check dsh-browser-worker/index.js", workflow)
         self.assertIn("node --check deploy/dsh/plugins/lsm-tool-filter.mjs", workflow)
         self.assertIn("node --check tests/test_lsm_tool_filter.mjs", workflow)
         self.assertIn("node --check tests/test_chatgpt_bridge.mjs", workflow)
@@ -196,6 +198,9 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("working-directory: deploy/dsh-runtime", workflow)
         self.assertIn("npm ci --no-audit --no-fund", workflow)
         self.assertIn('test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"', workflow)
+        self.assertIn("const p=require('koffi/package.json'); if (p.version !== '3.2.1') process.exit(1)", workflow)
+        self.assertIn("Verify Unix peer credential lookup", workflow)
+        self.assertIn("createPeerCredentialReader", workflow)
         self.assertNotIn("deepseek_harness", workflow)
         self.assertNotIn("DSH SDK integration imports", workflow)
 
@@ -243,6 +248,9 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["User"], "dsh-agent")
         self.assertEqual(service["Group"], "dsh-agent")
         self.assertEqual(service["EnvironmentFile"], "/etc/dsh-mcp-gateway/dsh.env")
+        self.assertNotIn("LoadCredential", service)
+        self.assertIn("dsh-browser-worker.service", unit["Unit"]["Wants"])
+        self.assertIn("dsh-browser-worker.service", unit["Unit"]["After"])
         environment = service["Environment"]
         self.assertIn(
             "PATH=/opt/dsh-runtime/node_modules/.bin:/opt/dsh-runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin",
@@ -265,6 +273,27 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertEqual(service["ProtectHome"], "true")
         self.assertIn("/var/lib/dsh-harness", service["ReadWritePaths"])
         self.assertIn("/srv/dsh-workspace", service["ReadWritePaths"])
+
+    def test_browser_worker_has_scoped_userns_boundary_and_runtime_nnp(self) -> None:
+        unit = read_unit("dsh-browser-worker.service")
+        service = unit["Service"]
+
+        self.assertEqual(service["User"], "dsh-agent")
+        self.assertEqual(service["Group"], "dsh-agent")
+        self.assertNotIn("LoadCredential", service)
+        self.assertEqual(service["AppArmorProfile"], "dsh-browser-worker")
+        self.assertEqual(
+            service["ExecStart"],
+            "/usr/bin/setpriv --no-new-privs /opt/dsh-runtime/node/bin/node /opt/dsh-runtime/dsh-browser-worker/index.js",
+        )
+        self.assertEqual(service["NoNewPrivileges"], "false")
+        self.assertEqual(service["RuntimeDirectory"], "dsh-browser-worker")
+        self.assertEqual(service["RuntimeDirectoryMode"], "0700")
+        self.assertEqual(service["PrivateTmp"], "true")
+        self.assertEqual(service["ProtectSystem"], "full")
+        self.assertEqual(service["RestrictAddressFamilies"], "AF_UNIX AF_INET AF_INET6")
+        self.assertEqual(service["UMask"], "0077")
+        self.assertEqual(service["Restart"], "on-failure")
 
     def test_cloudflared_unit_is_dedicated_and_depends_softly_on_gateway(self) -> None:
         unit = read_unit("dsh-cloudflared.service")
@@ -1851,10 +1880,15 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("python3 scripts/smoke-public-oauth.py --base-url https://dsh.example.com", deployment)
         self.assertIn("sudo ./scripts/upgrade-live-host.sh --source /home/ubuntu/workspace/dsh-mcp-gateway", deployment)
         self.assertIn("do not rerun `bootstrap-target-host.sh` or `promote-live-host.sh`", deployment)
-        self.assertLess(
-            deployment.index("python3 scripts/preflight-deployment.py"),
-            deployment.index("systemctl enable --now dsh-web-host.service"),
-        )
+        self.assertIn('sudo ./scripts/provision-browser-deps.sh --source "$PWD"', deployment)
+        self.assertIn("systemctl enable dsh-browser-worker.service dsh-web-host.service dsh-mcp-gateway.service", deployment)
+        preflight_index = deployment.index("python3 scripts/preflight-deployment.py")
+        worker_start_index = deployment.index("systemctl start dsh-browser-worker.service")
+        host_start_index = deployment.index("systemctl start dsh-web-host.service")
+        gateway_start_index = deployment.index("systemctl start dsh-mcp-gateway.service")
+        self.assertLess(preflight_index, worker_start_index)
+        self.assertLess(worker_start_index, host_start_index)
+        self.assertLess(host_start_index, gateway_start_index)
 
     def test_live_upgrade_stages_immutable_bits_and_preserves_personal_state(self) -> None:
         script = UPGRADE_LIVE.read_text(encoding="utf-8")
@@ -1913,6 +1947,7 @@ class DeploymentTemplateTests(unittest.TestCase):
             },
         )
         self.assertEqual(lock["packages"][""]["dependencies"]["@deepseek-ai/dsh"], DSH_VERSION)
+        self.assertEqual(lock["packages"][""]["dependencies"]["koffi"], "3.2.1")
         self.assertEqual(lock["packages"][""]["dependencies"]["playwright-core"], "1.62.1")
         self.assertEqual(peers["@deepseek-ai/dsh-host-webserver"], DSH_VERSION)
         self.assertEqual(peers["@deepseek-ai/dsh-tools"], DSH_VERSION)
@@ -1921,6 +1956,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn(f'TESTED_DSH_VERSION = "{DSH_VERSION}"', preflight)
         self.assertIn(f'EXPECTED_DSH_VERSION = "{DSH_VERSION}"', verifier)
         self.assertIn('EXPECTED_PLAYWRIGHT_VERSION = "1.62.1"', verifier)
+        self.assertIn('EXPECTED_KOFFI_VERSION = "3.2.1"', verifier)
 
     def test_dsh_runtime_lock_verifier_accepts_repository_lock_and_rejects_root_drift(self) -> None:
         accepted = subprocess.run(
@@ -1962,7 +1998,7 @@ class DeploymentTemplateTests(unittest.TestCase):
                 timeout=10,
             )
         self.assertEqual(rejected.returncode, 1)
-        self.assertIn("exact reviewed DSH, Playwright, and pnpm dependencies", rejected.stderr)
+        self.assertIn("exact reviewed DSH, Koffi, Playwright, and pnpm dependencies", rejected.stderr)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2069,7 +2105,7 @@ class DeploymentPreflightTests(unittest.TestCase):
         for filename in ("package.json", "package-lock.json"):
             shutil.copy2(ROOT / "deploy" / "dsh-runtime" / filename, deploy_dir / "dsh-runtime" / filename)
             shutil.copy2(ROOT / "deploy" / "dsh-runtime" / filename, paths["dsh_runtime"] / filename)
-        for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service"):
+        for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service", "dsh-browser-worker.service"):
             shutil.copy2(SYSTEMD / filename, deploy_dir / "systemd" / filename)
             shutil.copy2(SYSTEMD / filename, paths["systemd_dir"] / filename)
 

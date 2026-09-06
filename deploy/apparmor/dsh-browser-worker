@@ -1,0 +1,12 @@
+# Dedicated AppArmor domain for the DSH browser execution worker.
+# The worker itself has no model, shell, scheduler, or autonomous task loop.
+# It exists so Chromium can keep its Linux user-namespace sandbox without
+# granting userns permission to the main DSH Host process.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile dsh-browser-worker flags=(default_allow) {
+  userns,
+
+  include if exists <local/dsh-browser-worker>
+}

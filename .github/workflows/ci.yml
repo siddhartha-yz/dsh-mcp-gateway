@@ -80,6 +80,8 @@ jobs:
           node --check dsh-task-state-plugin/task-store.js
           node --check dsh-shell-session-plugin/index.js
           node --check dsh-browser-session-plugin/index.js
+          node --check dsh-browser-session-plugin/worker-client.js
+          node --check dsh-browser-worker/index.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_lsm_tool_filter.mjs
           node --check tests/test_chatgpt_bridge.mjs
@@ -153,7 +155,31 @@ jobs:
           test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"
           node -e "Promise.all([import('@deepseek-ai/dsh-terminal'), import('@deepseek-ai/dsh-terminal-bash')])"
           node -e "const p=require('playwright-core/package.json'); if (p.version !== '1.62.1') process.exit(1)"
+          node -e "const p=require('koffi/package.json'); if (p.version !== '3.2.1') process.exit(1)"
           npm ls --depth=0
+
+      - name: Verify Unix peer credential lookup
+        working-directory: deploy/dsh-runtime
+        run: |
+          node --input-type=module <<'NODE'
+          import { createServer, createConnection } from 'node:net'
+          import { rm } from 'node:fs/promises'
+          import { createPeerCredentialReader } from '../../dsh-browser-worker/index.js'
+          const path = `${process.env.RUNNER_TEMP}/dsh-peercred.sock`
+          await rm(path, { force: true })
+          const readPeer = createPeerCredentialReader(process.cwd())
+          const server = createServer(socket => {
+            const peer = readPeer(socket)
+            if (peer.pid !== process.pid) throw new Error(`unexpected peer pid ${peer.pid}`)
+            if (process.getuid && peer.uid !== process.getuid()) throw new Error(`unexpected peer uid ${peer.uid}`)
+            socket.end()
+            server.close()
+          })
+          await new Promise((resolve, reject) => { server.once('error', reject); server.listen(path, resolve) })
+          const client = createConnection(path)
+          await new Promise((resolve, reject) => { client.once('end', resolve); client.once('error', reject) })
+          await rm(path, { force: true })
+          NODE
 
       - name: Verify pinned Chromium launch
         working-directory: deploy/dsh-runtime

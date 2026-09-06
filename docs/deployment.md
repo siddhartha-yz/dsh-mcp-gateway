@@ -167,7 +167,7 @@ Keep both files root-owned and mode `0600`. Do not add a model API key merely to
 
 ## Validate before start
 
-Run the repository gates before starting services:
+Run the source-level repository gates first:
 
 ```sh
 python3 scripts/verify-server-constraints.py
@@ -175,17 +175,23 @@ python3 scripts/verify-dsh-runtime-lock.py
 .venv/bin/python -m unittest discover -s tests -q
 .venv/bin/python -m compileall -q src tests scripts
 ./scripts/verify-systemd.sh
-python3 scripts/preflight-deployment.py
 ```
 
-Install the units only after those checks pass:
+For a manual Linux deployment, install the main DSH/gateway units, then run the explicit browser host provisioning step. Provisioning installs the pinned Chromium host libraries plus the dedicated `dsh-browser-worker.service` and AppArmor profile; it does not weaken the main DSH Host's `NoNewPrivileges=true` boundary.
 
 ```sh
 sudo cp deploy/systemd/dsh-web-host.service /etc/systemd/system/
 sudo cp deploy/systemd/dsh-mcp-gateway.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now dsh-web-host.service dsh-mcp-gateway.service
+sudo ./scripts/provision-browser-deps.sh --source "$PWD"
+python3 scripts/preflight-deployment.py
+sudo systemctl enable dsh-browser-worker.service dsh-web-host.service dsh-mcp-gateway.service
+sudo systemctl start dsh-browser-worker.service
+sudo systemctl start dsh-web-host.service
+sudo systemctl start dsh-mcp-gateway.service
 ```
+
+The browser worker is not a second agent or shell. It accepts only a fixed browser spawn protocol from the live DSH Host MainPID (verified with Unix `SO_PEERCRED`), permits the pinned Chromium/DSH Landlock launcher only, rejects `--no-sandbox`, and sets `NoNewPrivs=1` before its Node worker runs.
 
 The DSH unit launches:
 
@@ -309,4 +315,4 @@ For an **already-productionized** host, do not rerun `bootstrap-target-host.sh` 
 sudo ./scripts/upgrade-live-host.sh --source /home/ubuntu/workspace/dsh-mcp-gateway
 ```
 
-`upgrade-live-host.sh` reads the effective systemd user/group/workspace (including drop-ins such as a personal-workspace override), stages the new `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` trees before stopping services, runs preflight against the existing mutable state, then switches the staged trees and checks DSH tool/Skill bridge readiness plus gateway readiness. It deliberately leaves `DSH_HOME`, OAuth/config state, systemd units/drop-ins, workspace ownership, and the tunnel untouched. If post-switch readiness fails, it restores the previous runtime/source trees and restarts the old services.
+`upgrade-live-host.sh` reads the effective systemd user/group/workspace (including drop-ins such as a personal-workspace override), stages the new `/opt/dsh-runtime` and `/srv/dsh-mcp-gateway` trees before stopping services, runs preflight against the existing mutable state, then atomically switches the staged trees and the three versioned main units (`dsh-browser-worker`, DSH Host, gateway). It starts and security-pings the browser worker first, then checks DSH tool/Skill bridge readiness plus gateway readiness. It deliberately leaves `DSH_HOME`, OAuth/config state, systemd drop-ins, workspace ownership, and the tunnel untouched. If post-switch readiness fails, it restores the previous runtime/source/main-unit set and restarts the prior services.

@@ -456,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     repo_systemd = args.gateway_root / "deploy" / "systemd"
-    for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service"):
+    for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service", "dsh-browser-worker.service"):
         installed_unit = args.systemd_dir / filename
         staged_unit = repo_systemd / filename
         if args.allow_systemd_unit_update:

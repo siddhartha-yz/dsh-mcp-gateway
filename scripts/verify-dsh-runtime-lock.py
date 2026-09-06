@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 EXPECTED_DSH_VERSION = "0.1.2-rc.1"
 EXPECTED_PNPM_VERSION = "10.34.5"
 EXPECTED_PLAYWRIGHT_VERSION = "1.62.1"
+EXPECTED_KOFFI_VERSION = "3.2.1"
 EXPECTED_LOCKFILE_VERSION = 3
 EXPECTED_ALLOW_SCRIPTS = {
     "@deepseek-ai/dsh-subprocess-local@0.1.2-rc.1": True,
@@ -33,7 +34,14 @@ def load_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str, expected_playwright_version: str) -> tuple[int, str]:
+def verify(
+    root: Path,
+    *,
+    expected_dsh_version: str,
+    expected_pnpm_version: str,
+    expected_playwright_version: str,
+    expected_koffi_version: str,
+) -> tuple[int, str]:
     package_path = root / "package.json"
     lock_path = root / "package-lock.json"
     package = load_object(package_path)
@@ -44,11 +52,12 @@ def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str,
     dependencies = package.get("dependencies")
     expected_dependencies = {
         "@deepseek-ai/dsh": expected_dsh_version,
+        "koffi": expected_koffi_version,
         "playwright-core": expected_playwright_version,
         "pnpm": expected_pnpm_version,
     }
     if not isinstance(dependencies, dict) or dependencies != expected_dependencies:
-        raise ValueError("DSH runtime package.json must contain the exact reviewed DSH, Playwright, and pnpm dependencies")
+        raise ValueError("DSH runtime package.json must contain the exact reviewed DSH, Koffi, Playwright, and pnpm dependencies")
     if package.get("allowScripts") != EXPECTED_ALLOW_SCRIPTS:
         raise ValueError("DSH runtime package.json must contain the exact reviewed install-script policy")
     if lock.get("lockfileVersion") != EXPECTED_LOCKFILE_VERSION:
@@ -70,6 +79,10 @@ def verify(root: Path, *, expected_dsh_version: str, expected_pnpm_version: str,
     resolved = dsh_entry.get("resolved")
     if not isinstance(resolved, str) or not resolved.endswith(f"/dsh-{expected_dsh_version}.tgz"):
         raise ValueError("package-lock.json DSH tarball does not match the exact tested version")
+
+    koffi_entry = packages.get("node_modules/koffi")
+    if not isinstance(koffi_entry, dict) or koffi_entry.get("version") != expected_koffi_version:
+        raise ValueError("package-lock.json does not resolve the exact reviewed Koffi version")
 
     playwright_entry = packages.get("node_modules/playwright-core")
     if not isinstance(playwright_entry, dict) or playwright_entry.get("version") != expected_playwright_version:
@@ -117,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-dsh-version", default=EXPECTED_DSH_VERSION)
     parser.add_argument("--expected-pnpm-version", default=EXPECTED_PNPM_VERSION)
     parser.add_argument("--expected-playwright-version", default=EXPECTED_PLAYWRIGHT_VERSION)
+    parser.add_argument("--expected-koffi-version", default=EXPECTED_KOFFI_VERSION)
     return parser
 
 
@@ -128,14 +142,15 @@ def main(argv: list[str] | None = None) -> int:
             expected_dsh_version=args.expected_dsh_version,
             expected_pnpm_version=args.expected_pnpm_version,
             expected_playwright_version=args.expected_playwright_version,
+            expected_koffi_version=args.expected_koffi_version,
         )
     except (TypeError, ValueError) as exc:
         print(f"dsh-runtime-lock-error: {exc}", file=sys.stderr)
         return 1
     print(
         "dsh-runtime-lock-ok: "
-        f"dsh={args.expected_dsh_version} playwright={args.expected_playwright_version} "
-        f"pnpm={args.expected_pnpm_version} "
+        f"dsh={args.expected_dsh_version} koffi={args.expected_koffi_version} "
+        f"playwright={args.expected_playwright_version} pnpm={args.expected_pnpm_version} "
         f"packages={package_count} integrity={integrity.split('-', 1)[0]}"
     )
     return 0

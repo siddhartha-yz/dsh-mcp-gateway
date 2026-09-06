@@ -114,7 +114,7 @@ Acceptance goal: after a ChatGPT conversation ends, a later ChatGPT conversation
 
 Acceptance result: `dsh-task-state-plugin` provides one reviewed `task_state` ToolRuntime capability backed by DSH `storageDomain`, with create/get/list/update/checkpoint/pause/resume/complete, bounded checkpoint history, and optimistic `if_revision` writes. Isolated-host tests proved durable JSON storage across full Host restart/reopen, passive pause/resume, list-based recovery, and stale-revision rejection without any model credential. Live production at commit `5a4c035343c8b19992b8b638dd7588621148bacc` exposed 22 external tools including `task_state`, and a completely fresh ChatGPT conversation recovered the repository, deployed commit, status, and remaining acceptance exclusively through `task_state` list/get. This validates cross-conversation resume while keeping all reasoning and next-action decisions in ChatGPT.
 
-### P4 — Add persistent shell sessions
+### P4 — Add persistent shell sessions — COMPLETE
 
 Borrow LSM's persistent-shell ergonomics because DSH's current `bash` tool starts a fresh shell for each call.
 
@@ -128,7 +128,7 @@ Desired properties:
 
 Acceptance goal: interactive CLI workflows no longer require reconstructing shell state manually between tool calls.
 
-Implementation checkpoint: P4 now uses DSH's native `TerminalSessionService` and `terminal-bash` backend rather than copying local-shell-mcp's tmux/PTY layer. A thin reviewed `shell_session` ToolRuntime adapter exposes open/list/status/send/read/signal/close through an isolated ChatGPT-only terminal registry while DSH retains exact-Agent authorization, cwd/environment/process persistence, bounded scrollback/output, foreground signals, timeouts, process-tree cleanup, and shared sandbox policy. The existing one-shot `bash` remains available. Adapter/wiring tests and the full local repository gate pass, including 194/194 Python tests. Production deployment and live persistent-session acceptance are still required before P4 is complete.
+Acceptance result: P4 uses DSH's native `TerminalSessionService` and `terminal-bash` backend rather than copying local-shell-mcp's tmux/PTY layer. A thin reviewed `shell_session` ToolRuntime adapter exposes open/list/status/send/read/signal/close through an isolated ChatGPT-only terminal registry while DSH retains exact-Agent authorization, cwd/environment/process persistence, bounded scrollback/output, foreground signals, timeouts, process-tree cleanup, and shared sandbox policy. The existing one-shot `bash` remains available. Adapter/wiring tests and the full repository gate passed, including 194/194 Python tests. Live production at commit `5a94267e65eb9743f6a381ca48d4b1c8f59693a1` exposed 23 external tools including `shell_session`; a named native PTY preserved cwd and an exported environment variable across separate tool calls, bounded `read` returned retained scrollback, `wait=false` plus `SIGINT` interrupted a long foreground command and left the shell reusable, an attempted write under `/etc` remained sandbox-denied, and `close` removed the session cleanly. This validates persistent interactive shell state without introducing a second agent or bypassing DSH policy.
 
 ### P5 — Add a browser plugin
 

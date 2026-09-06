@@ -285,3 +285,44 @@ Milestone `B1-probe`:
 9. record whether B1 is sufficient, requires B2 for receive-side observation, or should be abandoned for B3.
 
 Only after this probe should the branch commit to a larger implementation.
+
+## B1 implementation checkpoint — DSH GUI half proven
+
+The first half of B1 has now been implemented and exercised without touching the production DSH service.
+
+A repo-local dual-face DSH plugin lives at `dsh-chatgpt-web-bridge-plugin/`:
+
+- its browser half declares the official `dsh.client` package metadata and registers a `ChatGPT Web Bridge` control in the shipped `sidebar.footer.action` slot;
+- its host half owns a bounded in-memory outbound mailbox plus companion lifecycle events;
+- GUI-originated outbound messages are leased with a claim TTL and require explicit `sent`/`failed` acknowledgement;
+- the companion-facing ToolRuntime surface is mechanical only (`status`, `poll`, `heartbeat`, `ack`, `publish`) and cannot invoke a model or choose the next action;
+- the browser-side mailbox routes use a per-process page capability token and bounded JSON bodies.
+
+An isolated official `dsh web` profile was started on loopback using a separate `DSH_HOME` and pnpm store. DSH's own client-module loader automatically served and loaded the repo-local `client.js`; no frontend fork or replacement Vite app was required. Browser acceptance through the existing P5 `browser_session` proved that the official GUI rendered the Bridge control and panel, and clicking `Queue message` produced HTTP 201 and immediately changed the visible queue count from `0 active` to `1 active`.
+
+This proves the intended GUI extension strategy is viable: P6 can stay inside the official DSH Web/theme/plugin ecosystem rather than maintaining a separate frontend.
+
+## B1 implementation checkpoint — ChatGPT companion prepared
+
+The gateway now also contains an **opt-in only** MCP App probe in `src/dsh_mcp_gateway/chatgpt_web_companion.py`.
+
+Normal mode remains the frozen four-tool MCP surface. When `enable_chatgpt_web_companion=True` (or the CLI experiment flag is used), one temporary fifth tool, `open_chatgpt_web_bridge_companion`, is added through the Python MCP SDK's `Apps` extension and binds a self-contained `text/html;profile=mcp-app` resource.
+
+The companion intentionally implements only the standard ext-apps wire sequence observed in the LSM reference implementation:
+
+```text
+ui/initialize
+ui/notifications/initialized
+ui/message
+```
+
+It verifies that the ChatGPT host advertises `hostCapabilities.message`, then exposes one explicit `Send follow-up probe` button. It contains no OpenAI API request, direct model call, timer loop, DSH execution, or undocumented ChatGPT backend endpoint.
+
+Local acceptance proves:
+
+- default gateway mode still exposes exactly the original four stable MCP tools;
+- opt-in mode exposes those four plus the single UI-bound probe tool;
+- the `ui://` resource is served with the MCP App MIME type and carries the expected visibility metadata;
+- the complete repository gate passes 199 Python tests plus the existing JS adapters and the new DSH GUI mailbox tests.
+
+The remaining B1 risk is now narrow and product-host-specific: deploy the opt-in companion to a real ChatGPT Web connection, render it, and verify that pressing the button causes an actual new ChatGPT turn. Only after that host behavior is proven should the companion be connected to the DSH GUI mailbox automatically.

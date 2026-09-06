@@ -21,6 +21,7 @@ def build_mcp_server(
     harness_bridge: HarnessBridgeClient | None,
     *,
     project_dsh_tools: bool = False,
+    enable_chatgpt_web_companion: bool = False,
     auth_server_provider: Any | None = None,
     auth: Any | None = None,
     _server_cls: Any | None = None,
@@ -90,6 +91,12 @@ def build_mcp_server(
             else " This server is in meta-only mode, so DSH-internal tools are intentionally absent from the MCP tool list."
         )
     )
+    extensions = None
+    if enable_chatgpt_web_companion:
+        from .chatgpt_web_companion import build_chatgpt_web_companion_apps
+
+        extensions = [build_chatgpt_web_companion_apps()]
+
     mcp = server_cls(
         "dsh-mcp-gateway",
         version=__version__,
@@ -98,6 +105,7 @@ def build_mcp_server(
         auth_server_provider=auth_server_provider,
         auth=auth,
         lifespan=harness_lifespan,
+        extensions=extensions,
     )
 
     if harness_bridge is not None and not project_dsh_tools:
@@ -135,6 +143,7 @@ def build_embedded_oauth_server(
     config: Any,
     *,
     project_dsh_tools: bool = False,
+    enable_chatgpt_web_companion: bool = False,
 ) -> tuple[Any, Any]:
     """Build a self-contained OAuth-protected MCP server plus its provider."""
     try:
@@ -186,6 +195,7 @@ def build_embedded_oauth_server(
     server = build_mcp_server(
         harness_bridge,
         project_dsh_tools=project_dsh_tools,
+        enable_chatgpt_web_companion=enable_chatgpt_web_companion,
         auth_server_provider=provider,
         auth=auth,
         _server_cls=EmbeddedOAuthMCPServer,

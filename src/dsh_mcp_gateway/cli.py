@@ -110,6 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--experimental-chatgpt-web-companion",
+        action="store_true",
+        help=(
+            "EXPERIMENTAL: add one MCP App tool that probes ChatGPT Web's official ui/message follow-up bridge. "
+            "Disabled by default and not part of the stable four-tool surface."
+        ),
+    )
+    parser.add_argument(
         "--public-base-url",
         required=True,
         help="Public HTTPS origin used as OAuth issuer, for example https://gateway.example.com.",
@@ -218,6 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         harness_bridge,
         oauth,
         project_dsh_tools=args.tool_surface == "projected",
+        enable_chatgpt_web_companion=args.experimental_chatgpt_web_companion,
     )
     install_health_routes(server, harness_bridge)
     print(

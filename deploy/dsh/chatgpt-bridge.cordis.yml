@@ -9,6 +9,30 @@
     - id: chatgpt-task-state
       name: /srv/dsh-mcp-gateway/dsh-task-state-plugin/index.js
 
+    # ChatGPT-only persistent shell surface. The project adapter owns no PTY or
+    # process implementation: DSH's native terminal registry/backend retain
+    # exact-Agent authorization, bounded output, process cleanup, and the shared
+    # sandbox policy. Isolating `terminals` avoids publishing a process-global
+    # terminal registry or colliding with agent-preset terminal stacks.
+    - id: chatgpt-persistent-shell
+      name: cordis:group
+      group: true
+      isolate:
+        terminals: true
+      config:
+        - id: chatgpt-terminal-registry
+          name: '@deepseek-ai/dsh-terminal'
+
+        - id: chatgpt-terminal-bash
+          name: '@deepseek-ai/dsh-terminal-bash'
+          disabled: !!js process.platform === 'win32'
+          config:
+            timeoutMs: 300000
+
+        - id: chatgpt-shell-session-tool
+          name: /srv/dsh-mcp-gateway/dsh-shell-session-plugin/index.js
+          disabled: !!js process.platform === 'win32'
+
     - id: chatgpt-harness-bridge
       name: /srv/dsh-mcp-gateway/dsh-bridge-plugin/index.js
       config:
@@ -17,3 +41,4 @@
         # reserved and cannot be exposed through this generic opt-in list.
         allowExtraTools:
           - task_state
+          - shell_session

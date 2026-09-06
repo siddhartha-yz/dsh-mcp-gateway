@@ -78,16 +78,19 @@ jobs:
           node --check dsh-bridge-plugin/index.js
           node --check dsh-task-state-plugin/index.js
           node --check dsh-task-state-plugin/task-store.js
+          node --check dsh-shell-session-plugin/index.js
           node --check deploy/dsh/plugins/lsm-tool-filter.mjs
           node --check tests/test_lsm_tool_filter.mjs
           node --check tests/test_chatgpt_bridge.mjs
           node --check tests/test_task_state.mjs
+          node --check tests/test_shell_session.mjs
 
       - name: Test deployment JavaScript
         run: |
           node tests/test_lsm_tool_filter.mjs
           node tests/test_chatgpt_bridge.mjs
           node tests/test_task_state.mjs
+          node tests/test_shell_session.mjs
 
       - name: Verify systemd unit syntax
         run: ./scripts/verify-systemd.sh
@@ -145,4 +148,5 @@ jobs:
         working-directory: deploy/dsh-runtime
         run: |
           test "$(node_modules/.bin/dsh --version)" = "0.1.2-rc.1"
+          node -e "Promise.all([import('@deepseek-ai/dsh-terminal'), import('@deepseek-ai/dsh-terminal-bash')])"
           npm ls --depth=0

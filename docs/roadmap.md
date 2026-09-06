@@ -128,6 +128,8 @@ Desired properties:
 
 Acceptance goal: interactive CLI workflows no longer require reconstructing shell state manually between tool calls.
 
+Implementation checkpoint: P4 now uses DSH's native `TerminalSessionService` and `terminal-bash` backend rather than copying local-shell-mcp's tmux/PTY layer. A thin reviewed `shell_session` ToolRuntime adapter exposes open/list/status/send/read/signal/close through an isolated ChatGPT-only terminal registry while DSH retains exact-Agent authorization, cwd/environment/process persistence, bounded scrollback/output, foreground signals, timeouts, process-tree cleanup, and shared sandbox policy. The existing one-shot `bash` remains available. Adapter/wiring tests and the full local repository gate pass, including 194/194 Python tests. Production deployment and live persistent-session acceptance are still required before P4 is complete.
+
 ### P5 — Add a browser plugin
 
 Borrow the proven persistent browser-session model from LSM rather than embedding browser logic into the gateway.

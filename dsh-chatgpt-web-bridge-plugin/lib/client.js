@@ -119,7 +119,9 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (controllerEnabled) return
         if (observerOptions.some((observer) => observer.conversationId === targetConversation)) return
-        setTargetConversation(observerOptions.length === 1 ? observerOptions[0].conversationId : '')
+        const selectedConversation = state?.observer?.conversationId
+        const selectedOption = observerOptions.find((observer) => observer.conversationId === selectedConversation)
+        setTargetConversation(selectedOption?.conversationId || (observerOptions.length === 1 ? observerOptions[0].conversationId : ''))
       }, [controllerEnabled, state, targetConversation])
 
       const send = async () => {

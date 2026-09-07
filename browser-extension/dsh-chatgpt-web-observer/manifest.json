@@ -6,8 +6,8 @@
   "permissions": [],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "http://127.0.0.1:3080/*",
-    "http://localhost:3080/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "scripts": ["background.js"],
@@ -20,7 +20,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["http://127.0.0.1:3080/*", "http://localhost:3080/*"],
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
       "js": ["dsh-gui-relay.js"],
       "run_at": "document_idle"
     }

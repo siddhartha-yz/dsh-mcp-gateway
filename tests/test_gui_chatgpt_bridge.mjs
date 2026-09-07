@@ -335,13 +335,13 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   assert.deepEqual(manifest.permissions, [])
   assert.deepEqual(manifest.host_permissions, [
     'https://chatgpt.com/*',
-    'http://127.0.0.1:3080/*',
-    'http://localhost:3080/*',
+    'http://127.0.0.1/*',
+    'http://localhost/*',
   ])
   assert.equal(manifest.background.service_worker, 'background.js')
   assert.deepEqual(manifest.background.scripts, ['background.js'])
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*'])
-  assert.deepEqual(manifest.content_scripts[1].matches, ['http://127.0.0.1:3080/*', 'http://localhost:3080/*'])
+  assert.deepEqual(manifest.content_scripts[1].matches, ['http://127.0.0.1/*', 'http://localhost/*'])
 
   const background = await readFile(new URL('background.js', extensionRoot), 'utf8')
   const observer = await readFile(new URL('chatgpt-observer.js', extensionRoot), 'utf8')
@@ -360,6 +360,10 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   assert.doesNotMatch(background, /senderUrl|sender\?\.url|sender\?\.tab\?\.url/)
   assert.doesNotMatch(background, /fetch\(|XMLHttpRequest|tabs\.update|scripting\.executeScript/)
 
+  assert.match(relay, /location\.protocol !== 'http:'/)
+  assert.match(relay, /location\.port !== '3080'/)
+  assert.match(relay, /location\.hostname === '127\.0\.0\.1'/)
+  assert.match(relay, /location\.hostname === 'localhost'/)
   assert.match(relay, /runtime\.connect\(\{ name: 'dsh-gui-relay' \}\)/)
   assert.match(relay, /window\.postMessage/)
   assert.doesNotMatch(relay, /document\.scripts|__DSH_CHATGPT_WEB_BRIDGE__/)

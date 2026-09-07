@@ -73,6 +73,7 @@ export class ChatGPTWebBridgeStore {
     this.observer = {
       observerId: null,
       lastSeenAt: null,
+      lastEventAt: null,
       lastEventType: null,
       conversationId: null,
     }
@@ -227,7 +228,7 @@ export class ChatGPTWebBridgeStore {
     }
     this.events.push(event)
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
-    this.touchObserver(normalizedObserverId, eventType, conversationId, now)
+    this.touchObserver(normalizedObserverId, eventType, conversationId, now, { durable: true })
     return { event: { ...event }, observer: this.publicObserver() }
   }
 
@@ -297,16 +298,18 @@ export class ChatGPTWebBridgeStore {
     if (eventType !== null) this.companion.lastEventType = eventType
   }
 
-  touchObserver(observerId, eventType, conversationId, now, { select = true } = {}) {
+  touchObserver(observerId, eventType, conversationId, now, { select = true, durable = false } = {}) {
     const previous = this.observers.get(observerId) ?? {
       observerId,
       lastSeenAt: null,
+      lastEventAt: null,
       lastEventType: null,
       conversationId: null,
     }
     const next = {
       observerId,
       lastSeenAt: now,
+      lastEventAt: durable ? now : previous.lastEventAt,
       lastEventType: eventType,
       conversationId: conversationId ?? previous.conversationId,
     }

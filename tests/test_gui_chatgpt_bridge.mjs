@@ -121,12 +121,15 @@ test('observer events stay separate from companion lifecycle and heartbeat is hi
   assert.equal(store.status().observer.observerId, 'observer-a')
   assert.equal(store.status().observer.conversationId, '/c/example')
   assert.equal(store.status().companion.clientId, 'companion-a')
+  const readyAt = store.status().observer.lastEventAt
+  assert.equal(readyAt, now)
   assert.equal(store.status().recentEvents.length, 2)
 
   now += 5_000
   store.observerHeartbeat({ observerId: 'observer-a', payload: { conversationId: '/c/example' } })
   const status = store.status()
   assert.equal(status.observer.lastSeenAt, now)
+  assert.equal(status.observer.lastEventAt, readyAt)
   assert.equal(status.observer.lastEventType, 'observer_ready')
   assert.equal(status.recentEvents.length, 2)
 })
@@ -205,6 +208,48 @@ test('controller rebinds to a healthy observer of the same conversation only aft
   assert.equal(rebound.conversationId, '/c/shared')
   assert.equal(rebound.continuationCount, 1)
   assert.equal(rebound.lastContinuedTurnKey, 'shared-turn-1')
+  assert.equal(store.status().activeMessages.length, 1)
+})
+
+test('controller accepts same-conversation completion takeover when bound observer is lifecycle-stuck', async () => {
+  let now = 75_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_completion_takeover', status: 'active', revision: 1 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+  store.heartbeat('companion-a')
+  store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: { conversationId: '/c/shared' } })
+  controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/shared' })
+
+  now += 1_000
+  const started = store.publishObserver({
+    observerId: 'observer-a', eventType: 'turn_started', payload: { conversationId: '/c/shared', baselineTurnKey: 'assistant-4' },
+  })
+  await controller.onObserverEvent(started.event)
+  const boundEventAt = store.observerStatus('observer-a').lastEventAt
+
+  now += 2_000
+  store.observerHeartbeat({ observerId: 'observer-a', payload: { conversationId: '/c/shared' } })
+  assert.equal(store.observerStatus('observer-a').lastSeenAt, now)
+  assert.equal(store.observerStatus('observer-a').lastEventAt, boundEventAt)
+  task.revision += 1
+
+  now += 1_000
+  store.publishObserver({
+    observerId: 'observer-b', eventType: 'assistant_message', text: 'seed done',
+    payload: { conversationId: '/c/shared', turnKey: 'assistant-5' },
+  })
+  const completed = store.publishObserver({
+    observerId: 'observer-b', eventType: 'turn_completed',
+    payload: { conversationId: '/c/shared', turnKey: 'assistant-5' },
+  })
+  const takeover = await controller.onObserverEvent(completed.event)
+
+  assert.equal(takeover.enabled, true)
+  assert.equal(takeover.observerId, 'observer-b')
+  assert.equal(takeover.conversationId, '/c/shared')
+  assert.equal(takeover.continuationCount, 1)
+  assert.equal(takeover.lastContinuedTurnKey, 'assistant-5')
+  assert.equal(takeover.lastDecision, 'continuation_enqueued')
   assert.equal(store.status().activeMessages.length, 1)
 })
 

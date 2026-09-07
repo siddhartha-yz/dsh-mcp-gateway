@@ -158,8 +158,6 @@ export class ContinuationController {
 
     if (event.observerId !== this.state.observerId) {
       const boundHealth = this.health(this.state.observerId)
-      if (boundHealth.observerOnline) return this.status()
-
       const candidateHealth = this.health(event.observerId)
       const candidate = candidateHealth.observer
       const candidateDegraded = candidate?.lastEventType === 'bridge_degraded'
@@ -167,8 +165,18 @@ export class ContinuationController {
         || candidate?.lastEventType === 'blocked'
       if (!candidateHealth.observerOnline || candidateDegraded) return this.status()
 
+      const bound = boundHealth.observer
+      const completionTakeover = event.type === 'turn_completed'
+        && bound?.lastEventType === 'turn_started'
+        && typeof bound.lastEventAt === 'number'
+        && typeof event.ts === 'number'
+        && event.ts >= bound.lastEventAt
+        && event.ts >= this.state.armedAt
+
+      if (boundHealth.observerOnline && !completionTakeover) return this.status()
+
       this.state.observerId = event.observerId
-      this.state.lastDecision = 'observer_rebound'
+      this.state.lastDecision = completionTakeover ? 'observer_completion_rebound' : 'observer_rebound'
       this.state.lastDecisionAt = this.now()
     }
 

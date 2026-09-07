@@ -29,6 +29,14 @@ function turnKeyOf(event) {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null
 }
 
+export function seedMessage(taskId) {
+  return [
+    `Begin or resume the current DSH task from its latest task_state. Task id: ${taskId}.`,
+    'This is the explicit seed turn started by the DSH Bridge Arm & start action; do not count this seed as an automatic continuation.',
+    'Before ending this turn, update task_state exactly once: mark it completed if the goal is achieved, pause it if genuine human input is required, otherwise checkpoint it while leaving it active.',
+  ].join(' ')
+}
+
 export function continuationMessage(taskId) {
   return [
     `${AUTO_CONTINUE_MESSAGE_PREFIX} Task id: ${taskId}.`,
@@ -54,6 +62,7 @@ export class ContinuationController {
       taskId: null,
       observerId: null,
       conversationId: null,
+      hostId: null,
       armedAt: null,
       continuationCount: 0,
       lastTaskRevision: null,
@@ -69,16 +78,17 @@ export class ContinuationController {
     return { ...this.state }
   }
 
-  health(observerId = null) {
+  health(observerId = null, hostId = null) {
     const snapshot = this.store.status()
     const now = this.now()
-    const companionOnline = typeof snapshot.companion?.lastSeenAt === 'number' && now - snapshot.companion.lastSeenAt <= this.healthTtlMs
+    const companion = hostId === null ? snapshot.companion : this.store.companionForHost?.(hostId)
+    const companionOnline = typeof companion?.lastSeenAt === 'number' && now - companion.lastSeenAt <= this.healthTtlMs
     const observer = observerId === null ? snapshot.observer : this.store.observerStatus?.(observerId)
     const observerOnline = typeof observer?.lastSeenAt === 'number' && now - observer.lastSeenAt <= this.healthTtlMs
-    return { snapshot, observer, now, companionOnline, observerOnline }
+    return { snapshot, companion, observer, now, companionOnline, observerOnline }
   }
 
-  configure({ enabled, taskId = null, conversationId = null } = {}) {
+  configure({ enabled, taskId = null, conversationId = null, start = false } = {}) {
     if (enabled !== true && enabled !== false) {
       throw new ContinuationControllerError('invalid_request', 'enabled must be a boolean')
     }
@@ -108,7 +118,8 @@ export class ContinuationController {
     const checkedConversationId = requireConversationId(conversationId)
     const candidate = this.store.observerForConversation?.(checkedConversationId)
     if (!candidate) throw new ContinuationControllerError('not_ready', 'target ChatGPT conversation observer is unavailable')
-    const { snapshot, observer, now, companionOnline, observerOnline } = this.health(candidate.observerId)
+    const hostId = typeof candidate.hostId === 'string' && candidate.hostId !== '' ? candidate.hostId : null
+    const { snapshot, observer, now, companionOnline, observerOnline } = this.health(candidate.observerId, hostId)
     if (!companionOnline) throw new ContinuationControllerError('not_ready', 'ChatGPT companion is not healthy')
     if (!observerOnline) throw new ContinuationControllerError('not_ready', 'target ChatGPT read observer is not healthy')
     if (observer?.lastEventType === 'bridge_degraded' || observer?.lastEventType === 'error' || observer?.lastEventType === 'blocked') {
@@ -125,14 +136,25 @@ export class ContinuationController {
       taskId: checkedTaskId,
       observerId,
       conversationId: checkedConversationId,
+      hostId,
       armedAt: now,
       continuationCount: 0,
       lastTaskRevision: task.revision,
       lastObservedTurnKey: null,
       lastContinuedTurnKey: null,
-      lastDecision: 'armed',
+      lastDecision: start ? 'seed_enqueued' : 'armed',
       lastDecisionAt: now,
       stopReason: null,
+    }
+    if (start) {
+      try {
+        this.store.enqueue(seedMessage(checkedTaskId), 'auto-seed', { targetHostId: hostId })
+      } catch {
+        this.state.enabled = false
+        this.state.lastDecision = 'stopped'
+        this.state.stopReason = 'seed_enqueue_failed'
+        throw new ContinuationControllerError('enqueue_failed', 'failed to enqueue the explicit seed turn')
+      }
     }
     return this.status()
   }
@@ -157,8 +179,10 @@ export class ContinuationController {
     }
 
     if (event.observerId !== this.state.observerId) {
-      const boundHealth = this.health(this.state.observerId)
-      const candidateHealth = this.health(event.observerId)
+      const boundHealth = this.health(this.state.observerId, this.state.hostId)
+      const candidateHostId = typeof event.payload?.hostId === 'string' && event.payload.hostId !== '' ? event.payload.hostId : null
+      if (this.state.hostId !== null && candidateHostId !== this.state.hostId) return this.status()
+      const candidateHealth = this.health(event.observerId, this.state.hostId)
       const candidate = candidateHealth.observer
       const candidateDegraded = candidate?.lastEventType === 'bridge_degraded'
         || candidate?.lastEventType === 'error'
@@ -202,7 +226,7 @@ export class ContinuationController {
       return this.status()
     }
 
-    const { snapshot, observer, companionOnline, observerOnline } = this.health(this.state.observerId)
+    const { snapshot, observer, companionOnline, observerOnline } = this.health(this.state.observerId, this.state.hostId)
     if (!companionOnline) return this.stop('companion_unhealthy')
     if (!observerOnline) return this.stop('observer_unhealthy')
     if (observer?.lastEventType === 'bridge_degraded' || observer?.lastEventType === 'error') {
@@ -226,7 +250,7 @@ export class ContinuationController {
     this.state.lastTaskRevision = task.revision
 
     try {
-      this.store.enqueue(continuationMessage(this.state.taskId), 'auto-continue')
+      this.store.enqueue(continuationMessage(this.state.taskId), 'auto-continue', { targetHostId: this.state.hostId })
     } catch {
       return this.stop('enqueue_failed')
     }

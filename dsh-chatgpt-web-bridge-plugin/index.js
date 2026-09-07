@@ -78,10 +78,12 @@ export class ChatGPTWebBridgeStore {
       conversationId: null,
     }
     this.observers = new Map()
+    this.companions = new Map()
   }
 
-  enqueue(text, source = 'dsh-gui') {
+  enqueue(text, source = 'dsh-gui', { targetHostId = null } = {}) {
     const normalizedText = requireNonEmptyString(text, 'text', MAX_MESSAGE_CHARS)
+    const normalizedTargetHostId = optionalString(targetHostId, 'target_host_id', 128)
     const active = this.messages.filter((message) => ['pending', 'claimed', 'dispatching'].includes(message.status))
     if (active.length >= MAX_QUEUE) throw new BridgeError('queue_full', `bridge queue is limited to ${MAX_QUEUE} active messages`)
     const now = this.now()
@@ -89,6 +91,7 @@ export class ChatGPTWebBridgeStore {
       id: randomUUID(),
       text: normalizedText,
       source,
+      targetHostId: normalizedTargetHostId,
       status: 'pending',
       createdAt: now,
       updatedAt: now,
@@ -103,14 +106,15 @@ export class ChatGPTWebBridgeStore {
     return this.publicMessage(message)
   }
 
-  poll(clientId) {
+  poll(clientId, hostId = null) {
     const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
+    const normalizedHostId = optionalString(hostId, 'host_id', 128)
     const now = this.now()
-    this.touchCompanion(normalizedClientId, null, now)
+    this.touchCompanion(normalizedClientId, normalizedHostId, null, now)
     this.releaseExpiredClaims(now)
 
     let message = this.messages.find((candidate) => candidate.status === 'claimed' && candidate.claimedBy === normalizedClientId)
-    if (message === undefined) message = this.messages.find((candidate) => candidate.status === 'pending')
+    if (message === undefined) message = this.messages.find((candidate) => candidate.status === 'pending' && (candidate.targetHostId === null || candidate.targetHostId === normalizedHostId))
     if (message === undefined) return { message: null, companion: this.publicCompanion() }
 
     if (message.status === 'pending') {
@@ -123,15 +127,17 @@ export class ChatGPTWebBridgeStore {
     return { message: this.publicMessage(message), companion: this.publicCompanion() }
   }
 
-  heartbeat(clientId) {
+  heartbeat(clientId, hostId = null) {
     const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
-    this.touchCompanion(normalizedClientId, null, this.now())
+    const normalizedHostId = optionalString(hostId, 'host_id', 128)
+    this.touchCompanion(normalizedClientId, normalizedHostId, null, this.now())
     return { companion: this.publicCompanion() }
   }
 
-  beginSend({ clientId, messageId }) {
+  beginSend({ clientId, messageId, hostId = null }) {
     const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
     const normalizedMessageId = requireNonEmptyString(messageId, 'message_id', 128)
+    const normalizedHostId = optionalString(hostId, 'host_id', 128)
     const message = this.messages.find((candidate) => candidate.id === normalizedMessageId)
     if (message === undefined) throw new BridgeError('message_not_found', 'bridge message not found')
     if (message.status !== 'claimed' || message.claimedBy !== normalizedClientId) {
@@ -141,13 +147,14 @@ export class ChatGPTWebBridgeStore {
     message.status = 'dispatching'
     message.updatedAt = now
     message.claimExpiresAt = null
-    this.touchCompanion(normalizedClientId, null, now)
+    this.touchCompanion(normalizedClientId, normalizedHostId, null, now)
     return { message: this.publicMessage(message), companion: this.publicCompanion() }
   }
 
-  ack({ clientId, messageId, outcome, error = null }) {
+  ack({ clientId, messageId, outcome, error = null, hostId = null }) {
     const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
     const normalizedMessageId = requireNonEmptyString(messageId, 'message_id', 128)
+    const normalizedHostId = optionalString(hostId, 'host_id', 128)
     if (outcome !== 'sent' && outcome !== 'failed') {
       throw new BridgeError('invalid_request', 'outcome must be sent or failed')
     }
@@ -162,12 +169,13 @@ export class ChatGPTWebBridgeStore {
     message.error = outcome === 'failed' ? optionalString(error, 'error', MAX_ERROR_CHARS) : null
     message.updatedAt = now
     message.claimExpiresAt = null
-    this.touchCompanion(normalizedClientId, null, now)
+    this.touchCompanion(normalizedClientId, normalizedHostId, null, now)
     return { message: this.publicMessage(message), companion: this.publicCompanion() }
   }
 
-  publish({ clientId, eventType, text = null, payload = null }) {
+  publish({ clientId, eventType, text = null, payload = null, hostId = null }) {
     const normalizedClientId = requireNonEmptyString(clientId, 'client_id', 128)
+    const normalizedHostId = optionalString(hostId, 'host_id', 128)
     if (!EVENT_TYPES.includes(eventType)) {
       throw new BridgeError('invalid_request', `event_type must be one of: ${EVENT_TYPES.join(', ')}`)
     }
@@ -187,7 +195,7 @@ export class ChatGPTWebBridgeStore {
     }
     this.events.push(event)
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
-    this.touchCompanion(normalizedClientId, eventType, now)
+    this.touchCompanion(normalizedClientId, normalizedHostId, eventType, now)
     return { event: { ...event }, companion: this.publicCompanion() }
   }
 
@@ -197,9 +205,10 @@ export class ChatGPTWebBridgeStore {
       throw new BridgeError('invalid_request', 'payload must be an object or null')
     }
     const conversationId = optionalString(payload?.conversationId, 'payload.conversationId', 512)
+    const hostId = optionalString(payload?.hostId, 'payload.hostId', 128)
     const now = this.now()
     const previous = this.observers.get(normalizedObserverId)
-    this.touchObserver(normalizedObserverId, previous?.lastEventType ?? null, conversationId, now, { select: false })
+    this.touchObserver(normalizedObserverId, previous?.lastEventType ?? null, conversationId, hostId, now, { select: false })
     if (this.observer.observerId === normalizedObserverId) {
       this.observer = this.publicObserver(normalizedObserverId)
     }
@@ -216,6 +225,7 @@ export class ChatGPTWebBridgeStore {
       throw new BridgeError('invalid_request', 'payload must be an object or null')
     }
     const conversationId = optionalString(payload?.conversationId, 'payload.conversationId', 512)
+    const hostId = optionalString(payload?.hostId, 'payload.hostId', 128)
     const now = this.now()
     const event = {
       seq: this.nextEventSeq++,
@@ -228,7 +238,7 @@ export class ChatGPTWebBridgeStore {
     }
     this.events.push(event)
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS)
-    this.touchObserver(normalizedObserverId, eventType, conversationId, now, { durable: true })
+    this.touchObserver(normalizedObserverId, eventType, conversationId, hostId, now, { durable: true })
     return { event: { ...event }, observer: this.publicObserver() }
   }
 
@@ -242,6 +252,7 @@ export class ChatGPTWebBridgeStore {
       now,
       counts,
       companion: this.publicCompanion(),
+      companions: this.publicCompanions(),
       observer: this.publicObserver(),
       observers: this.publicObservers(),
       activeMessages: this.messages
@@ -253,6 +264,18 @@ export class ChatGPTWebBridgeStore {
 
   publicCompanion() {
     return { ...this.companion }
+  }
+
+  publicCompanions() {
+    return [...this.companions.values()]
+      .sort((left, right) => (right.lastSeenAt ?? 0) - (left.lastSeenAt ?? 0))
+      .slice(0, 32)
+      .map((companion) => ({ ...companion }))
+  }
+
+  companionForHost(hostId) {
+    if (typeof hostId !== 'string' || hostId === '') return null
+    return this.publicCompanions().find((companion) => companion.hostId === hostId) ?? null
   }
 
   publicObserver(observerId = null) {
@@ -281,6 +304,7 @@ export class ChatGPTWebBridgeStore {
       id: message.id,
       text: message.text,
       source: message.source,
+      targetHostId: message.targetHostId,
       status: message.status,
       createdAt: message.createdAt,
       updatedAt: message.updatedAt,
@@ -292,19 +316,26 @@ export class ChatGPTWebBridgeStore {
     }
   }
 
-  touchCompanion(clientId, eventType, now) {
-    this.companion.clientId = clientId
-    this.companion.lastSeenAt = now
-    if (eventType !== null) this.companion.lastEventType = eventType
+  touchCompanion(clientId, hostId, eventType, now) {
+    const previous = this.companions.get(clientId) ?? { clientId, hostId: null, lastSeenAt: null, lastEventType: null }
+    const next = {
+      clientId,
+      hostId: hostId ?? previous.hostId,
+      lastSeenAt: now,
+      lastEventType: eventType ?? previous.lastEventType,
+    }
+    this.companions.set(clientId, next)
+    this.companion = { ...next }
   }
 
-  touchObserver(observerId, eventType, conversationId, now, { select = true, durable = false } = {}) {
+  touchObserver(observerId, eventType, conversationId, hostId, now, { select = true, durable = false } = {}) {
     const previous = this.observers.get(observerId) ?? {
       observerId,
       lastSeenAt: null,
       lastEventAt: null,
       lastEventType: null,
       conversationId: null,
+      hostId: null,
     }
     const next = {
       observerId,
@@ -312,6 +343,7 @@ export class ChatGPTWebBridgeStore {
       lastEventAt: durable ? now : previous.lastEventAt,
       lastEventType: eventType,
       conversationId: conversationId ?? previous.conversationId,
+      hostId: hostId ?? previous.hostId,
     }
     this.observers.set(observerId, next)
     if (select) this.observer = { ...next }
@@ -340,6 +372,7 @@ const TOOL_PARAMETERS = Object.freeze({
   properties: {
     action: { type: 'string', enum: ['status', 'poll', 'heartbeat', 'begin_send', 'ack', 'publish'] },
     client_id: { type: 'string' },
+    host_id: { type: 'string' },
     message_id: { type: 'string' },
     outcome: { type: 'string', enum: ['sent', 'failed'] },
     error: { type: 'string' },
@@ -371,15 +404,15 @@ export function createBridgeTool(store, controller = null) {
         case 'status':
           return { ...store.status(), controller: controller?.status() ?? null }
         case 'poll':
-          return store.poll(args.client_id)
+          return store.poll(args.client_id, args.host_id ?? null)
         case 'heartbeat':
-          return store.heartbeat(args.client_id)
+          return store.heartbeat(args.client_id, args.host_id ?? null)
         case 'begin_send':
-          return store.beginSend({ clientId: args.client_id, messageId: args.message_id })
+          return store.beginSend({ clientId: args.client_id, messageId: args.message_id, hostId: args.host_id ?? null })
         case 'ack':
-          return store.ack({ clientId: args.client_id, messageId: args.message_id, outcome: args.outcome, error: args.error })
+          return store.ack({ clientId: args.client_id, messageId: args.message_id, outcome: args.outcome, error: args.error, hostId: args.host_id ?? null })
         case 'publish':
-          return store.publish({ clientId: args.client_id, eventType: args.event_type, text: args.text, payload: args.payload ?? null })
+          return store.publish({ clientId: args.client_id, eventType: args.event_type, text: args.text, payload: args.payload ?? null, hostId: args.host_id ?? null })
         default:
           throw new BridgeError('invalid_request', 'unsupported action')
       }
@@ -462,6 +495,7 @@ function routeHandler({ token, store, controller, mode }) {
           enabled: body.enabled,
           taskId: body.task_id ?? null,
           conversationId: body.conversation_id ?? null,
+          start: body.start === true,
         })
         writeJson(res, 200, { controller: controllerState })
         return

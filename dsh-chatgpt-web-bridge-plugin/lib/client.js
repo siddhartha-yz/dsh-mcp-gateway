@@ -144,7 +144,7 @@ window.__ModuleLoader__.load({
         try {
           await bridgeFetch('/controller', {
             method: 'POST',
-            body: JSON.stringify(enabled ? { enabled: true, task_id: taskId.trim(), conversation_id: targetConversation } : { enabled: false }),
+            body: JSON.stringify(enabled ? { enabled: true, start: true, task_id: taskId.trim(), conversation_id: targetConversation } : { enabled: false }),
           })
           setError(null)
           await refresh()
@@ -282,7 +282,7 @@ window.__ModuleLoader__.load({
           color: controllerEnabled ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-button-primary-label, var(--dsw-alias-label-primary-inverted))',
           padding: '8px 12px', cursor: controllerBusy ? 'wait' : 'pointer', fontWeight: 600, marginBottom: 14,
         },
-      }, controllerBusy ? 'Updating…' : controllerEnabled ? 'Stop auto-continue' : 'Arm auto-continue'),
+      }, controllerBusy ? 'Updating…' : controllerEnabled ? 'Stop auto-continue' : 'Arm & start'),
       React.createElement('label', { style: { display: 'block', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 5 } }, 'Message to the hidden ChatGPT conversation'),
       React.createElement('textarea', {
         value: text,

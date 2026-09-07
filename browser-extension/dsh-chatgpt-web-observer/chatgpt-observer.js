@@ -20,6 +20,7 @@
   ]
 
   let port = null
+  let hostId = null
   let reconnectTimer = null
   let domObserver = null
   let watchdog = null
@@ -51,6 +52,7 @@
         payload: {
           ...payload,
           conversationId: conversationId(),
+          ...(hostId === null ? {} : { hostId }),
           observedAt: Date.now(),
         },
       })
@@ -60,10 +62,26 @@
     }
   }
 
+
+  function announceHostToFrames() {
+    if (hostId === null) return
+    const message = { source: 'dsh-chatgpt-web-observer-extension', type: 'host-instance', hostId }
+    for (const frame of document.querySelectorAll('iframe')) {
+      try { frame.contentWindow?.postMessage(message, '*') } catch {}
+    }
+  }
+
   function connect() {
     if (port !== null) return
     try {
       port = api.runtime.connect({ name: 'chatgpt-observer' })
+      port.onMessage.addListener((message) => {
+        if (message?.channel !== 'dsh-chatgpt-observer-host') return
+        if (typeof message.hostId !== 'string' || message.hostId.length < 1 || message.hostId.length > 128) return
+        hostId = message.hostId
+        announceHostToFrames()
+        emit('observer_ready', null, { version: 2, transport: 'read-only-dom-observer', hostBound: true })
+      })
       port.onDisconnect.addListener(() => {
         port = null
         if (reconnectTimer !== null) clearTimeout(reconnectTimer)
@@ -158,6 +176,7 @@
 
   function inspect() {
     const now = Date.now()
+    announceHostToFrames()
     if (now - lastHeartbeatAt >= 5_000) {
       lastHeartbeatAt = now
       emit('observer_heartbeat')

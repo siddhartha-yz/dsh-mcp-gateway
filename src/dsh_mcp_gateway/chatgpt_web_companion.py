@@ -54,6 +54,14 @@ code { font-family: ui-monospace, monospace; }
   const RETRY_MS = 5000;
   const statusNode = document.getElementById('status');
   const clientId = globalThis.crypto?.randomUUID?.() || `companion-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let hostId = null;
+  globalThis.addEventListener('message', (event) => {
+    if (event.source !== globalThis.parent) return;
+    const value = event.data;
+    if (!value || value.source !== 'dsh-chatgpt-web-observer-extension' || value.type !== 'host-instance') return;
+    if (typeof value.hostId !== 'string' || value.hostId.length < 1 || value.hostId.length > 128) return;
+    hostId = value.hostId;
+  });
   let nextId = 1;
   const pending = new Map();
   let timer = null;
@@ -121,6 +129,7 @@ code { font-family: ui-monospace, monospace; }
     const args = {
       action: 'ack',
       client_id: clientId,
+      host_id: hostId,
       message_id: messageId,
       outcome,
     };
@@ -137,7 +146,7 @@ code { font-family: ui-monospace, monospace; }
     // message can expire and be retried, but a dispatching message never does:
     // if this iframe dies after ChatGPT accepted ui/message and before ack, DSH
     // leaves the item visibly uncertain instead of risking a duplicate turn.
-    await bridge({ action: 'begin_send', client_id: clientId, message_id: message.id });
+    await bridge({ action: 'begin_send', client_id: clientId, host_id: hostId, message_id: message.id });
     setStatus('Dispatching queued DSH message to ChatGPT…');
     try {
       await request('ui/message', {
@@ -161,7 +170,7 @@ code { font-family: ui-monospace, monospace; }
     if (stopped) return;
     let delay = POLL_MS;
     try {
-      const polled = await bridge({ action: 'poll', client_id: clientId });
+      const polled = await bridge({ action: 'poll', client_id: clientId, host_id: hostId });
       if (polled?.message) await dispatch(polled.message);
       else setStatus('Connected · automatic relay armed · waiting for DSH GUI');
     } catch (error) {
@@ -186,6 +195,7 @@ code { font-family: ui-monospace, monospace; }
     await bridge({
       action: 'publish',
       client_id: clientId,
+      host_id: hostId,
       event_type: 'companion_ready',
       payload: { transport: 'ui/message', relay: 'automatic', version: 2 },
     });
@@ -248,6 +258,7 @@ def build_chatgpt_web_companion_apps(
     def chatgpt_web_bridge_transport(
         action: str,
         client_id: str | None = None,
+        host_id: str | None = None,
         message_id: str | None = None,
         outcome: str | None = None,
         error: str | None = None,
@@ -260,6 +271,7 @@ def build_chatgpt_web_companion_apps(
         arguments: dict[str, Any] = {"action": action}
         for key, value in (
             ("client_id", client_id),
+            ("host_id", host_id),
             ("message_id", message_id),
             ("outcome", outcome),
             ("error", error),

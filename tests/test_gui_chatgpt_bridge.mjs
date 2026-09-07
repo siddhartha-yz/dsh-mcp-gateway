@@ -15,6 +15,7 @@ import {
   ContinuationController,
   ContinuationControllerError,
   continuationMessage,
+  seedMessage,
 } from '../dsh-chatgpt-web-bridge-plugin/continuation-controller.js'
 
 const clientPath = new URL('../dsh-chatgpt-web-bridge-plugin/lib/client.js', import.meta.url)
@@ -59,6 +60,60 @@ test('bridge store leases, begins fail-closed dispatch, acknowledges, and report
   assert.equal(store.status().counts.sent, 1)
   assert.equal(store.status().counts.dispatching, 0)
   assert.equal(store.status().counts.pending, 0)
+})
+
+test('host-targeted bridge messages can only be claimed by a companion from that browser host', () => {
+  const store = new ChatGPTWebBridgeStore()
+  store.heartbeat('companion-a', 'host-a')
+  store.heartbeat('companion-b', 'host-b')
+  const queued = store.enqueue('isolated only', 'auto-seed', { targetHostId: 'host-b' })
+
+  assert.equal(store.poll('companion-a', 'host-a').message, null)
+  const leased = store.poll('companion-b', 'host-b')
+  assert.equal(leased.message.id, queued.id)
+  assert.equal(leased.message.targetHostId, 'host-b')
+})
+
+test('Arm and start seeds the observer browser host and keeps continuations on that host', async () => {
+  let now = 8_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_isolated_host', status: 'active', revision: 1 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+
+  store.publish({ clientId: 'companion-normal', hostId: 'host-normal', eventType: 'companion_ready', payload: { relay: 'automatic' } })
+  store.publish({ clientId: 'companion-isolated', hostId: 'host-isolated', eventType: 'companion_ready', payload: { relay: 'automatic' } })
+  store.publishObserver({
+    observerId: 'observer-isolated', eventType: 'observer_ready',
+    payload: { conversationId: '/c/isolated', hostId: 'host-isolated' },
+  })
+
+  const armed = controller.configure({ enabled: true, start: true, taskId: task.id, conversationId: '/c/isolated' })
+  assert.equal(armed.enabled, true)
+  assert.equal(armed.hostId, 'host-isolated')
+  assert.equal(armed.continuationCount, 0)
+  assert.equal(armed.lastDecision, 'seed_enqueued')
+  assert.equal(store.poll('companion-normal', 'host-normal').message, null)
+
+  const seed = store.poll('companion-isolated', 'host-isolated').message
+  assert.equal(seed.source, 'auto-seed')
+  assert.equal(seed.text, seedMessage(task.id))
+  assert.equal(seed.targetHostId, 'host-isolated')
+  store.beginSend({ clientId: 'companion-isolated', hostId: 'host-isolated', messageId: seed.id })
+  store.ack({ clientId: 'companion-isolated', hostId: 'host-isolated', messageId: seed.id, outcome: 'sent' })
+
+  now += 1_000
+  task.revision += 1
+  const completed = store.publishObserver({
+    observerId: 'observer-isolated', eventType: 'turn_completed',
+    payload: { conversationId: '/c/isolated', hostId: 'host-isolated', turnKey: 'seed-turn' },
+  })
+  const continued = await controller.onObserverEvent(completed.event)
+  assert.equal(continued.continuationCount, 1)
+  const queued = store.status().activeMessages[0]
+  assert.equal(queued.source, 'auto-continue')
+  assert.equal(queued.targetHostId, 'host-isolated')
+  assert.equal(store.poll('companion-normal', 'host-normal').message, null)
+  assert.equal(store.poll('companion-isolated', 'host-isolated').message.id, queued.id)
 })
 
 test('expired claims return to the queue and can be reclaimed', () => {

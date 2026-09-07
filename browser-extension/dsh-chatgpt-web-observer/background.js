@@ -3,6 +3,7 @@
 
   const api = globalThis.browser ?? globalThis.chrome
   const dshPorts = new Set()
+  const hostId = crypto.randomUUID()
   const MAX_TEXT = 8_000
   const MAX_ID = 512
   const EVENT_TYPES = new Set([
@@ -27,6 +28,7 @@
     if (value.text !== null && value.text !== undefined && (typeof value.text !== 'string' || value.text.length > MAX_TEXT)) return null
     if (!isPlainObject(value.payload)) return null
     if (typeof value.payload.conversationId !== 'string' || value.payload.conversationId.length > MAX_ID) return null
+    if (value.payload.hostId !== undefined && (typeof value.payload.hostId !== 'string' || value.payload.hostId.length < 1 || value.payload.hostId.length > 128)) return null
     return {
       observerId: value.observerId,
       eventType: value.eventType,
@@ -60,6 +62,7 @@
       return
     }
 
+    try { port.postMessage({ channel: 'dsh-chatgpt-observer-host', hostId }) } catch {}
     port.onMessage.addListener((value) => {
       const event = normalizeEvent(value)
       if (event !== null) broadcast(event)

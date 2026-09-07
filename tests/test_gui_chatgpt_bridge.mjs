@@ -190,7 +190,12 @@ test('controller rebinds to a healthy observer of the same conversation only aft
   const armed = controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/shared' })
   assert.equal(armed.observerId, 'observer-a')
 
-  now += 1_000
+  now += 500
+  const boundStarted = store.publishObserver({
+    observerId: 'observer-a', eventType: 'turn_started', payload: { conversationId: '/c/shared' },
+  })
+  await controller.onObserverEvent(boundStarted.event)
+  now += 500
   store.publishObserver({ observerId: 'observer-b', eventType: 'turn_started', payload: { conversationId: '/c/shared' } })
   const whileBoundHealthy = await controller.onObserverEvent(store.status().recentEvents.at(-1))
   assert.equal(whileBoundHealthy.observerId, 'observer-a')
@@ -208,6 +213,43 @@ test('controller rebinds to a healthy observer of the same conversation only aft
   assert.equal(rebound.conversationId, '/c/shared')
   assert.equal(rebound.continuationCount, 1)
   assert.equal(rebound.lastContinuedTurnKey, 'shared-turn-1')
+  assert.equal(store.status().activeMessages.length, 1)
+})
+
+test('controller gives post-arm turn ownership to a same-conversation observer when the armed observer has no post-arm lifecycle', async () => {
+  let now = 72_500
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_post_arm_turn_takeover', status: 'active', revision: 2 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+  store.heartbeat('companion-a')
+  store.publishObserver({
+    observerId: 'observer-a', eventType: 'turn_completed',
+    payload: { conversationId: '/c/shared', turnKey: 'assistant-old' },
+  })
+  const armed = controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/shared' })
+  assert.equal(armed.observerId, 'observer-a')
+
+  now += 1_000
+  const started = store.publishObserver({
+    observerId: 'observer-b', eventType: 'turn_started',
+    payload: { conversationId: '/c/shared', baselineTurnKey: 'assistant-old' },
+  })
+  const rebound = await controller.onObserverEvent(started.event)
+  assert.equal(rebound.enabled, true)
+  assert.equal(rebound.observerId, 'observer-b')
+  assert.equal(rebound.lastDecision, 'observer_turn_rebound')
+
+  task.revision += 1
+  now += 1_000
+  const completed = store.publishObserver({
+    observerId: 'observer-b', eventType: 'turn_completed',
+    payload: { conversationId: '/c/shared', turnKey: 'assistant-new' },
+  })
+  const continued = await controller.onObserverEvent(completed.event)
+  assert.equal(continued.enabled, true)
+  assert.equal(continued.observerId, 'observer-b')
+  assert.equal(continued.continuationCount, 1)
+  assert.equal(continued.lastContinuedTurnKey, 'assistant-new')
   assert.equal(store.status().activeMessages.length, 1)
 })
 

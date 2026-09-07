@@ -166,17 +166,25 @@ export class ContinuationController {
       if (!candidateHealth.observerOnline || candidateDegraded) return this.status()
 
       const bound = boundHealth.observer
+      const candidateAfterArm = typeof event.ts === 'number' && event.ts >= this.state.armedAt
+      const boundHasPostArmLifecycle = typeof bound?.lastEventAt === 'number' && bound.lastEventAt > this.state.armedAt
+      const startTakeover = event.type === 'turn_started'
+        && candidateAfterArm
+        && !boundHasPostArmLifecycle
       const completionTakeover = event.type === 'turn_completed'
         && bound?.lastEventType === 'turn_started'
         && typeof bound.lastEventAt === 'number'
-        && typeof event.ts === 'number'
+        && candidateAfterArm
         && event.ts >= bound.lastEventAt
-        && event.ts >= this.state.armedAt
 
-      if (boundHealth.observerOnline && !completionTakeover) return this.status()
+      if (boundHealth.observerOnline && !startTakeover && !completionTakeover) return this.status()
 
       this.state.observerId = event.observerId
-      this.state.lastDecision = completionTakeover ? 'observer_completion_rebound' : 'observer_rebound'
+      this.state.lastDecision = startTakeover
+        ? 'observer_turn_rebound'
+        : completionTakeover
+          ? 'observer_completion_rebound'
+          : 'observer_rebound'
       this.state.lastDecisionAt = this.now()
     }
 

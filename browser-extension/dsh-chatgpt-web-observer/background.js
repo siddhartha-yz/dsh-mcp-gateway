@@ -3,7 +3,6 @@
 
   const api = globalThis.browser ?? globalThis.chrome
   const dshPorts = new Set()
-  const CHATGPT_ORIGIN = 'https://chatgpt.com'
   const MAX_TEXT = 8_000
   const MAX_ID = 512
   const EVENT_TYPES = new Set([
@@ -19,27 +18,6 @@
 
   function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value)
-  }
-
-  function senderUrl(port) {
-    return port?.sender?.url || port?.sender?.tab?.url || ''
-  }
-
-  function isChatGPTSender(port) {
-    try {
-      return new URL(senderUrl(port)).origin === CHATGPT_ORIGIN
-    } catch {
-      return false
-    }
-  }
-
-  function isLocalDshSender(port) {
-    try {
-      const url = new URL(senderUrl(port))
-      return url.protocol === 'http:' && url.port === '3080' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')
-    } catch {
-      return false
-    }
   }
 
   function normalizeEvent(value) {
@@ -68,17 +46,16 @@
   }
 
   api.runtime.onConnect.addListener((port) => {
+    // Only this extension's own content scripts can open runtime ports here;
+    // page scripts cannot call runtime.connect without externally_connectable.
+    // The manifest already limits those scripts to chatgpt.com and local DSH :3080.
     if (port.name === 'dsh-gui-relay') {
-      if (!isLocalDshSender(port)) {
-        try { port.disconnect() } catch {}
-        return
-      }
       dshPorts.add(port)
       port.onDisconnect.addListener(() => dshPorts.delete(port))
       return
     }
 
-    if (port.name !== 'chatgpt-observer' || !isChatGPTSender(port)) {
+    if (port.name !== 'chatgpt-observer') {
       try { port.disconnect() } catch {}
       return
     }

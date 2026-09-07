@@ -135,7 +135,9 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertNotIn("fetch(", observer)
         self.assertNotIn("XMLHttpRequest", observer)
         self.assertNotIn("api.openai.com", observer)
-        self.assertIn("https://chatgpt.com", observer_background)
+        self.assertIn("port.name === 'dsh-gui-relay'", observer_background)
+        self.assertIn("port.name !== 'chatgpt-observer'", observer_background)
+        self.assertNotIn("sender?.url", observer_background)
         self.assertNotIn("fetch(", observer_background)
         self.assertNotIn("scripting.executeScript", observer_background)
 

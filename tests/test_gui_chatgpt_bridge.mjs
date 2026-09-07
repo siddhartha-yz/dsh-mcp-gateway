@@ -350,9 +350,9 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   assert.match(observer, /observer_heartbeat/)
   assert.doesNotMatch(observer, /\.click\(|\.submit\(|fetch\(|XMLHttpRequest|api\.openai\.com/)
 
-  assert.match(background, /https:\/\/chatgpt\.com/)
-  assert.match(background, /127\.0\.0\.1/)
-  assert.match(background, /localhost/)
+  assert.match(background, /port\.name === 'dsh-gui-relay'/)
+  assert.match(background, /port\.name !== 'chatgpt-observer'/)
+  assert.doesNotMatch(background, /senderUrl|sender\?\.url|sender\?\.tab\?\.url/)
   assert.doesNotMatch(background, /fetch\(|XMLHttpRequest|tabs\.update|scripting\.executeScript/)
 
   assert.match(relay, /runtime\.connect\(\{ name: 'dsh-gui-relay' \}\)/)

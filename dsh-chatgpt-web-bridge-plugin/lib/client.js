@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
       const [text, setText] = React.useState(DEFAULT_MESSAGE)
       const [sending, setSending] = React.useState(false)
       const [taskId, setTaskId] = React.useState('')
+      const [targetConversation, setTargetConversation] = React.useState('')
       const [controllerBusy, setControllerBusy] = React.useState(false)
       const [now, setNow] = React.useState(Date.now())
 
@@ -102,6 +103,24 @@ window.__ModuleLoader__.load({
       const pending = Number(state?.counts?.pending || 0) + Number(state?.counts?.claimed || 0) + Number(state?.counts?.dispatching || 0)
       const controller = state?.controller
       const controllerEnabled = controller?.enabled === true
+      const observerOptions = (() => {
+        const seen = new Set()
+        return (Array.isArray(state?.observers) ? state.observers : [])
+          .filter((observer) => typeof observer?.conversationId === 'string' && observer.conversationId !== '')
+          .filter((observer) => typeof observer.lastSeenAt === 'number' && now - observer.lastSeenAt < 15_000)
+          .filter((observer) => !['bridge_degraded', 'error', 'blocked'].includes(observer.lastEventType))
+          .filter((observer) => {
+            if (seen.has(observer.conversationId)) return false
+            seen.add(observer.conversationId)
+            return true
+          })
+      })()
+
+      React.useEffect(() => {
+        if (controllerEnabled) return
+        if (observerOptions.some((observer) => observer.conversationId === targetConversation)) return
+        setTargetConversation(observerOptions.length === 1 ? observerOptions[0].conversationId : '')
+      }, [controllerEnabled, state, targetConversation])
 
       const send = async () => {
         if (sending || text.trim() === '') return
@@ -123,7 +142,7 @@ window.__ModuleLoader__.load({
         try {
           await bridgeFetch('/controller', {
             method: 'POST',
-            body: JSON.stringify(enabled ? { enabled: true, task_id: taskId.trim() } : { enabled: false }),
+            body: JSON.stringify(enabled ? { enabled: true, task_id: taskId.trim(), conversation_id: targetConversation } : { enabled: false }),
           })
           setError(null)
           await refresh()
@@ -228,7 +247,17 @@ window.__ModuleLoader__.load({
             : `${controller?.stopReason || controller?.lastDecision || 'disabled'}${controller?.continuationCount ? ` · ${controller.continuationCount} continuations` : ''}`)
         )
       ),
-      React.createElement('label', { style: { display: 'block', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 5 } }, 'Task state ID for mechanical auto-continue'),
+      React.createElement('label', { style: { display: 'block', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 } }, 'Target conversation'),
+      React.createElement('select', {
+        value: controllerEnabled ? (controller?.conversationId || targetConversation) : targetConversation,
+        disabled: controllerEnabled,
+        onChange: (event) => setTargetConversation(event.target.value),
+        style: { width: '100%', boxSizing: 'border-box', marginBottom: 8, padding: '7px 8px', borderRadius: 8, border: '0.5px solid var(--dsw-alias-border-l3)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', fontSize: 11 },
+      },
+        React.createElement('option', { value: '' }, observerOptions.length === 0 ? 'No healthy observed conversation' : 'Select observed conversation'),
+        observerOptions.map((observer) => React.createElement('option', { key: observer.observerId, value: observer.conversationId }, observer.conversationId))
+      ),
+      React.createElement('label', { style: { display: 'block', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 } }, 'Task state id'),
       React.createElement('input', {
         value: controllerEnabled ? (controller?.taskId || taskId) : taskId,
         disabled: controllerEnabled,
@@ -242,7 +271,7 @@ window.__ModuleLoader__.load({
       }),
       React.createElement('button', {
         type: 'button',
-        disabled: controllerBusy || (!controllerEnabled && taskId.trim() === ''),
+        disabled: controllerBusy || (!controllerEnabled && (taskId.trim() === '' || targetConversation === '')),
         onClick: () => configureController(!controllerEnabled),
         style: {
           border: controllerEnabled ? '0.5px solid var(--dsw-alias-border-l3)' : 0,

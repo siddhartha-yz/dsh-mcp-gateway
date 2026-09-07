@@ -242,6 +242,7 @@ export class ChatGPTWebBridgeStore {
       counts,
       companion: this.publicCompanion(),
       observer: this.publicObserver(),
+      observers: this.publicObservers(),
       activeMessages: this.messages
         .filter((message) => ['pending', 'claimed', 'dispatching'].includes(message.status))
         .map((message) => this.publicMessage(message)),
@@ -261,6 +262,17 @@ export class ChatGPTWebBridgeStore {
 
   observerStatus(observerId) {
     return this.publicObserver(observerId)
+  }
+
+  publicObservers() {
+    return [...this.observers.values()]
+      .sort((left, right) => (right.lastSeenAt ?? 0) - (left.lastSeenAt ?? 0))
+      .slice(0, 32)
+      .map((observer) => ({ ...observer }))
+  }
+
+  observerForConversation(conversationId) {
+    return this.publicObservers().find((observer) => observer.conversationId === conversationId) ?? null
   }
 
   publicMessage(message) {
@@ -446,6 +458,7 @@ function routeHandler({ token, store, controller, mode }) {
         const controllerState = controller.configure({
           enabled: body.enabled,
           taskId: body.task_id ?? null,
+          conversationId: body.conversation_id ?? null,
         })
         writeJson(res, 200, { controller: controllerState })
         return

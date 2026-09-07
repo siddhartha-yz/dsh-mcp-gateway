@@ -152,7 +152,7 @@ test('controller binds an observer identity and ignores lifecycle events from ot
   const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
   store.heartbeat('companion-a')
   store.publishObserver({ observerId: 'observer-a', eventType: 'turn_started', payload: { conversationId: '/c/a' } })
-  const armed = controller.configure({ enabled: true, taskId: task.id })
+  const armed = controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/a' })
   assert.equal(armed.observerId, 'observer-a')
   assert.equal(armed.conversationId, '/c/a')
 
@@ -175,6 +175,40 @@ test('controller binds an observer identity and ignores lifecycle events from ot
   assert.equal(continued.enabled, true)
   assert.equal(continued.continuationCount, 1)
   assert.equal(store.status().activeMessages.length, 1)
+})
+
+test('controller arms the explicit target conversation even when another tab emitted the latest durable event', () => {
+  let now = 80_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_arm_target', status: 'active', revision: 3 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+  store.heartbeat('companion-a')
+  store.publishObserver({ observerId: 'observer-target', eventType: 'observer_ready', payload: { conversationId: '/c/target' } })
+  now += 1_000
+  store.publishObserver({ observerId: 'observer-other', eventType: 'bridge_degraded', payload: { conversationId: '/c/other' } })
+  assert.equal(store.status().observer.observerId, 'observer-other')
+
+  const armed = controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/target' })
+  assert.equal(armed.enabled, true)
+  assert.equal(armed.observerId, 'observer-target')
+  assert.equal(armed.conversationId, '/c/target')
+})
+
+test('controller refuses an unavailable or degraded explicit target conversation', () => {
+  let now = 90_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_arm_fail_closed', status: 'active', revision: 1 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+  store.heartbeat('companion-a')
+  assert.throws(
+    () => controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/missing' }),
+    (error) => error instanceof ContinuationControllerError && error.code === 'not_ready',
+  )
+  store.publishObserver({ observerId: 'observer-bad', eventType: 'bridge_degraded', payload: { conversationId: '/c/bad' } })
+  assert.throws(
+    () => controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/bad' }),
+    (error) => error instanceof ContinuationControllerError && error.code === 'not_ready',
+  )
 })
 
 test('observer accepts completion and fail-closed degradation events', () => {
@@ -233,7 +267,7 @@ test('controller can chain three completed turns and stops when task_state becom
     eventType: 'observer_ready',
     payload: { conversationId: '/c/loop-test' },
   })
-  controller.configure({ enabled: true, taskId: task.id })
+  controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/loop-test' })
 
   for (let turn = 1; turn <= 3; turn += 1) {
     now += 1_000
@@ -278,7 +312,7 @@ test('controller ignores duplicate turn completion and fails closed on blockers'
   const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
   store.heartbeat('companion-a')
   store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: { conversationId: '/c/guard' } })
-  controller.configure({ enabled: true, taskId: task.id })
+  controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/guard' })
 
   task.revision += 1
   const first = store.publishObserver({
@@ -312,13 +346,13 @@ test('controller can only arm against healthy transport and an active task', () 
     taskReader: { get: () => ({ id: 'task_arm_test', status: 'active', revision: 1 }) },
   })
   assert.throws(
-    () => controller.configure({ enabled: true, taskId: 'task_arm_test' }),
+    () => controller.configure({ enabled: true, taskId: 'task_arm_test', conversationId: '/c/arm' }),
     (error) => error instanceof ContinuationControllerError && error.code === 'not_ready',
   )
 
   store.heartbeat('companion-a')
   store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: { conversationId: '/c/arm' } })
-  const armed = controller.configure({ enabled: true, taskId: 'task_arm_test' })
+  const armed = controller.configure({ enabled: true, taskId: 'task_arm_test', conversationId: '/c/arm' })
   assert.equal(armed.enabled, true)
   assert.equal(armed.continuationCount, 0)
   assert.equal(armed.conversationId, '/c/arm')
@@ -331,7 +365,7 @@ test('controller stops instead of looping when ChatGPT did not advance task_stat
   const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) } })
   store.heartbeat('companion-a')
   store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: { conversationId: '/c/revision' } })
-  controller.configure({ enabled: true, taskId: task.id })
+  controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/revision' })
   const completed = store.publishObserver({
     observerId: 'observer-a', eventType: 'turn_completed', payload: { conversationId: '/c/revision', turnKey: 'turn-1' },
   })
@@ -372,6 +406,9 @@ test('plugin is a DSH web dual-face plugin with a sidebar client surface', async
   assert.match(client, /Read observer/)
   assert.match(client, /Auto continue/)
   assert.match(client, /bridgeFetch\('\/controller'/)
+  assert.match(client, /state\?\.observers/)
+  assert.match(client, /conversation_id: targetConversation/)
+  assert.match(client, /Target conversation/)
   assert.doesNotMatch(client, /Responses API|workspace_agents|api\.openai\.com/)
 })
 

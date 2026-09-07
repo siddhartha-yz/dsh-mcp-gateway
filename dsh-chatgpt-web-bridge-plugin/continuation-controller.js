@@ -78,7 +78,7 @@ export class ContinuationController {
     return { snapshot, observer, now, companionOnline, observerOnline }
   }
 
-  configure({ enabled, taskId = null } = {}) {
+  configure({ enabled, taskId = null, conversationId = null } = {}) {
     if (enabled !== true && enabled !== false) {
       throw new ContinuationControllerError('invalid_request', 'enabled must be a boolean')
     }
@@ -105,14 +105,16 @@ export class ContinuationController {
       throw new ContinuationControllerError('task_invalid', 'task_state revision is unavailable')
     }
 
-    const { snapshot, observer, now, companionOnline, observerOnline } = this.health()
+    const checkedConversationId = requireConversationId(conversationId)
+    const candidate = this.store.observerForConversation?.(checkedConversationId)
+    if (!candidate) throw new ContinuationControllerError('not_ready', 'target ChatGPT conversation observer is unavailable')
+    const { snapshot, observer, now, companionOnline, observerOnline } = this.health(candidate.observerId)
     if (!companionOnline) throw new ContinuationControllerError('not_ready', 'ChatGPT companion is not healthy')
-    if (!observerOnline) throw new ContinuationControllerError('not_ready', 'ChatGPT read observer is not healthy')
-    if (observer?.lastEventType === 'bridge_degraded' || observer?.lastEventType === 'error') {
-      throw new ContinuationControllerError('not_ready', 'ChatGPT read observer is degraded')
+    if (!observerOnline) throw new ContinuationControllerError('not_ready', 'target ChatGPT read observer is not healthy')
+    if (observer?.lastEventType === 'bridge_degraded' || observer?.lastEventType === 'error' || observer?.lastEventType === 'blocked') {
+      throw new ContinuationControllerError('not_ready', 'target ChatGPT read observer is degraded')
     }
     const observerId = requireConversationId(observer?.observerId)
-    const conversationId = requireConversationId(observer?.conversationId)
     const activeMessages = Array.isArray(snapshot.activeMessages) ? snapshot.activeMessages : []
     if (activeMessages.length > 0) {
       throw new ContinuationControllerError('queue_not_empty', 'bridge outbound queue is not empty')
@@ -122,7 +124,7 @@ export class ContinuationController {
       enabled: true,
       taskId: checkedTaskId,
       observerId,
-      conversationId,
+      conversationId: checkedConversationId,
       armedAt: now,
       continuationCount: 0,
       lastTaskRevision: task.revision,

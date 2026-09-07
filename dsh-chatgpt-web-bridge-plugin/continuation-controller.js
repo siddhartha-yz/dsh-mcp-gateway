@@ -150,11 +150,26 @@ export class ContinuationController {
     if (!this.state.enabled) return this.status()
     if (!event || event.source !== 'observer') return this.status()
 
-    if (event.observerId !== this.state.observerId) return this.status()
-
     const eventConversation = event.payload?.conversationId
     if (eventConversation !== this.state.conversationId) {
-      return this.stop('conversation_changed')
+      if (event.observerId === this.state.observerId) return this.stop('conversation_changed')
+      return this.status()
+    }
+
+    if (event.observerId !== this.state.observerId) {
+      const boundHealth = this.health(this.state.observerId)
+      if (boundHealth.observerOnline) return this.status()
+
+      const candidateHealth = this.health(event.observerId)
+      const candidate = candidateHealth.observer
+      const candidateDegraded = candidate?.lastEventType === 'bridge_degraded'
+        || candidate?.lastEventType === 'error'
+        || candidate?.lastEventType === 'blocked'
+      if (!candidateHealth.observerOnline || candidateDegraded) return this.status()
+
+      this.state.observerId = event.observerId
+      this.state.lastDecision = 'observer_rebound'
+      this.state.lastDecisionAt = this.now()
     }
 
     if (event.type === 'bridge_degraded' || event.type === 'error' || event.type === 'blocked') {

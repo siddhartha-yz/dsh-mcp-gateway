@@ -177,6 +177,37 @@ test('controller binds an observer identity and ignores lifecycle events from ot
   assert.equal(store.status().activeMessages.length, 1)
 })
 
+test('controller rebinds to a healthy observer of the same conversation only after the bound observer is stale', async () => {
+  let now = 70_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_same_conversation_rebind', status: 'active', revision: 1 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+  store.heartbeat('companion-a')
+  store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: { conversationId: '/c/shared' } })
+  const armed = controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/shared' })
+  assert.equal(armed.observerId, 'observer-a')
+
+  now += 1_000
+  store.publishObserver({ observerId: 'observer-b', eventType: 'turn_started', payload: { conversationId: '/c/shared' } })
+  const whileBoundHealthy = await controller.onObserverEvent(store.status().recentEvents.at(-1))
+  assert.equal(whileBoundHealthy.observerId, 'observer-a')
+  assert.equal(whileBoundHealthy.lastDecision, 'armed')
+
+  now += 16_000
+  store.heartbeat('companion-a')
+  task.revision += 1
+  const replacement = store.publishObserver({
+    observerId: 'observer-b', eventType: 'turn_completed', payload: { conversationId: '/c/shared', turnKey: 'shared-turn-1' },
+  })
+  const rebound = await controller.onObserverEvent(replacement.event)
+  assert.equal(rebound.enabled, true)
+  assert.equal(rebound.observerId, 'observer-b')
+  assert.equal(rebound.conversationId, '/c/shared')
+  assert.equal(rebound.continuationCount, 1)
+  assert.equal(rebound.lastContinuedTurnKey, 'shared-turn-1')
+  assert.equal(store.status().activeMessages.length, 1)
+})
+
 test('controller arms the explicit target conversation even when another tab emitted the latest durable event', () => {
   let now = 80_000
   const store = new ChatGPTWebBridgeStore({ now: () => now })

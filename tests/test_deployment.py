@@ -180,15 +180,19 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("node --check dsh-bridge-plugin/index.js", workflow)
         self.assertIn("node --check dsh-task-state-plugin/index.js", workflow)
         self.assertIn("node --check dsh-task-state-plugin/task-store.js", workflow)
+        self.assertIn("node --check dsh-remote-worker-plugin/controller.js", workflow)
+        self.assertIn("node --check dsh-remote-worker-plugin/index.js", workflow)
         self.assertIn("node --check dsh-browser-session-plugin/worker-client.js", workflow)
         self.assertIn("node --check dsh-browser-worker/index.js", workflow)
         self.assertIn("node --check deploy/dsh/plugins/lsm-tool-filter.mjs", workflow)
         self.assertIn("node --check tests/test_lsm_tool_filter.mjs", workflow)
         self.assertIn("node --check tests/test_chatgpt_bridge.mjs", workflow)
         self.assertIn("node --check tests/test_task_state.mjs", workflow)
+        self.assertIn("node --check tests/test_remote_workers.mjs", workflow)
         self.assertIn("node tests/test_lsm_tool_filter.mjs", workflow)
         self.assertIn("node tests/test_chatgpt_bridge.mjs", workflow)
         self.assertIn("node tests/test_task_state.mjs", workflow)
+        self.assertIn("node tests/test_remote_workers.mjs", workflow)
 
     def test_ci_smokes_pinned_dsh_runtime_not_removed_python_sdk(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
@@ -1924,8 +1928,12 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:18766/readyz", script)
         self.assertNotIn("bootstrap-target-host.sh", script)
         self.assertNotIn("chown -R", script)
-        self.assertNotIn("/etc/dsh-mcp-gateway/dsh.env", script)
-        self.assertNotIn("/etc/dsh-mcp-gateway/gateway.env", script)
+        self.assertIn('PUBLIC_BASE_URL="$(python3 - "$CONFIG_DIR/gateway.env"', script)
+        self.assertIn('install -o root -g root -m 0600 "$CONFIG_DIR/dsh.env" "$UNIT_BACKUP_DIR/dsh.env"', script)
+        self.assertIn('install -o root -g root -m 0600 "$UNIT_BACKUP_DIR/dsh.env" "$CONFIG_DIR/dsh.env" || true', script)
+        self.assertIn("CONFIG_MIGRATED=1", script)
+        self.assertIn("DSH_MCP_PUBLIC_BASE_URL", script)
+        self.assertNotIn("DSH_MCP_GATEWAY_ADMIN_PIN", script)
 
     def test_dsh_runtime_generation_is_synchronized_across_deployment_contract(self) -> None:
         bridge = json.loads((ROOT / "dsh-bridge-plugin" / "package.json").read_text(encoding="utf-8"))
@@ -2046,6 +2054,7 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertNotIn("DSH_WORKSPACE", gateway_env)
         self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
         self.assertNotIn("DEEPSEEK_BASE_URL", dsh_env)
+        self.assertIn("DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com", dsh_env)
         self.assertIn("# DSH_LSM_COMMAND=", dsh_env)
         self.assertIn("# DSH_LSM_WORKSPACE_ROOT=", dsh_env)
         self.assertNotIn("poc-key", gateway_env + dsh_env)
@@ -2115,6 +2124,7 @@ class DeploymentPreflightTests(unittest.TestCase):
                 (
                     f"DSH_HOME={paths['dsh_home']}",
                     "DSH_TELEMETRY_DISABLED=1",
+                    "DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com",
                 )
             )
             + "\n",
@@ -2210,6 +2220,24 @@ class DeploymentPreflightTests(unittest.TestCase):
             report = json.loads(result.stdout)
             failed = {check["name"] for check in report["checks"] if not check["ok"]}
             self.assertIn("gateway public base is HTTPS origin", failed)
+
+    def test_preflight_rejects_mismatched_dsh_and_gateway_public_origins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self.build_layout(Path(tmp))
+            dsh_env = paths["config_dir"] / "dsh.env"
+            dsh_env.write_text(
+                f"DSH_HOME={paths['dsh_home']}\n"
+                "DSH_TELEMETRY_DISABLED=1\n"
+                "DSH_MCP_PUBLIC_BASE_URL=https://other.example.com\n",
+                encoding="utf-8",
+            )
+            dsh_env.chmod(0o600)
+
+            result = self.run_preflight(paths)
+            self.assertEqual(result.returncode, 1)
+            report = json.loads(result.stdout)
+            failed = {check["name"] for check in report["checks"] if not check["ok"]}
+            self.assertIn("DSH/gateway public base match", failed)
 
     def test_preflight_accepts_explicit_personal_workspace_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

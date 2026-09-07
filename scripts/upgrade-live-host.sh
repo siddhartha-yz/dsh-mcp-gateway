@@ -20,8 +20,10 @@ Usage: sudo ./scripts/upgrade-live-host.sh [--source PATH]
 Stage and atomically switch an already-productionized dsh-mcp-gateway host to
 one exact clean repository commit. Existing DSH_HOME, OAuth/config state,
 systemd drop-ins, workspace ownership, and public tunnel state are left
-untouched. Versioned main systemd units are upgraded transactionally with the
-runtime/source tree and restored on rollback if the new release fails.
+untouched. The non-secret DSH_MCP_PUBLIC_BASE_URL is synchronized from the
+existing gateway.env into dsh.env when required by the release. Versioned main
+systemd units and that one derived env value are restored on rollback if the
+new release fails.
 EOF
 }
 
@@ -70,6 +72,10 @@ for path in \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
   "$SOURCE_ROOT/deploy/apparmor/dsh-browser-worker" \
   "$SOURCE_ROOT/dsh-browser-worker/index.js" \
+  "$SOURCE_ROOT/dsh-remote-worker-plugin/index.js" \
+  "$SOURCE_ROOT/dsh-remote-worker-plugin/controller.js" \
+  "$SOURCE_ROOT/src/dsh_mcp_gateway/remote_worker_agent.py" \
+  "$SOURCE_ROOT/src/dsh_mcp_gateway/remote_worker_edge.py" \
   "$SOURCE_ROOT/deploy/systemd/$DSH_SERVICE" \
   "$SOURCE_ROOT/deploy/systemd/$GATEWAY_SERVICE" \
   "$SOURCE_ROOT/deploy/systemd/$BROWSER_SERVICE" \
@@ -137,6 +143,7 @@ SERVICES_STOPPED=0
 UNITS_SWAPPED=0
 RUNTIME_SWAPPED=0
 SOURCE_SWAPPED=0
+CONFIG_MIGRATED=0
 SUCCESS=0
 
 cleanup_paths() {
@@ -174,6 +181,11 @@ rollback() {
     RUNTIME_SWAPPED=0
   elif [[ -d "$RUNTIME_OLD" && ! -e "$RUNTIME_LIVE" ]]; then
     mv "$RUNTIME_OLD" "$RUNTIME_LIVE"
+  fi
+
+  if ((CONFIG_MIGRATED)) && [[ -f "$UNIT_BACKUP_DIR/dsh.env" ]]; then
+    install -o root -g root -m 0600 "$UNIT_BACKUP_DIR/dsh.env" "$CONFIG_DIR/dsh.env" || true
+    CONFIG_MIGRATED=0
   fi
 
   if ((UNITS_SWAPPED)); then
@@ -267,6 +279,87 @@ timeout --signal=TERM --kill-after=10s 600s \
   --constraint "$SOURCE_STAGE/deploy/server-constraints.txt" \
   "$SOURCE_STAGE[server]"
 
+# P7 needs the same public HTTPS origin on the DSH side so DSH can render a
+# one-time remote-worker join command. Synchronize only that non-secret value
+# from gateway.env. Preserve the original dsh.env for transactional rollback.
+rm -rf "$UNIT_BACKUP_DIR"
+install -d -o root -g root -m 0700 "$UNIT_BACKUP_DIR"
+for env_file in "$CONFIG_DIR/dsh.env" "$CONFIG_DIR/gateway.env"; do
+  [[ -f "$env_file" && ! -L "$env_file" ]] || {
+    echo "configuration file is missing or symlinked: $env_file" >&2
+    exit 1
+  }
+  [[ "$(stat -c '%u:%g:%a:%h' "$env_file")" == "0:0:600:1" ]] || {
+    echo "configuration file has unsafe ownership/mode/link count: $env_file" >&2
+    exit 1
+  }
+done
+install -o root -g root -m 0600 "$CONFIG_DIR/dsh.env" "$UNIT_BACKUP_DIR/dsh.env"
+PUBLIC_BASE_URL="$(python3 - "$CONFIG_DIR/gateway.env" <<'PY_PUBLIC_BASE'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+values = {}
+for number, raw in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+    line = raw.strip()
+    if not line or line.startswith('#'):
+        continue
+    if '=' not in line:
+        raise SystemExit(f'invalid gateway.env assignment syntax at line {number}')
+    key, value = line.split('=', 1)
+    key = key.strip()
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    values[key] = value
+public_base = values.get('DSH_MCP_PUBLIC_BASE_URL', '')
+if not public_base:
+    raise SystemExit('gateway.env is missing DSH_MCP_PUBLIC_BASE_URL')
+print(public_base)
+PY_PUBLIC_BASE
+)"
+python3 "$SOURCE_STAGE/scripts/validate-public-origin.py" "$PUBLIC_BASE_URL"
+CONFIG_MIGRATED=1
+python3 - "$CONFIG_DIR/dsh.env" "$PUBLIC_BASE_URL" <<'PY_DSH_ENV'
+import os, pathlib, sys, tempfile
+path = pathlib.Path(sys.argv[1])
+public_base = sys.argv[2]
+key = 'DSH_MCP_PUBLIC_BASE_URL'
+original = path.read_text(encoding='utf-8')
+lines = original.splitlines()
+next_lines = []
+inserted = False
+for raw in lines:
+    stripped = raw.strip()
+    if stripped and not stripped.startswith('#') and '=' in stripped:
+        candidate, _ = stripped.split('=', 1)
+        if candidate.strip() == key:
+            if not inserted:
+                next_lines.append(f'{key}={public_base}')
+                inserted = True
+            continue
+    next_lines.append(raw)
+if not inserted:
+    next_lines.append(f'{key}={public_base}')
+updated = '\n'.join(next_lines) + '\n'
+if updated == original:
+    print('unchanged')
+    raise SystemExit(0)
+fd, temporary = tempfile.mkstemp(prefix='.dsh.env.', dir=path.parent)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write(updated)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    os.chmod(path, 0o600)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY_DSH_ENV
+
 # Preflight the staged immutable pieces against the live state and the effective
 # service identity. This is what prevents a personal-workspace deployment from
 # being judged using the default dsh-agent ownership contract.
@@ -288,8 +381,6 @@ python3 "$SOURCE_STAGE/scripts/preflight-deployment.py" \
 # Preserve the currently installed versioned main units and prepare the exact
 # candidate files before interrupting the live services. Existing drop-ins are
 # intentionally outside this transaction and remain untouched.
-rm -rf "$UNIT_BACKUP_DIR"
-install -d -o root -g root -m 0700 "$UNIT_BACKUP_DIR"
 for service in "$DSH_SERVICE" "$GATEWAY_SERVICE" "$BROWSER_SERVICE"; do
   [[ -f "$SYSTEMD_DIR/$service" && ! -L "$SYSTEMD_DIR/$service" ]] || {
     echo "installed main unit is not a regular file: $SYSTEMD_DIR/$service" >&2

@@ -449,6 +449,7 @@ XDG_STATE_HOME=/var/lib/dsh-harness/xdg-state
 npm_config_store_dir=/var/lib/dsh-harness/pnpm-store
 npm_config_cache=/var/lib/dsh-harness/npm-cache
 EOF
+printf 'DSH_MCP_PUBLIC_BASE_URL=%s\n' "$PUBLIC_BASE_URL" >> /etc/dsh-mcp-gateway/dsh.env
 chmod 0600 /etc/dsh-mcp-gateway/dsh.env
 chown root:root /etc/dsh-mcp-gateway/dsh.env
 

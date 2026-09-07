@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "Experimental read-only B2 observer for relaying ChatGPT Web turn lifecycle into the local DSH GUI.",
   "permissions": [],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://127.0.0.1:3080/*",
+    "http://localhost:3080/*"
+  ],
   "background": {
     "scripts": ["background.js"],
     "service_worker": "background.js"

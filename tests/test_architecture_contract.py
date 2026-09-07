@@ -46,6 +46,7 @@ class ArchitectureContractTests(unittest.TestCase):
         continuation = (ROOT / "dsh-chatgpt-web-bridge-plugin" / "continuation-controller.js").read_text(encoding="utf-8")
         observer = (ROOT / "browser-extension" / "dsh-chatgpt-web-observer" / "chatgpt-observer.js").read_text(encoding="utf-8")
         observer_background = (ROOT / "browser-extension" / "dsh-chatgpt-web-observer" / "background.js").read_text(encoding="utf-8")
+        observer_manifest = (ROOT / "browser-extension" / "dsh-chatgpt-web-observer" / "manifest.json").read_text(encoding="utf-8")
         companion = (ROOT / "src" / "dsh_mcp_gateway" / "chatgpt_web_companion.py").read_text(encoding="utf-8")
         gateway_bridge = (ROOT / "src" / "dsh_mcp_gateway" / "harness_bridge.py").read_text(encoding="utf-8")
         overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
@@ -140,6 +141,10 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertNotIn("sender?.url", observer_background)
         self.assertNotIn("fetch(", observer_background)
         self.assertNotIn("scripting.executeScript", observer_background)
+        self.assertIn('"host_permissions"', observer_manifest)
+        self.assertIn('"https://chatgpt.com/*"', observer_manifest)
+        self.assertIn('"http://127.0.0.1:3080/*"', observer_manifest)
+        self.assertIn('"http://localhost:3080/*"', observer_manifest)
 
         gateway_unit = (ROOT / "deploy" / "systemd" / "dsh-mcp-gateway.service").read_text(encoding="utf-8")
         dsh_unit = (ROOT / "deploy" / "systemd" / "dsh-web-host.service").read_text(encoding="utf-8")

@@ -333,6 +333,11 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   const manifest = JSON.parse(await readFile(new URL('manifest.json', extensionRoot), 'utf8'))
   assert.equal(manifest.manifest_version, 3)
   assert.deepEqual(manifest.permissions, [])
+  assert.deepEqual(manifest.host_permissions, [
+    'https://chatgpt.com/*',
+    'http://127.0.0.1:3080/*',
+    'http://localhost:3080/*',
+  ])
   assert.equal(manifest.background.service_worker, 'background.js')
   assert.deepEqual(manifest.background.scripts, ['background.js'])
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*'])

@@ -1897,6 +1897,8 @@ class DeploymentTemplateTests(unittest.TestCase):
     def test_live_upgrade_stages_immutable_bits_and_preserves_personal_state(self) -> None:
         script = UPGRADE_LIVE.read_text(encoding="utf-8")
 
+        self.assertIn('git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree', script)
+        self.assertNotIn('[[ -d "$SOURCE_ROOT/.git" ]]', script)
         self.assertIn('DSH_USER="$(systemctl show "$DSH_SERVICE" -p User --value)"', script)
         self.assertIn('DSH_GROUP="$(systemctl show "$DSH_SERVICE" -p Group --value)"', script)
         self.assertIn('WORKSPACE="$(systemctl show "$DSH_SERVICE" -p WorkingDirectory --value)"', script)

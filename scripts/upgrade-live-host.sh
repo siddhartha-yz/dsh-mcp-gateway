@@ -55,7 +55,10 @@ for command in git tar python3 systemctl curl install stat timeout mktemp cmp; d
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 1; }
 done
 
-[[ -d "$SOURCE_ROOT/.git" ]] || { echo "source must be a git checkout: $SOURCE_ROOT" >&2; exit 1; }
+[[ "$(git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree 2>/dev/null || true)" == "true" ]] || {
+  echo "source must be a git checkout or worktree: $SOURCE_ROOT" >&2
+  exit 1
+}
 [[ -z "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=no)" ]] || {
   echo "source checkout has tracked changes; commit them before live upgrade" >&2
   exit 1

@@ -410,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     dsh_env, dsh_env_error = parse_env_file(dsh_env_path)
     p.add("DSH env parse", dsh_env_error is None, dsh_env_error or "parsed without exposing values")
     if dsh_env_error is None:
-        for key in ("DSH_HOME",):
+        for key in ("DSH_HOME", "DSH_MCP_PUBLIC_BASE_URL"):
             p.add(f"DSH env {key}", bool(dsh_env.get(key)), f"{key} is {'set' if dsh_env.get(key) else 'missing/empty'}")
         for obsolete_key in ("DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"):
             p.add(
@@ -424,6 +424,12 @@ def main(argv: list[str] | None = None) -> int:
             "DSH env DSH_HOME matches layout",
             dsh_env.get("DSH_HOME") == str(args.dsh_home),
             "DSH_HOME matches configured preflight path" if dsh_env.get("DSH_HOME") == str(args.dsh_home) else "DSH_HOME does not match configured preflight path",
+        )
+        dsh_public_base = dsh_env.get("DSH_MCP_PUBLIC_BASE_URL", "")
+        p.add(
+            "DSH public base is HTTPS origin",
+            is_https_origin(dsh_public_base),
+            "public base is a valid HTTPS origin" if is_https_origin(dsh_public_base) else "public base is not a valid HTTPS origin",
         )
 
     gateway_env, gateway_env_error = parse_env_file(gateway_env_path)
@@ -454,6 +460,14 @@ def main(argv: list[str] | None = None) -> int:
             is_https_origin(public_base),
             "public base is a valid HTTPS origin" if is_https_origin(public_base) else "public base is not a valid HTTPS origin",
         )
+        if dsh_env_error is None:
+            p.add(
+                "DSH/gateway public base match",
+                dsh_env.get("DSH_MCP_PUBLIC_BASE_URL", "") == public_base,
+                "DSH and gateway use the same public HTTPS origin"
+                if dsh_env.get("DSH_MCP_PUBLIC_BASE_URL", "") == public_base
+                else "DSH and gateway public base URLs differ",
+            )
 
     repo_systemd = args.gateway_root / "deploy" / "systemd"
     for filename in ("dsh-web-host.service", "dsh-mcp-gateway.service", "dsh-browser-worker.service"):

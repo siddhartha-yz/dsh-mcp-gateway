@@ -78,6 +78,8 @@ jobs:
           node --check dsh-bridge-plugin/index.js
           node --check dsh-task-state-plugin/index.js
           node --check dsh-task-state-plugin/task-store.js
+          node --check dsh-remote-worker-plugin/controller.js
+          node --check dsh-remote-worker-plugin/index.js
           node --check dsh-shell-session-plugin/index.js
           node --check dsh-browser-session-plugin/index.js
           node --check dsh-browser-session-plugin/worker-client.js
@@ -86,6 +88,7 @@ jobs:
           node --check tests/test_lsm_tool_filter.mjs
           node --check tests/test_chatgpt_bridge.mjs
           node --check tests/test_task_state.mjs
+          node --check tests/test_remote_workers.mjs
           node --check tests/test_shell_session.mjs
           node --check tests/test_browser_session.mjs
 
@@ -94,6 +97,7 @@ jobs:
           node tests/test_lsm_tool_filter.mjs
           node tests/test_chatgpt_bridge.mjs
           node tests/test_task_state.mjs
+          node tests/test_remote_workers.mjs
           node tests/test_shell_session.mjs
           node tests/test_browser_session.mjs
 

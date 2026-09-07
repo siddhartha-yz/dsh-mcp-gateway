@@ -9,6 +9,15 @@
     - id: chatgpt-task-state
       name: /srv/dsh-mcp-gateway/dsh-task-state-plugin/index.js
 
+    # DSH-native remote worker control plane. Registration/queues/results stay
+    # inside DSH; the public gateway only proxies a fixed outbound-polling
+    # protocol. Remote hosts install no DSH runtime or model/harness loop.
+    - id: chatgpt-remote-workers
+      name: /srv/dsh-mcp-gateway/dsh-remote-worker-plugin/index.js
+      disabled: !!js process.platform === 'win32'
+      config:
+        publicBaseUrl: !!js process.env.DSH_MCP_PUBLIC_BASE_URL
+
     # ChatGPT-only persistent shell surface. The project adapter owns no PTY or
     # process implementation: DSH's native terminal registry/backend retain
     # exact-Agent authorization, bounded output, process cleanup, and the shared
@@ -59,3 +68,5 @@
           - task_state
           - shell_session
           - browser_session
+          - remote_machine
+          - remote_exec

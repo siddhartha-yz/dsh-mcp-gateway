@@ -149,21 +149,22 @@ python3 -m venv .venv
 
 ## Configuration
 
-`/etc/dsh-mcp-gateway/dsh.env` needs only Harness-host state for the primary path:
+`/etc/dsh-mcp-gateway/dsh.env` contains Harness-host state plus the public origin needed to render DSH remote-worker invites:
 
 ```env
 DSH_HOME=/var/lib/dsh-harness
 DSH_TELEMETRY_DISABLED=1
+DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com
 ```
 
-`/etc/dsh-mcp-gateway/gateway.env` owns only the public MCP/OAuth boundary:
+`/etc/dsh-mcp-gateway/gateway.env` owns the public MCP/OAuth boundary and must use the same exact public origin:
 
 ```env
 DSH_MCP_PUBLIC_BASE_URL=https://dsh.example.com
 DSH_MCP_GATEWAY_ADMIN_PIN=<private high-entropy value, at least 12 characters>
 ```
 
-Keep both files root-owned and mode `0600`. Do not add a model API key merely to make the Harness bridge run. Optional execution-provider configuration, including local-shell-mcp, belongs in the DSH environment because DSH owns that composition.
+Keep both files root-owned and mode `0600`, and keep `DSH_MCP_PUBLIC_BASE_URL` identical in both files. The guarded live-upgrade path synchronizes only this non-secret value from `gateway.env` into `dsh.env`; it never copies the admin PIN or OAuth state. Do not add a model API key merely to make the Harness bridge run. Optional execution-provider configuration, including local-shell-mcp, belongs in the DSH environment because DSH owns that composition.
 
 ## Validate before start
 

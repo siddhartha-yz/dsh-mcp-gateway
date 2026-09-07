@@ -70,6 +70,10 @@ for path in \
   "$SOURCE_ROOT/deploy/server-constraints.txt" \
   "$SOURCE_ROOT/deploy/dsh/chatgpt-bridge.cordis.yml" \
   "$SOURCE_ROOT/dsh-bridge-plugin/index.js" \
+  "$SOURCE_ROOT/dsh-remote-worker-plugin/index.js" \
+  "$SOURCE_ROOT/dsh-remote-worker-plugin/controller.js" \
+  "$SOURCE_ROOT/src/dsh_mcp_gateway/remote_worker_agent.py" \
+  "$SOURCE_ROOT/src/dsh_mcp_gateway/remote_worker_edge.py" \
   "$SOURCE_ROOT/dsh-browser-worker/index.js" \
   "$SOURCE_ROOT/deploy/apparmor/dsh-browser-worker" \
   "$SOURCE_ROOT/deploy/systemd/dsh-web-host.service" \
@@ -255,6 +259,7 @@ umask 077
 cat > /etc/dsh-mcp-gateway/dsh.env <<EOF
 DSH_HOME=/var/lib/dsh-harness
 DSH_TELEMETRY_DISABLED=1
+DSH_MCP_PUBLIC_BASE_URL=$DSH_MCP_PUBLIC_BASE_URL
 EOF
 cat > /etc/dsh-mcp-gateway/gateway.env <<EOF
 DSH_MCP_PUBLIC_BASE_URL=$DSH_MCP_PUBLIC_BASE_URL

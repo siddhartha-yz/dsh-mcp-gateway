@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from . import build_embedded_oauth_server
 from .harness_bridge import HarnessBridgeClient
+from .remote_worker_edge import install_remote_worker_routes
 
 
 def build_transport_security(public_base: str):
@@ -220,6 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         project_dsh_tools=args.tool_surface == "projected",
     )
     install_health_routes(server, harness_bridge)
+    install_remote_worker_routes(server, harness_bridge, public_base)
     print(
         f"DSH Harness bridge configured at {harness_bridge.base_url}; ChatGPT remains the reasoning agent; "
         f"tool surface={args.tool_surface}"

@@ -112,6 +112,44 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("allowExtraTools:", overlay)
         self.assertIn("- task_state", overlay)
 
+    def test_remote_workers_keep_runtime_authority_inside_dsh(self) -> None:
+        controller = (ROOT / "dsh-remote-worker-plugin" / "controller.js").read_text(encoding="utf-8")
+        plugin = (ROOT / "dsh-remote-worker-plugin" / "index.js").read_text(encoding="utf-8")
+        edge = (ROOT / "src" / "dsh_mcp_gateway" / "remote_worker_edge.py").read_text(encoding="utf-8")
+        worker = (ROOT / "src" / "dsh_mcp_gateway" / "remote_worker_agent.py").read_text(encoding="utf-8")
+        cli = (ROOT / "src" / "dsh_mcp_gateway" / "cli.py").read_text(encoding="utf-8")
+        overlay = (ROOT / "deploy" / "dsh" / "chatgpt-bridge.cordis.yml").read_text(encoding="utf-8")
+
+        self.assertIn("export class RemoteWorkerController", controller)
+        self.assertIn("ctx.storageDomain.open(remoteWorkerDomainSpec)", plugin)
+        self.assertIn("ctx.tools.register(createRemoteMachineTool(controller))", plugin)
+        self.assertIn("ctx.tools.register(createRemoteExecTool(controller))", plugin)
+        self.assertIn("name: 'remote_machine'", plugin)
+        self.assertIn("name: 'remote_exec'", plugin)
+        self.assertNotIn("ctx.llm", controller + plugin)
+        self.assertNotIn("AgentLoop", controller + plugin)
+        self.assertNotIn("dsh_mcp_gateway", controller + plugin)
+
+        self.assertIn('ACTIONS = ("register", "resume", "poll", "heartbeat", "result")', edge)
+        self.assertIn('INTERNAL_PREFIX = "/api/chatgpt-remote-workers/v1"', edge)
+        self.assertIn("install_remote_worker_routes(server, harness_bridge, public_base)", cli)
+        self.assertNotIn("RemoteWorkerController", edge)
+        self.assertNotIn("storageDomain", edge)
+        self.assertNotIn("pending_jobs", edge)
+        self.assertNotIn("inviteTtl", edge)
+
+        self.assertIn("PROTOCOL_VERSION = 1", worker)
+        self.assertIn("urllib.request", worker)
+        self.assertNotIn("socket.socket(", worker)
+        self.assertNotIn("AgentLoop", worker)
+        self.assertNotIn("FastMCP", worker)
+        self.assertNotIn("local_shell_mcp", worker)
+
+        self.assertIn("dsh-remote-worker-plugin/index.js", overlay)
+        self.assertIn("publicBaseUrl: !!js process.env.DSH_MCP_PUBLIC_BASE_URL", overlay)
+        self.assertIn("- remote_machine", overlay)
+        self.assertIn("- remote_exec", overlay)
+
 
 if __name__ == "__main__":
     unittest.main()

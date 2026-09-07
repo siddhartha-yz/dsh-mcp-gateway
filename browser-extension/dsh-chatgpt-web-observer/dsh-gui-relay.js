@@ -3,15 +3,10 @@
 
   const api = globalThis.browser ?? globalThis.chrome
 
-  function isDshBridgePage() {
-    for (const script of document.scripts) {
-      if ((script.textContent || '').includes('__DSH_CHATGPT_WEB_BRIDGE__')) return true
-    }
-    return false
-  }
-
-  if (!isDshBridgePage()) return
-
+  // The manifest restricts this content script to localhost/127.0.0.1:3080,
+  // and background.js independently validates the sender URL before accepting
+  // the relay port. Do not depend on DSH's HTML containing an inline marker:
+  // the production Web client loads bridge globals/modules dynamically.
   const port = api.runtime.connect({ name: 'dsh-gui-relay' })
   port.onMessage.addListener((value) => {
     if (value === null || typeof value !== 'object' || value.channel !== 'dsh-chatgpt-observer-relay') return

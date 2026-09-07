@@ -355,7 +355,8 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   assert.match(background, /localhost/)
   assert.doesNotMatch(background, /fetch\(|XMLHttpRequest|tabs\.update|scripting\.executeScript/)
 
-  assert.match(relay, /__DSH_CHATGPT_WEB_BRIDGE__/)
+  assert.match(relay, /runtime\.connect\(\{ name: 'dsh-gui-relay' \}\)/)
   assert.match(relay, /window\.postMessage/)
+  assert.doesNotMatch(relay, /document\.scripts|__DSH_CHATGPT_WEB_BRIDGE__/)
   assert.doesNotMatch(relay, /fetch\(|XMLHttpRequest|x-dsh-chatgpt-bridge-token/)
 })

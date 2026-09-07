@@ -76,6 +76,7 @@ export class ChatGPTWebBridgeStore {
       lastEventType: null,
       conversationId: null,
     }
+    this.observers = new Map()
   }
 
   enqueue(text, source = 'dsh-gui') {
@@ -196,8 +197,12 @@ export class ChatGPTWebBridgeStore {
     }
     const conversationId = optionalString(payload?.conversationId, 'payload.conversationId', 512)
     const now = this.now()
-    this.touchObserver(normalizedObserverId, this.observer.lastEventType, conversationId, now)
-    return { observer: this.publicObserver() }
+    const previous = this.observers.get(normalizedObserverId)
+    this.touchObserver(normalizedObserverId, previous?.lastEventType ?? null, conversationId, now, { select: false })
+    if (this.observer.observerId === normalizedObserverId) {
+      this.observer = this.publicObserver(normalizedObserverId)
+    }
+    return { observer: this.publicObserver(normalizedObserverId) }
   }
 
   publishObserver({ observerId, eventType, text = null, payload = null }) {
@@ -248,8 +253,14 @@ export class ChatGPTWebBridgeStore {
     return { ...this.companion }
   }
 
-  publicObserver() {
-    return { ...this.observer }
+  publicObserver(observerId = null) {
+    if (observerId === null) return { ...this.observer }
+    const observer = this.observers.get(observerId)
+    return observer ? { ...observer } : null
+  }
+
+  observerStatus(observerId) {
+    return this.publicObserver(observerId)
   }
 
   publicMessage(message) {
@@ -274,11 +285,21 @@ export class ChatGPTWebBridgeStore {
     if (eventType !== null) this.companion.lastEventType = eventType
   }
 
-  touchObserver(observerId, eventType, conversationId, now) {
-    this.observer.observerId = observerId
-    this.observer.lastSeenAt = now
-    this.observer.lastEventType = eventType
-    if (conversationId !== null) this.observer.conversationId = conversationId
+  touchObserver(observerId, eventType, conversationId, now, { select = true } = {}) {
+    const previous = this.observers.get(observerId) ?? {
+      observerId,
+      lastSeenAt: null,
+      lastEventType: null,
+      conversationId: null,
+    }
+    const next = {
+      observerId,
+      lastSeenAt: now,
+      lastEventType: eventType,
+      conversationId: conversationId ?? previous.conversationId,
+    }
+    this.observers.set(observerId, next)
+    if (select) this.observer = { ...next }
   }
 
   releaseExpiredClaims(now) {

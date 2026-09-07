@@ -131,6 +131,52 @@ test('observer events stay separate from companion lifecycle and heartbeat is hi
   assert.equal(status.recentEvents.length, 2)
 })
 
+test('background heartbeats from another ChatGPT tab do not steal the selected observer', () => {
+  let now = 40_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  store.publishObserver({ observerId: 'observer-a', eventType: 'turn_started', payload: { conversationId: '/c/a' } })
+  now += 1_000
+  const other = store.observerHeartbeat({ observerId: 'observer-b', payload: { conversationId: '/c/b' } })
+  assert.equal(other.observer.observerId, 'observer-b')
+  assert.equal(other.observer.conversationId, '/c/b')
+  const selected = store.status().observer
+  assert.equal(selected.observerId, 'observer-a')
+  assert.equal(selected.conversationId, '/c/a')
+  assert.equal(selected.lastEventType, 'turn_started')
+})
+
+test('controller binds an observer identity and ignores lifecycle events from other tabs', async () => {
+  let now = 60_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_multitab', status: 'active', revision: 1 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+  store.heartbeat('companion-a')
+  store.publishObserver({ observerId: 'observer-a', eventType: 'turn_started', payload: { conversationId: '/c/a' } })
+  const armed = controller.configure({ enabled: true, taskId: task.id })
+  assert.equal(armed.observerId, 'observer-a')
+  assert.equal(armed.conversationId, '/c/a')
+
+  now += 1_000
+  const unrelated = store.publishObserver({
+    observerId: 'observer-b', eventType: 'turn_completed', payload: { conversationId: '/c/b', turnKey: 'other-turn' },
+  })
+  const ignored = await controller.onObserverEvent(unrelated.event)
+  assert.equal(ignored.enabled, true)
+  assert.equal(ignored.continuationCount, 0)
+  assert.equal(store.status().activeMessages.length, 0)
+
+  now += 1_000
+  task.revision += 1
+  store.observerHeartbeat({ observerId: 'observer-a', payload: { conversationId: '/c/a' } })
+  const target = store.publishObserver({
+    observerId: 'observer-a', eventType: 'turn_completed', payload: { conversationId: '/c/a', turnKey: 'target-turn' },
+  })
+  const continued = await controller.onObserverEvent(target.event)
+  assert.equal(continued.enabled, true)
+  assert.equal(continued.continuationCount, 1)
+  assert.equal(store.status().activeMessages.length, 1)
+})
+
 test('observer accepts completion and fail-closed degradation events', () => {
   const store = new ChatGPTWebBridgeStore()
   store.publishObserver({

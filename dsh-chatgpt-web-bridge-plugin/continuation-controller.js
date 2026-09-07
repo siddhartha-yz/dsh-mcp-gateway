@@ -52,6 +52,7 @@ export class ContinuationController {
     this.state = {
       enabled: false,
       taskId: null,
+      observerId: null,
       conversationId: null,
       armedAt: null,
       continuationCount: 0,
@@ -68,12 +69,13 @@ export class ContinuationController {
     return { ...this.state }
   }
 
-  health() {
+  health(observerId = null) {
     const snapshot = this.store.status()
     const now = this.now()
     const companionOnline = typeof snapshot.companion?.lastSeenAt === 'number' && now - snapshot.companion.lastSeenAt <= this.healthTtlMs
-    const observerOnline = typeof snapshot.observer?.lastSeenAt === 'number' && now - snapshot.observer.lastSeenAt <= this.healthTtlMs
-    return { snapshot, now, companionOnline, observerOnline }
+    const observer = observerId === null ? snapshot.observer : this.store.observerStatus?.(observerId)
+    const observerOnline = typeof observer?.lastSeenAt === 'number' && now - observer.lastSeenAt <= this.healthTtlMs
+    return { snapshot, observer, now, companionOnline, observerOnline }
   }
 
   configure({ enabled, taskId = null } = {}) {
@@ -103,13 +105,14 @@ export class ContinuationController {
       throw new ContinuationControllerError('task_invalid', 'task_state revision is unavailable')
     }
 
-    const { snapshot, now, companionOnline, observerOnline } = this.health()
+    const { snapshot, observer, now, companionOnline, observerOnline } = this.health()
     if (!companionOnline) throw new ContinuationControllerError('not_ready', 'ChatGPT companion is not healthy')
     if (!observerOnline) throw new ContinuationControllerError('not_ready', 'ChatGPT read observer is not healthy')
-    if (snapshot.observer?.lastEventType === 'bridge_degraded' || snapshot.observer?.lastEventType === 'error') {
+    if (observer?.lastEventType === 'bridge_degraded' || observer?.lastEventType === 'error') {
       throw new ContinuationControllerError('not_ready', 'ChatGPT read observer is degraded')
     }
-    const conversationId = requireConversationId(snapshot.observer?.conversationId)
+    const observerId = requireConversationId(observer?.observerId)
+    const conversationId = requireConversationId(observer?.conversationId)
     const activeMessages = Array.isArray(snapshot.activeMessages) ? snapshot.activeMessages : []
     if (activeMessages.length > 0) {
       throw new ContinuationControllerError('queue_not_empty', 'bridge outbound queue is not empty')
@@ -118,6 +121,7 @@ export class ContinuationController {
     this.state = {
       enabled: true,
       taskId: checkedTaskId,
+      observerId,
       conversationId,
       armedAt: now,
       continuationCount: 0,
@@ -144,6 +148,8 @@ export class ContinuationController {
     if (!this.state.enabled) return this.status()
     if (!event || event.source !== 'observer') return this.status()
 
+    if (event.observerId !== this.state.observerId) return this.status()
+
     const eventConversation = event.payload?.conversationId
     if (eventConversation !== this.state.conversationId) {
       return this.stop('conversation_changed')
@@ -163,10 +169,10 @@ export class ContinuationController {
       return this.status()
     }
 
-    const { snapshot, companionOnline, observerOnline } = this.health()
+    const { snapshot, observer, companionOnline, observerOnline } = this.health(this.state.observerId)
     if (!companionOnline) return this.stop('companion_unhealthy')
     if (!observerOnline) return this.stop('observer_unhealthy')
-    if (snapshot.observer?.lastEventType === 'bridge_degraded' || snapshot.observer?.lastEventType === 'error') {
+    if (observer?.lastEventType === 'bridge_degraded' || observer?.lastEventType === 'error') {
       return this.stop('observer_degraded')
     }
     const activeMessages = Array.isArray(snapshot.activeMessages) ? snapshot.activeMessages : []

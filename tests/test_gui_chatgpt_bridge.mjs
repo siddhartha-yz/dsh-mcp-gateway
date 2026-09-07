@@ -335,8 +335,8 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   assert.deepEqual(manifest.permissions, [])
   assert.deepEqual(manifest.host_permissions, [
     'https://chatgpt.com/*',
-    'http://127.0.0.1/*',
-    'http://localhost/*',
+    'http://127.0.0.1:3080/*',
+    'http://localhost:3080/*',
   ])
   assert.equal(manifest.background.service_worker, 'background.js')
   assert.deepEqual(manifest.background.scripts, ['background.js'])

@@ -6,8 +6,8 @@
   "permissions": [],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "http://127.0.0.1/*",
-    "http://localhost/*"
+    "http://127.0.0.1:3080/*",
+    "http://localhost:3080/*"
   ],
   "background": {
     "scripts": ["background.js"],

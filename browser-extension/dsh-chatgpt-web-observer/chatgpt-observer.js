@@ -63,11 +63,37 @@
   }
 
 
+  function postHostMessage(targetWindow, message) {
+    if (!targetWindow) return
+    try {
+      if (typeof cloneInto === 'function') {
+        const pageMessage = cloneInto(message, targetWindow)
+        targetWindow.postMessage(pageMessage, '*')
+        return
+      }
+    } catch {
+      // Firefox can expose cross-origin WindowProxy children while denying
+      // direct realm wrappers. Fall through to the standard postMessage path.
+    }
+    try { targetWindow.postMessage(message, '*') } catch {}
+  }
+
+  function postHostToFrameTree(targetWindow, message, depth = 0) {
+    if (!targetWindow || depth > 4) return
+    postHostMessage(targetWindow, message)
+
+    let childCount = 0
+    try { childCount = Math.min(Number(targetWindow.length) || 0, 16) } catch {}
+    for (let index = 0; index < childCount; index += 1) {
+      try { postHostToFrameTree(targetWindow[index], message, depth + 1) } catch {}
+    }
+  }
+
   function announceHostToFrames() {
     if (hostId === null) return
     const message = { source: 'dsh-chatgpt-web-observer-extension', type: 'host-instance', hostId }
     for (const frame of document.querySelectorAll('iframe')) {
-      try { frame.contentWindow?.postMessage(message, '*') } catch {}
+      postHostToFrameTree(frame.contentWindow, message)
     }
   }
 

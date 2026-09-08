@@ -609,6 +609,12 @@ test('B2 extension is narrow read-only relay with cross-browser MV3 background d
   assert.match(observer, /turn_completed/)
   assert.match(observer, /bridge_degraded/)
   assert.match(observer, /observer_heartbeat/)
+  assert.match(observer, /typeof cloneInto === 'function'/)
+  assert.match(observer, /cloneInto\(message, targetWindow\)/)
+  assert.match(observer, /postHostToFrameTree/)
+  assert.match(observer, /targetWindow\[index\]/)
+  assert.match(observer, /document\.querySelectorAll\('iframe'\)/)
+  assert.doesNotMatch(observer, /\.wrappedJSObject/)
   assert.doesNotMatch(observer, /\.click\(|\.submit\(|fetch\(|XMLHttpRequest|api\.openai\.com/)
 
   assert.match(background, /port\.name === 'dsh-gui-relay'/)

@@ -67,6 +67,7 @@ window.__ModuleLoader__.load({
       const [sending, setSending] = React.useState(false)
       const [taskId, setTaskId] = React.useState('')
       const [targetConversation, setTargetConversation] = React.useState('')
+      const [maxContinuations, setMaxContinuations] = React.useState('3')
       const [controllerBusy, setControllerBusy] = React.useState(false)
       const [now, setNow] = React.useState(Date.now())
 
@@ -103,6 +104,10 @@ window.__ModuleLoader__.load({
       const pending = Number(state?.counts?.pending || 0) + Number(state?.counts?.claimed || 0) + Number(state?.counts?.dispatching || 0)
       const controller = state?.controller
       const controllerEnabled = controller?.enabled === true
+      const maxContinuationsText = maxContinuations.trim()
+      const maxContinuationsValue = maxContinuationsText === '' ? null : Number(maxContinuationsText)
+      const maxContinuationsValid = maxContinuationsValue === null
+        || (Number.isInteger(maxContinuationsValue) && maxContinuationsValue >= 1 && maxContinuationsValue <= 100)
       const observerOptions = (() => {
         const seen = new Set()
         return (Array.isArray(state?.observers) ? state.observers : [])
@@ -124,6 +129,16 @@ window.__ModuleLoader__.load({
         setTargetConversation(selectedOption?.conversationId || (observerOptions.length === 1 ? observerOptions[0].conversationId : ''))
       }, [controllerEnabled, state, targetConversation])
 
+      React.useEffect(() => {
+        if (controllerEnabled || taskId.trim() !== '') return
+        if (typeof controller?.taskId === 'string' && controller.taskId !== '') setTaskId(controller.taskId)
+      }, [controllerEnabled, controller, taskId])
+
+      React.useEffect(() => {
+        if (controllerEnabled) return
+        if (Number.isInteger(controller?.maxContinuations)) setMaxContinuations(String(controller.maxContinuations))
+      }, [controllerEnabled, controller])
+
       const send = async () => {
         if (sending || text.trim() === '') return
         setSending(true)
@@ -144,7 +159,13 @@ window.__ModuleLoader__.load({
         try {
           await bridgeFetch('/controller', {
             method: 'POST',
-            body: JSON.stringify(enabled ? { enabled: true, start: true, task_id: taskId.trim(), conversation_id: targetConversation } : { enabled: false }),
+            body: JSON.stringify(enabled ? {
+              enabled: true,
+              start: true,
+              task_id: taskId.trim(),
+              conversation_id: targetConversation,
+              max_continuations: maxContinuationsValue,
+            } : { enabled: false }),
           })
           setError(null)
           await refresh()
@@ -245,8 +266,8 @@ window.__ModuleLoader__.load({
           React.createElement('div', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11, marginBottom: 4 } }, 'Auto continue'),
           React.createElement('div', { style: { fontWeight: 600 } }, controllerEnabled ? 'Armed' : 'Stopped'),
           React.createElement('div', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 11, marginTop: 3 } }, controllerEnabled
-            ? `${controller?.taskId || ''} · ${Number(controller?.continuationCount || 0)} continuations`
-            : `${controller?.stopReason || controller?.lastDecision || 'disabled'}${controller?.continuationCount ? ` · ${controller.continuationCount} continuations` : ''}`)
+            ? `${controller?.taskId || ''} · ${Number(controller?.continuationCount || 0)}${Number.isInteger(controller?.maxContinuations) ? `/${controller.maxContinuations}` : ''} continuations`
+            : `${controller?.stopReason || controller?.lastDecision || 'disabled'}${controller?.continuationCount ? ` · ${controller.continuationCount}${Number.isInteger(controller?.maxContinuations) ? `/${controller.maxContinuations}` : ''} continuations` : ''}`)
         )
       ),
       React.createElement('label', { style: { display: 'block', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 } }, 'Target conversation'),
@@ -271,9 +292,26 @@ window.__ModuleLoader__.load({
           background: 'var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base))', color: 'var(--dsw-alias-label-primary)', font: 'inherit', outline: 'none',
         },
       }),
+      React.createElement('label', { style: { display: 'block', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginBottom: 4 } }, 'Max continuations'),
+      React.createElement('input', {
+        type: 'number',
+        min: 1,
+        max: 100,
+        step: 1,
+        value: controllerEnabled && Number.isInteger(controller?.maxContinuations) ? String(controller.maxContinuations) : maxContinuations,
+        disabled: controllerEnabled,
+        onChange: (event) => setMaxContinuations(event.target.value),
+        placeholder: 'blank = unlimited',
+        'aria-invalid': !maxContinuationsValid,
+        style: {
+          width: '100%', boxSizing: 'border-box', padding: 9, marginBottom: 8,
+          border: `0.5px solid ${maxContinuationsValid ? 'var(--dsw-alias-border-l3)' : 'var(--dsw-alias-state-error-primary)'}`, borderRadius: 9,
+          background: 'var(--dsw-alias-bg-elevated, var(--dsw-alias-bg-base))', color: 'var(--dsw-alias-label-primary)', font: 'inherit', outline: 'none',
+        },
+      }),
       React.createElement('button', {
         type: 'button',
-        disabled: controllerBusy || (!controllerEnabled && (taskId.trim() === '' || targetConversation === '')),
+        disabled: controllerBusy || (!controllerEnabled && (taskId.trim() === '' || targetConversation === '' || !maxContinuationsValid)),
         onClick: () => configureController(!controllerEnabled),
         style: {
           border: controllerEnabled ? '0.5px solid var(--dsw-alias-border-l3)' : 0,

@@ -496,6 +496,7 @@ function routeHandler({ token, store, controller, mode }) {
           taskId: body.task_id ?? null,
           conversationId: body.conversation_id ?? null,
           start: body.start === true,
+          maxContinuations: body.max_continuations ?? null,
         })
         writeJson(res, 200, { controller: controllerState })
         return

@@ -478,6 +478,57 @@ test('controller can chain three completed turns and stops when task_state becom
   assert.equal(store.status().activeMessages.length, 0)
 })
 
+test('controller validates and enforces a three-turn continuation cap', async () => {
+  let now = 150_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+  const task = { id: 'task_capped_loop', status: 'active', revision: 10 }
+  const controller = new ContinuationController({ store, taskReader: { get: () => ({ ...task }) }, now: () => now })
+
+  store.publish({ clientId: 'companion-a', eventType: 'companion_ready', payload: { relay: 'automatic' } })
+  store.publishObserver({ observerId: 'observer-a', eventType: 'observer_ready', payload: { conversationId: '/c/capped' } })
+  for (const invalid of [0, 101, 1.5]) {
+    assert.throws(
+      () => controller.configure({ enabled: true, taskId: task.id, conversationId: '/c/capped', maxContinuations: invalid }),
+      (error) => error instanceof ContinuationControllerError && error.code === 'invalid_request',
+    )
+  }
+
+  const armed = controller.configure({ enabled: true, start: true, taskId: task.id, conversationId: '/c/capped', maxContinuations: 3 })
+  assert.equal(armed.maxContinuations, 3)
+  const seed = store.poll('companion-a').message
+  store.beginSend({ clientId: 'companion-a', messageId: seed.id })
+  store.ack({ clientId: 'companion-a', messageId: seed.id, outcome: 'sent' })
+
+  for (let completion = 0; completion < 4; completion += 1) {
+    now += 1_000
+    task.revision += 1
+    const observed = store.publishObserver({
+      observerId: 'observer-a',
+      eventType: 'turn_completed',
+      payload: { conversationId: '/c/capped', turnKey: `capped-turn-${completion}` },
+    })
+    const decision = await controller.onObserverEvent(observed.event)
+    if (completion === 3) {
+      assert.equal(decision.enabled, false)
+      assert.equal(decision.stopReason, 'max_continuations_reached')
+      assert.equal(decision.continuationCount, 3)
+      assert.equal(store.status().activeMessages.length, 0)
+      break
+    }
+
+    assert.equal(decision.enabled, true)
+    assert.equal(decision.continuationCount, completion + 1)
+    const leased = store.poll('companion-a').message
+    assert.equal(leased.source, 'auto-continue')
+    if (completion === 2) {
+      assert.match(leased.text, /final controller-capped continuation \(3 of 3\)/)
+      assert.match(leased.text, /checkpoint task_state while leaving it active rather than marking it completed/)
+    }
+    store.beginSend({ clientId: 'companion-a', messageId: leased.id })
+    store.ack({ clientId: 'companion-a', messageId: leased.id, outcome: 'sent' })
+  }
+})
+
 test('controller ignores duplicate turn completion and fails closed on blockers', async () => {
   let now = 200_000
   const store = new ChatGPTWebBridgeStore({ now: () => now })
@@ -581,6 +632,8 @@ test('plugin is a DSH web dual-face plugin with a sidebar client surface', async
   assert.match(client, /bridgeFetch\('\/controller'/)
   assert.match(client, /state\?\.observers/)
   assert.match(client, /conversation_id: targetConversation/)
+  assert.match(client, /max_continuations: maxContinuationsValue/)
+  assert.match(client, /Max continuations/)
   assert.match(client, /Target conversation/)
   assert.doesNotMatch(client, /Responses API|workspace_agents|api\.openai\.com/)
 })

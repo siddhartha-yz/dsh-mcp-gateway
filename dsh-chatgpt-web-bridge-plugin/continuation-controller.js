@@ -24,6 +24,14 @@ function requireConversationId(value) {
   return value
 }
 
+function requireMaxContinuations(value) {
+  if (value === null || value === undefined) return null
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new ContinuationControllerError('invalid_request', 'max_continuations must be an integer from 1 to 100 or null')
+  }
+  return value
+}
+
 function turnKeyOf(event) {
   const value = event?.payload?.turnKey
   return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : null
@@ -37,12 +45,22 @@ export function seedMessage(taskId) {
   ].join(' ')
 }
 
-export function continuationMessage(taskId) {
-  return [
+export function continuationMessage(taskId, { index = null, maxContinuations = null } = {}) {
+  const parts = [
     `${AUTO_CONTINUE_MESSAGE_PREFIX} Task id: ${taskId}.`,
     'Keep working toward the stored goal; do not stop merely to report progress.',
-    'Before ending this turn, update task_state: mark it completed if the goal is achieved, pause it if genuine human input is required, otherwise checkpoint it while leaving it active for the next continuation.',
-  ].join(' ')
+  ]
+  if (Number.isInteger(index) && Number.isInteger(maxContinuations) && index === maxContinuations) {
+    parts.push(
+      `This is the final controller-capped continuation (${index} of ${maxContinuations}).`,
+      'Before ending this turn, checkpoint task_state while leaving it active rather than marking it completed; the controller will stop mechanically after it verifies the checkpoint revision advanced. Pause only if genuine human input is required.',
+    )
+  } else {
+    parts.push(
+      'Before ending this turn, update task_state: mark it completed if the goal is achieved, pause it if genuine human input is required, otherwise checkpoint it while leaving it active for the next continuation.',
+    )
+  }
+  return parts.join(' ')
 }
 
 export class ContinuationController {
@@ -65,6 +83,7 @@ export class ContinuationController {
       hostId: null,
       armedAt: null,
       continuationCount: 0,
+      maxContinuations: null,
       lastTaskRevision: null,
       lastObservedTurnKey: null,
       lastContinuedTurnKey: null,
@@ -88,7 +107,7 @@ export class ContinuationController {
     return { snapshot, companion, observer, now, companionOnline, observerOnline }
   }
 
-  configure({ enabled, taskId = null, conversationId = null, start = false } = {}) {
+  configure({ enabled, taskId = null, conversationId = null, start = false, maxContinuations = null } = {}) {
     if (enabled !== true && enabled !== false) {
       throw new ContinuationControllerError('invalid_request', 'enabled must be a boolean')
     }
@@ -98,6 +117,7 @@ export class ContinuationController {
     }
 
     const checkedTaskId = requireTaskId(taskId)
+    const checkedMaxContinuations = requireMaxContinuations(maxContinuations)
     let task
     try {
       task = this.taskReader.get(checkedTaskId)
@@ -139,6 +159,7 @@ export class ContinuationController {
       hostId,
       armedAt: now,
       continuationCount: 0,
+      maxContinuations: checkedMaxContinuations,
       lastTaskRevision: task.revision,
       lastObservedTurnKey: null,
       lastContinuedTurnKey: null,
@@ -249,13 +270,21 @@ export class ContinuationController {
     }
     this.state.lastTaskRevision = task.revision
 
+    if (Number.isInteger(this.state.maxContinuations) && this.state.continuationCount >= this.state.maxContinuations) {
+      return this.stop('max_continuations_reached')
+    }
+
+    const nextContinuation = this.state.continuationCount + 1
     try {
-      this.store.enqueue(continuationMessage(this.state.taskId), 'auto-continue', { targetHostId: this.state.hostId })
+      this.store.enqueue(continuationMessage(this.state.taskId, {
+        index: nextContinuation,
+        maxContinuations: this.state.maxContinuations,
+      }), 'auto-continue', { targetHostId: this.state.hostId })
     } catch {
       return this.stop('enqueue_failed')
     }
     this.state.lastContinuedTurnKey = turnKey
-    this.state.continuationCount += 1
+    this.state.continuationCount = nextContinuation
     this.state.lastDecision = 'continuation_enqueued'
     this.state.lastDecisionAt = this.now()
     this.state.stopReason = null

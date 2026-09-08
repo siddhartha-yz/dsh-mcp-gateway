@@ -41,7 +41,7 @@ It fails closed on completed/paused tasks, stale task revision, duplicate turn, 
 
 Protocol tests simulate three automatic continuations and then stop when the task becomes `completed`.
 
-## Current blocker: B2 read observer has not connected on the user's Firefox
+## Historical blocker: B2 read observer had not connected on the user's Firefox
 
 B2 is deliberately read-only. Its job is only to observe the real ChatGPT Web page and emit:
 
@@ -62,7 +62,7 @@ observer.lastSeenAt = null
 observer.conversationId = null
 ```
 
-So no Observer event has reached DSH yet. Auto Continue must remain disabled until this is fixed.
+At that checkpoint no Observer event had reached DSH yet, so Auto Continue correctly remained disabled. This blocker was resolved later; see the current acceptance record in `dsh-gui-chatgpt-web.md`.
 
 ## Live deployment state
 
@@ -147,9 +147,9 @@ Prefer direct Firefox/extension diagnostics over more speculative code changes. 
 
 If the extension architecture itself proves unreliable in Firefox, keep the architectural invariant: **B1 official `ui/message` remains outbound; B2 remains read-only receive observation.** A replacement B2 transport may be considered, but do not regress to blind timer auto-continue or a second reasoning agent.
 
-## Acceptance remaining
+## Historical acceptance checklist — now satisfied
 
-P6 is not complete until all of these happen in a real ChatGPT Web conversation:
+This was the remaining checklist at the time of the handoff. The later isolated exact-three run satisfied the transport, progress, and continuation requirements; see `dsh-gui-chatgpt-web.md` for the canonical result:
 
 1. Observer reports a fresh `observer_ready` and heartbeat for the current conversation.
 2. A real generated turn produces `turn_started -> assistant_message -> turn_completed` without false completion.

@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-COMPANION_RESOURCE_URI = "ui://dsh-chatgpt-web-bridge/companion-v2.html"
+COMPANION_RESOURCE_URI = "ui://dsh-chatgpt-web-bridge/companion-v3.html"
 COMPANION_TOOL_NAME = "open_chatgpt_web_bridge_companion"
 TRANSPORT_TOOL_NAME = "chatgpt_web_bridge_transport"
 BRIDGE_DSH_TOOL_NAME = "chatgpt_web_bridge"
@@ -206,7 +206,7 @@ code { font-family: ui-monospace, monospace; }
   async function connect() {
     const result = await request('ui/initialize', {
       appCapabilities: {},
-      appInfo: { name: 'dsh-chatgpt-web-bridge-companion', version: '0.0.2' },
+      appInfo: { name: 'dsh-chatgpt-web-bridge-companion', version: '0.0.3' },
       protocolVersion: PROTOCOL_VERSION,
     });
     notify('ui/notifications/initialized');

@@ -65,6 +65,7 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
 
         companion = tools[COMPANION_TOOL_NAME]
         self.assertEqual(companion.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)
+        self.assertEqual(COMPANION_RESOURCE_URI, "ui://dsh-chatgpt-web-bridge/companion-v3.html")
         self.assertEqual(companion.meta["ui"]["visibility"], ["model", "app"])
         transport = tools[TRANSPORT_TOOL_NAME]
         self.assertEqual(transport.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)

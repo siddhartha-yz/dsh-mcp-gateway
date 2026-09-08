@@ -1,6 +1,6 @@
 # P6 handoff: DSH GUI ↔ ChatGPT Web bridge
 
-Status: paused for direct local-machine debugging through a DSH/local-shell remote worker.
+Status: historical debugging handoff. The isolated exact-three live acceptance passed on 2026-09-08; the current three-part acceptance contract and evidence are recorded in `docs/experiments/dsh-gui-chatgpt-web.md`.
 
 Branch: `experiment/dsh-gui-chat-resume`
 

@@ -424,6 +424,162 @@ test('observer rejects malformed identity and payloads', () => {
   )
 })
 
+test('acceptance contract transport success is independent of task progress', () => {
+  let now = 90_000
+  const store = new ChatGPTWebBridgeStore({ now: () => now })
+
+  store.publish({ clientId: 'companion-a', eventType: 'companion_ready', payload: { relay: 'automatic' } })
+  const queued = store.enqueue('transport acceptance probe', 'acceptance-transport')
+  const leased = store.poll('companion-a').message
+  assert.equal(leased.id, queued.id)
+  store.beginSend({ clientId: 'companion-a', messageId: leased.id })
+  store.ack({ clientId: 'companion-a', messageId: leased.id, outcome: 'sent' })
+
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'observer_ready',
+    payload: { conversationId: '/c/transport' },
+  })
+  now += 1
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'turn_started',
+    payload: { conversationId: '/c/transport', baselineTurnKey: 'transport-turn-0' },
+  })
+  now += 1
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'assistant_message',
+    text: 'transport complete',
+    payload: { conversationId: '/c/transport', turnKey: 'transport-turn-1' },
+  })
+  now += 1
+  store.publishObserver({
+    observerId: 'observer-a',
+    eventType: 'turn_completed',
+    payload: { conversationId: '/c/transport', turnKey: 'transport-turn-1' },
+  })
+
+  const status = store.status()
+  assert.equal(status.counts.sent, 1)
+  assert.equal(status.activeMessages.length, 0)
+  assert.deepEqual(
+    status.recentEvents.filter((event) => event.source === 'observer').slice(-4).map((event) => event.type),
+    ['observer_ready', 'turn_started', 'assistant_message', 'turn_completed'],
+  )
+})
+
+test('acceptance contract progress success requires task_state revision advancement', async () => {
+  let now = 95_000
+  const task = { id: 'task_progress_contract', status: 'active', revision: 4 }
+  const enqueued = []
+  const store = {
+    status: () => ({ activeMessages: [] }),
+    observerForConversation: () => ({ observerId: 'observer-a', hostId: 'host-a' }),
+    companionForHost: () => ({ lastSeenAt: now }),
+    observerStatus: () => ({ observerId: 'observer-a', lastSeenAt: now, lastEventType: 'turn_completed' }),
+    enqueue: (text, source, options = {}) => {
+      const message = { text, source, ...options }
+      enqueued.push(message)
+      return message
+    },
+  }
+  const controller = new ContinuationController({
+    store,
+    taskReader: { get: () => ({ ...task }) },
+    now: () => now,
+  })
+
+  const armed = controller.configure({
+    enabled: true,
+    taskId: task.id,
+    conversationId: '/c/progress-contract',
+  })
+  assert.equal(armed.lastTaskRevision, 4)
+
+  task.revision = 5
+  now += 1
+  const advanced = await controller.onObserverEvent({
+    source: 'observer',
+    observerId: 'observer-a',
+    type: 'turn_completed',
+    payload: { conversationId: '/c/progress-contract', turnKey: 'progress-turn-1' },
+  })
+  assert.equal(advanced.enabled, true)
+  assert.equal(advanced.lastTaskRevision, 5)
+  assert.equal(advanced.stopReason, null)
+  assert.equal(enqueued.length, 1)
+
+  const staleController = new ContinuationController({
+    store: { ...store, enqueue: () => { throw new Error('stale progress must stop before enqueue') } },
+    taskReader: { get: () => ({ ...task }) },
+    now: () => now,
+  })
+  staleController.configure({
+    enabled: true,
+    taskId: task.id,
+    conversationId: '/c/progress-contract',
+  })
+  now += 1
+  const stale = await staleController.onObserverEvent({
+    source: 'observer',
+    observerId: 'observer-a',
+    type: 'turn_completed',
+    payload: { conversationId: '/c/progress-contract', turnKey: 'progress-turn-stale' },
+  })
+  assert.equal(stale.enabled, false)
+  assert.equal(stale.stopReason, 'task_state_not_advanced')
+})
+
+test('acceptance contract continuation success counts only three continuations and stops mechanically', async () => {
+  let now = 98_000
+  let revision = 10
+  const enqueued = []
+  const store = {
+    status: () => ({ activeMessages: [] }),
+    observerForConversation: () => ({ observerId: 'observer-a', hostId: 'host-a' }),
+    companionForHost: () => ({ lastSeenAt: now }),
+    observerStatus: () => ({ observerId: 'observer-a', lastSeenAt: now, lastEventType: 'turn_completed' }),
+    enqueue: (text, source, options = {}) => {
+      const message = { text, source, ...options }
+      enqueued.push(message)
+      return message
+    },
+  }
+  const controller = new ContinuationController({
+    store,
+    taskReader: { get: () => ({ id: 'task_exact_three_contract', status: 'active', revision: revision++ }) },
+    now: () => now,
+  })
+
+  const armed = controller.configure({
+    enabled: true,
+    start: true,
+    taskId: 'task_exact_three_contract',
+    conversationId: '/c/exact-three-contract',
+    maxContinuations: 3,
+  })
+  assert.equal(armed.continuationCount, 0)
+  assert.deepEqual(enqueued.map((message) => message.source), ['auto-seed'])
+
+  let finalDecision = null
+  for (let completion = 0; completion < 4; completion += 1) {
+    now += 1
+    finalDecision = await controller.onObserverEvent({
+      source: 'observer',
+      observerId: 'observer-a',
+      type: 'turn_completed',
+      payload: { conversationId: '/c/exact-three-contract', turnKey: `exact-three-turn-${completion}` },
+    })
+  }
+
+  assert.equal(finalDecision.enabled, false)
+  assert.equal(finalDecision.stopReason, 'max_continuations_reached')
+  assert.equal(finalDecision.continuationCount, 3)
+  assert.deepEqual(enqueued.map((message) => message.source), ['auto-seed', 'auto-continue', 'auto-continue', 'auto-continue'])
+  assert.match(enqueued.at(-1).text, /final controller-capped continuation \(3 of 3\)/)
+})
+
 test('controller can chain three completed turns and stops when task_state becomes completed', async () => {
   let now = 100_000
   const store = new ChatGPTWebBridgeStore({ now: () => now })

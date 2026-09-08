@@ -391,8 +391,18 @@ same ChatGPT conversation
 
 `task_state` exposes the controller only a Cordis-internal read-only service with `get`; it exposes no mutation methods. ChatGPT remains responsible for deciding whether the goal is complete and updating `task_state` before ending each turn. The controller merely checks the recorded status/revision and starts another ChatGPT Web turn through the already-proven B1 `ui/message` path.
 
-Protocol tests now simulate three consecutive completed turns, settle each automatically queued continuation through the companion mailbox, then change the task to `completed`; the fourth completion event stops the controller with exactly three continuations and no remaining outbound message. A separate regression proves that an active task whose revision did not advance causes `task_state_not_advanced` instead of an unbounded loop.
+### Acceptance contract
 
-An isolated real DSH Web runtime also booted bridge version 4 with the new hard read-service dependency and returned a disabled controller in `/state`. Live ChatGPT acceptance is still required: prove B2's DOM lifecycle signal first, then arm a dedicated test task and demonstrate at least 3-5 real automatic turns ending because the task becomes completed.
+P6 acceptance is deliberately split into three independent results. A failure in one dimension must not erase evidence already established in another:
 
-Current live-debug handoff, including the Firefox observer blocker, ruled-out hypotheses, exact commits/CI, and the next direct-local-machine debugging procedure, is recorded in `docs/experiments/dsh-gui-chatgpt-web-handoff.md`.
+- **Transport success**: the intended outbound message crosses the companion `ui/message` path exactly once, the queue settles, and the bound observer reports the matching `turn_started -> assistant_message -> turn_completed` lifecycle. This says nothing about whether the model made task progress.
+- **Progress success**: the completed ChatGPT turn leaves the selected task active/completed/paused according to the prompt contract and advances `task_state.revision` when continuation is expected. A stale revision is specifically `task_state_not_advanced`; it is not a transport failure.
+- **Continuation success**: the explicit seed is excluded from the continuation count, exactly the configured number of automatic continuations are scheduled, and the controller then stops mechanically with the expected stop reason and no active outbound message. This is evaluated separately from the semantic quality of the work performed inside each turn.
+
+The protocol suite contains dedicated regressions for each dimension, plus the broader controller integration tests. The transport regression exercises mailbox dispatch and observer lifecycle without consulting task progress. The progress regression isolates the revision gate, including the stale-revision fail-closed path. The continuation regression uses healthy synthetic transport/progress dependencies so exact-three counting and `max_continuations_reached` can fail independently.
+
+Live exact-three acceptance passed on 2026-09-08 in the isolated ChatGPT Web runner with `max_continuations=3`. The seed advanced task revision 7 -> 8 without counting; continuation 1 advanced 8 -> 9, continuation 2 advanced 9 -> 10, and continuation 3 advanced 10 -> 11 while leaving the task active. The final observed state was `enabled=false`, `continuationCount=3`, `stopReason=max_continuations_reached`, and an empty active-message queue. Therefore transport success, progress success, and continuation success all passed for that run.
+
+The accepted live bridge runtime came from the clean worktree `integration/p6-p7` at commit `255cc49`. The development hot-refresh lane intentionally copies only the bridge plugin runtime files (`index.js`, `continuation-controller.js`, `package.json`, `lib/client.js`) and gateway Python modules into `/srv/dsh-mcp-gateway`; browser-extension sources and repository tests are not part of that component refresh. Differences in those non-refreshed `/srv` files therefore do not imply unknown runtime provenance.
+
+The earlier live-debug procedure and historical Firefox observer blockers are retained in `docs/experiments/dsh-gui-chatgpt-web-handoff.md` as debugging history rather than the current acceptance state.

@@ -40,7 +40,7 @@ install -o root -g root -m 0755 \
   "$SOURCE_ROOT/scripts/dev-hot-reload-root.sh" \
   /usr/local/libexec/dsh-mcp-gateway-dev-refresh
 
-install -d -o root -g root -m 0755 /etc/dsh-mcp-gateway
+install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway
 printf 'SOURCE_ROOT=%q\n' "$SOURCE_ROOT" > /etc/dsh-mcp-gateway/dev-hot-reload.conf
 chown root:root /etc/dsh-mcp-gateway/dev-hot-reload.conf
 chmod 0600 /etc/dsh-mcp-gateway/dev-hot-reload.conf

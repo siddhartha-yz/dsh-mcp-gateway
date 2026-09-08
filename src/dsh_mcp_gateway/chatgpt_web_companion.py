@@ -14,6 +14,7 @@ from typing import Any
 
 COMPANION_RESOURCE_URI = "ui://dsh-chatgpt-web-bridge/companion-v3.html"
 COMPANION_TOOL_NAME = "open_chatgpt_web_bridge_companion"
+COMPANION_TOOL_NAME_V3 = "open_chatgpt_web_bridge_companion_v3"
 TRANSPORT_TOOL_NAME = "chatgpt_web_bridge_transport"
 BRIDGE_DSH_TOOL_NAME = "chatgpt_web_bridge"
 
@@ -272,6 +273,16 @@ def build_chatgpt_web_companion_apps(
             "experiment": "B1-auto-relay",
             "instruction": "Keep the companion rendered; it polls the DSH GUI bridge automatically.",
         }
+
+    @apps.tool(
+        resource_uri=COMPANION_RESOURCE_URI,
+        visibility=["model", "app"],
+        name=COMPANION_TOOL_NAME_V3,
+        title="Open ChatGPT Web bridge companion v3",
+        description="Versioned companion entrypoint used to force ChatGPT to discover the current MCP App resource.",
+    )
+    def open_chatgpt_web_bridge_companion_v3() -> dict[str, Any]:
+        return open_chatgpt_web_bridge_companion()
 
     @apps.tool(
         resource_uri=COMPANION_RESOURCE_URI,

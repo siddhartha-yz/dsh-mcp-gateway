@@ -8,6 +8,7 @@ from dsh_mcp_gateway.chatgpt_web_companion import (
     COMPANION_HTML,
     COMPANION_RESOURCE_URI,
     COMPANION_TOOL_NAME,
+    COMPANION_TOOL_NAME_V3,
     TRANSPORT_TOOL_NAME,
 )
 
@@ -59,6 +60,7 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
                 "dsh_skill_catalog",
                 "dsh_skill_load",
                 COMPANION_TOOL_NAME,
+                COMPANION_TOOL_NAME_V3,
                 TRANSPORT_TOOL_NAME,
             },
         )
@@ -67,6 +69,9 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(companion.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)
         self.assertEqual(COMPANION_RESOURCE_URI, "ui://dsh-chatgpt-web-bridge/companion-v3.html")
         self.assertEqual(companion.meta["ui"]["visibility"], ["model", "app"])
+        companion_v3 = tools[COMPANION_TOOL_NAME_V3]
+        self.assertEqual(companion_v3.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)
+        self.assertEqual(companion_v3.meta["ui"]["visibility"], ["model", "app"])
         transport = tools[TRANSPORT_TOOL_NAME]
         self.assertEqual(transport.meta["ui"]["resourceUri"], COMPANION_RESOURCE_URI)
         self.assertEqual(transport.meta["ui"]["visibility"], ["app"])

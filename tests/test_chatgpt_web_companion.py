@@ -43,6 +43,7 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
             {"dsh_tool_catalog", "dsh_tool_call", "dsh_skill_catalog", "dsh_skill_load"},
         )
         self.assertEqual(await server.list_resources(), [])
+        self.assertIsNone(server._lowlevel_server.get_request_handler("subscriptions/listen"))
 
     async def test_companion_requires_a_real_harness_bridge(self) -> None:
         with self.assertRaisesRegex(ValueError, "enable_chatgpt_web_companion requires harness_bridge"):
@@ -51,6 +52,7 @@ class ChatGPTWebCompanionTests(unittest.IsolatedAsyncioTestCase):
     async def test_opt_in_companion_adds_model_ui_and_app_only_transport(self) -> None:
         bridge = _FakeBridge()
         server = build_mcp_server(bridge, enable_chatgpt_web_companion=True)
+        self.assertIsNotNone(server._lowlevel_server.get_request_handler("subscriptions/listen"))
         tools = {tool.name: tool for tool in await server.list_tools()}
         self.assertEqual(
             set(tools),

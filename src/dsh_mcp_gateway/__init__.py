@@ -80,6 +80,37 @@ def build_mcp_server(
             (HarnessProjectionMixin, server_cls),
             {},
         )
+    elif harness_bridge is not None and enable_chatgpt_web_companion:
+        try:
+            from mcp.shared.subscriptions import ResourcesListChanged, ToolsListChanged
+        except ImportError as exc:  # pragma: no cover - server dependency boundary
+            raise RuntimeError("MCP subscription support is unavailable") from exc
+
+        @asynccontextmanager
+        async def companion_refresh_lifespan(app: Any):
+            async def announce_current_surface() -> None:
+                # Modern MCP list-changed notifications have no replay.  During
+                # the experimental companion's short reconnect window, publish
+                # a bounded sequence so a ChatGPT subscription established just
+                # after gateway restart still refetches current tool/resource
+                # metadata.  Normal meta-only mode keeps subscriptions disabled.
+                for delay in (1, 2, 4, 8, 16):
+                    await asyncio.sleep(delay)
+                    await app._subscriptions.publish(ToolsListChanged())
+                    await app._subscriptions.publish(ResourcesListChanged())
+
+            announcer = asyncio.create_task(
+                announce_current_surface(),
+                name="chatgpt-web-companion-surface-refresh",
+            )
+            try:
+                yield {}
+            finally:
+                announcer.cancel()
+                with suppress(asyncio.CancelledError):
+                    await announcer
+
+        harness_lifespan = companion_refresh_lifespan
 
     instructions = (
         "DSH is the harness authority and ChatGPT is the reasoning agent. The stable meta-tools "
@@ -110,7 +141,7 @@ def build_mcp_server(
         extensions=extensions,
     )
 
-    if harness_bridge is not None and not project_dsh_tools:
+    if harness_bridge is not None and not project_dsh_tools and not enable_chatgpt_web_companion:
         disable_modern_subscriptions(mcp)
     if harness_bridge is not None:
         mcp._dsh_harness_bridge = harness_bridge

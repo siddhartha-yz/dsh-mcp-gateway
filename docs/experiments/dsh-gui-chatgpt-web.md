@@ -406,3 +406,27 @@ Live exact-three acceptance passed on 2026-09-08 in the isolated ChatGPT Web run
 The accepted live bridge runtime came from the clean worktree `integration/p6-p7` at commit `255cc49`. The development hot-refresh lane intentionally copies only the bridge plugin runtime files (`index.js`, `continuation-controller.js`, `package.json`, `lib/client.js`) and gateway Python modules into `/srv/dsh-mcp-gateway`; browser-extension sources and repository tests are not part of that component refresh. Differences in those non-refreshed `/srv` files therefore do not imply unknown runtime provenance.
 
 The earlier live-debug procedure and historical Firefox observer blockers are retained in `docs/experiments/dsh-gui-chatgpt-web-handoff.md` as debugging history rather than the current acceptance state.
+
+## Postmortem: exact-three was not enough to claim unattended reliability
+
+A later production-style attempt tried to use P6 for a real 100-minute unattended audit-and-repair task on this repository. That attempt was stopped before substantive repository work because the control path did not reproduce the expected hands-off behavior reliably.
+
+Observed failure modes and operational friction:
+
+- the Firefox observer was absent until the user manually switched/refreshed the isolated ChatGPT tab and ensured the temporary extension was loaded;
+- the companion and observer can be independently healthy while the controller remains unarmed, so the user still has to reason about several separate lifecycle states;
+- the GUI retained the exact-three-era default `max_continuations=3`, making it easy to arm a long-running task with the wrong execution bound;
+- browser/DOM lifecycle observations remained sensitive to page state, including repeated `turn_started` observations during the failed soak startup;
+- after the seed checkpoint advanced, the expected unattended continuation was not dependable enough that the user could leave the workflow unsupervised.
+
+These observations do not invalidate the earlier exact-three transport evidence. They do invalidate the stronger product claim that P6 provides a repeatable long-running execution facility. The experiment proved that the pieces can line up; it did not prove that they remain aligned across ordinary browser state changes and long unattended operation.
+
+Current decision:
+
+- keep the P6 source and regression tests as experimental evidence;
+- do not load `dsh-chatgpt-web-bridge-plugin` in the default production DSH overlay;
+- do not enable `--experimental-chatgpt-web-companion` in the production gateway systemd unit;
+- do not expose `chatgpt_web_bridge` through the production external ToolRuntime allowlist;
+- keep `task_state` as the supported durable resume mechanism;
+- keep P7 remote workers because they are independently useful and do not depend on P6 continuation;
+- require a new architecture or substantially stronger soak evidence before re-promoting unattended continuation to production.

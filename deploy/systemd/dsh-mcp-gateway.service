@@ -10,8 +10,9 @@ User=dsh-gateway
 Group=dsh-gateway
 EnvironmentFile=/etc/dsh-mcp-gateway/gateway.env
 WorkingDirectory=/srv/dsh-mcp-gateway
-# Experiment branch only: expose the single MCP App ui/message probe while preserving meta-only DSH tools.
-ExecStart=/srv/dsh-mcp-gateway/.venv/bin/dsh-mcp-gateway --dsh-harness-url http://127.0.0.1:3080 --tool-surface meta-only --experimental-chatgpt-web-companion --public-base-url ${DSH_MCP_PUBLIC_BASE_URL} --state-dir /var/lib/dsh-mcp-gateway --bind-host 127.0.0.1 --port 18766
+# Keep the production gateway on the stable meta-only surface. The P6 ChatGPT Web
+# companion remains available behind its explicit experimental CLI flag for manual tests.
+ExecStart=/srv/dsh-mcp-gateway/.venv/bin/dsh-mcp-gateway --dsh-harness-url http://127.0.0.1:3080 --tool-surface meta-only --public-base-url ${DSH_MCP_PUBLIC_BASE_URL} --state-dir /var/lib/dsh-mcp-gateway --bind-host 127.0.0.1 --port 18766
 Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=30s

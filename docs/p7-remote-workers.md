@@ -1,10 +1,10 @@
 # P7 — DSH remote workers
 
-Status: implementation design, 2026-09-07
+Status: complete and independently production-usable, 2026-09-08
 
 ## Goal
 
-Attach a machine that can make outbound HTTPS requests to the DSH host without installing DSH on that machine. ChatGPT remains the reasoning agent and DSH remains the execution/runtime authority. The first acceptance target is the user's local Ubuntu desktop so P6 can inspect the real Firefox/extension runtime directly.
+Attach a machine that can make outbound HTTPS requests to the DSH host without installing DSH on that machine. ChatGPT remains the reasoning agent and DSH remains the execution/runtime authority. P7 was originally motivated by the need to inspect the local Firefox host during P6 debugging, but the resulting remote execution capability is independent of P6 and remains useful on its own.
 
 ## Reference and scope
 
@@ -19,7 +19,7 @@ The protocol deliberately adapts only the proven remote-worker mechanics from `l
 
 It does **not** copy LSM's MCP server, model/harness loop, generic job layer, browser abstraction, transfer subsystem, or broad tool surface.
 
-P7 v1 exposes only enough remote administration plus shell/filesystem execution to debug the local Firefox host. Persistent terminal/browser routing is deferred until a concrete P6 operation needs it.
+P7 v1 intentionally stays narrow: remote administration plus bounded shell/filesystem execution. Persistent terminal/browser routing remains deferred until an independent concrete need justifies it.
 
 ## Architecture
 
@@ -141,4 +141,4 @@ The worker registry is stored in DSH `storageDomain`; invitations and in-flight 
 4. Add deployment wiring and architecture-contract checks.
 5. Deploy P7 to the live host.
 6. Generate an invite, enroll the user's local Ubuntu desktop, and verify list + shell + read.
-7. Use the attached desktop to resume P6 Firefox observer debugging.
+7. Verify the enrolled desktop remains independently useful through `remote_machine` and `remote_exec`, regardless of P6 status.

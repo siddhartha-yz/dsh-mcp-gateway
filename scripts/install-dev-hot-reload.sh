@@ -32,8 +32,7 @@ SOURCE_ROOT=$(realpath -e -- "$SOURCE_ROOT")
 [[ -d "$SOURCE_ROOT" ]] || fail 'source is not a directory'
 [[ -d "$SOURCE_ROOT/.git" || -f "$SOURCE_ROOT/.git" ]] || fail 'source is not a git worktree'
 [[ -f "$SOURCE_ROOT/scripts/dev-hot-reload-root.sh" ]] || fail 'source does not contain dev-hot-reload-root.sh'
-[[ -f "$SOURCE_ROOT/dsh-chatgpt-web-bridge-plugin/index.js" ]] || fail 'bridge plugin is missing'
-[[ -f "$SOURCE_ROOT/src/dsh_mcp_gateway/chatgpt_web_companion.py" ]] || fail 'gateway source is missing'
+[[ -f "$SOURCE_ROOT/src/dsh_mcp_gateway/__init__.py" ]] || fail 'gateway source is missing'
 
 install -d -o root -g root -m 0755 /usr/local/libexec
 install -o root -g root -m 0755 \
@@ -48,11 +47,9 @@ chmod 0600 /etc/dsh-mcp-gateway/dev-hot-reload.conf
 sudoers_tmp=$(mktemp)
 trap 'rm -f "$sudoers_tmp"' EXIT
 cat > "$sudoers_tmp" <<EOF
-# Narrow P6 development hot-refresh lane. The helper hard-codes its root-owned
-# source configuration and accepts only the three literal component arguments.
-$DEV_USER ALL=(root) NOPASSWD: /usr/local/libexec/dsh-mcp-gateway-dev-refresh bridge
+# Narrow gateway-only development hot-refresh lane. The helper hard-codes its
+# root-owned source configuration and accepts only the literal gateway command.
 $DEV_USER ALL=(root) NOPASSWD: /usr/local/libexec/dsh-mcp-gateway-dev-refresh gateway
-$DEV_USER ALL=(root) NOPASSWD: /usr/local/libexec/dsh-mcp-gateway-dev-refresh all
 EOF
 chmod 0440 "$sudoers_tmp"
 visudo -cf "$sudoers_tmp" >/dev/null
@@ -62,5 +59,5 @@ visudo -cf /etc/sudoers.d/dsh-mcp-gateway-dev-refresh >/dev/null
 printf 'Installed DSH dev hot-refresh lane.\n'
 printf 'Source: %s\n' "$SOURCE_ROOT"
 printf 'User: %s\n' "$DEV_USER"
-printf 'Future refreshes: sudo -n /usr/local/libexec/dsh-mcp-gateway-dev-refresh {bridge|gateway|all}\n'
+printf 'Future refreshes: sudo -n /usr/local/libexec/dsh-mcp-gateway-dev-refresh gateway\n'
 printf 'Use the full guarded upgrade for dependencies, systemd units, runtime, or release promotion.\n'

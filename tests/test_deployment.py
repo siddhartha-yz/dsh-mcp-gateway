@@ -178,6 +178,18 @@ class DeploymentTemplateTests(unittest.TestCase):
         self.assertIn("install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway", script)
         self.assertNotIn("install -d -o root -g root -m 0755 /etc/dsh-mcp-gateway", script)
 
+    def test_dev_hot_reload_is_gateway_only(self) -> None:
+        installer = INSTALL_DEV_HOT_RELOAD.read_text(encoding="utf-8")
+        helper = (ROOT / "scripts" / "dev-hot-reload-root.sh").read_text(encoding="utf-8")
+
+        self.assertIn("dsh-mcp-gateway-dev-refresh gateway", installer)
+        self.assertNotIn("dsh-mcp-gateway-dev-refresh bridge", installer)
+        self.assertNotIn("dsh-mcp-gateway-dev-refresh all", installer)
+        self.assertNotIn("dsh-chatgpt-web-bridge-plugin", installer)
+        self.assertIn("usage: dsh-mcp-gateway-dev-refresh gateway", helper)
+        self.assertNotIn("install_bridge", helper)
+        self.assertNotIn("dsh-chatgpt-web-bridge-plugin", helper)
+
     def test_ci_syntax_checks_production_javascript_with_pinned_node(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 

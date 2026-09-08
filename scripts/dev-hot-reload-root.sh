@@ -10,11 +10,7 @@ fail() {
 }
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail 'must run as root'
-[[ $# -eq 1 ]] || fail 'usage: dsh-mcp-gateway-dev-refresh {bridge|gateway|all}'
-case "$1" in
-  bridge|gateway|all) component=$1 ;;
-  *) fail 'component must be bridge, gateway, or all' ;;
-esac
+[[ $# -eq 1 && $1 == gateway ]] || fail 'usage: dsh-mcp-gateway-dev-refresh gateway'
 
 [[ -f "$CONFIG" ]] || fail "missing $CONFIG"
 # shellcheck disable=SC1090
@@ -29,20 +25,6 @@ reject_special_files() {
   local bad
   bad=$(find "$root" -mindepth 1 \( -type l -o -type b -o -type c -o -type p -o -type s \) -print -quit)
   [[ -z "$bad" ]] || fail "refusing non-regular source entry: $bad"
-}
-
-install_bridge() {
-  local src="$SOURCE_ROOT/dsh-chatgpt-web-bridge-plugin"
-  local dst="$LIVE_ROOT/dsh-chatgpt-web-bridge-plugin"
-  [[ -d "$src/lib" && -d "$dst/lib" ]] || fail 'bridge plugin directories are missing'
-  reject_special_files "$src"
-  for rel in index.js continuation-controller.js package.json lib/client.js; do
-    [[ -f "$src/$rel" ]] || fail "missing bridge source file: $rel"
-    install -o root -g root -m 0644 -D -- "$src/$rel" "$dst/$rel"
-  done
-  systemctl restart dsh-web-host.service
-  systemctl is-active --quiet dsh-web-host.service || fail 'dsh-web-host failed after refresh'
-  printf 'bridge refreshed\n'
 }
 
 site_package_dir() {
@@ -86,14 +68,7 @@ install_gateway() {
   printf 'gateway refreshed (%d Python modules)\n' "$copied"
 }
 
-case "$component" in
-  bridge) install_bridge ;;
-  gateway) install_gateway ;;
-  all)
-    install_bridge
-    install_gateway
-    ;;
-esac
+install_gateway
 
 head=$(git -C "$SOURCE_ROOT" rev-parse HEAD 2>/dev/null || true)
 dirty=$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)

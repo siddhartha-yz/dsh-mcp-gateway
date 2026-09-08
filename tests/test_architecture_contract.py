@@ -158,14 +158,15 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn("--dsh-harness-url http://127.0.0.1:3080", gateway_unit)
         self.assertIn("--tool-surface meta-only", gateway_unit)
         self.assertNotIn("--dsh-web-url", gateway_unit)
+        self.assertNotIn("--experimental-chatgpt-web-companion", gateway_unit)
         self.assertIn("--patch /srv/dsh-mcp-gateway/deploy/dsh/chatgpt-bridge.cordis.yml", dsh_unit)
         self.assertNotIn("DEEPSEEK_API_KEY", dsh_env)
         self.assertIn("dsh-task-state-plugin/index.js", overlay)
-        self.assertIn("dsh-chatgpt-web-bridge-plugin/index.js", overlay)
+        self.assertNotIn("dsh-chatgpt-web-bridge-plugin/index.js", overlay)
         self.assertIn("dsh-bridge-plugin/index.js", overlay)
         self.assertIn("allowExtraTools:", overlay)
         self.assertIn("- task_state", overlay)
-        self.assertIn("- chatgpt_web_bridge", overlay)
+        self.assertNotIn("- chatgpt_web_bridge", overlay)
 
     def test_remote_workers_keep_runtime_authority_inside_dsh(self) -> None:
         controller = (ROOT / "dsh-remote-worker-plugin" / "controller.js").read_text(encoding="utf-8")

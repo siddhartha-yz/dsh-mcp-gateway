@@ -24,6 +24,7 @@ DSH_LOCK_VERIFY = ROOT / "scripts" / "verify-dsh-runtime-lock.py"
 PREFLIGHT = ROOT / "scripts" / "preflight-deployment.py"
 PROMOTE_LIVE = ROOT / "scripts" / "promote-live-host.sh"
 UPGRADE_LIVE = ROOT / "scripts" / "upgrade-live-host.sh"
+INSTALL_DEV_HOT_RELOAD = ROOT / "scripts" / "install-dev-hot-reload.sh"
 BOOTSTRAP_HOST = ROOT / "scripts" / "bootstrap-target-host.sh"
 PUBLIC_ORIGIN_VALIDATOR = ROOT / "scripts" / "validate-public-origin.py"
 BACKUP_HOST = ROOT / "scripts" / "backup-host-state.sh"
@@ -170,6 +171,12 @@ class DeploymentTemplateTests(unittest.TestCase):
 
         self.assertIn("run: bash -n scripts/*.sh", workflow)
         self.assertNotIn("run: bash -n scripts/bootstrap-target-host.sh", workflow)
+
+    def test_dev_hot_reload_preserves_private_config_directory_mode(self) -> None:
+        script = INSTALL_DEV_HOT_RELOAD.read_text(encoding="utf-8")
+
+        self.assertIn("install -d -o root -g root -m 0700 /etc/dsh-mcp-gateway", script)
+        self.assertNotIn("install -d -o root -g root -m 0755 /etc/dsh-mcp-gateway", script)
 
     def test_ci_syntax_checks_production_javascript_with_pinned_node(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")

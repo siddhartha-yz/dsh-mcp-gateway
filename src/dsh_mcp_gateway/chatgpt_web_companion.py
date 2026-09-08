@@ -55,12 +55,12 @@ code { font-family: ui-monospace, monospace; }
   const statusNode = document.getElementById('status');
   const clientId = globalThis.crypto?.randomUUID?.() || `companion-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   let hostId = null;
+  let candidateHostId = null;
   globalThis.addEventListener('message', (event) => {
-    if (event.source !== globalThis.parent) return;
     const value = event.data;
     if (!value || value.source !== 'dsh-chatgpt-web-observer-extension' || value.type !== 'host-instance') return;
     if (typeof value.hostId !== 'string' || value.hostId.length < 1 || value.hostId.length > 128) return;
-    hostId = value.hostId;
+    candidateHostId = value.hostId;
   });
   let nextId = 1;
   const pending = new Map();
@@ -123,6 +123,29 @@ code { font-family: ui-monospace, monospace; }
       throw new Error('DSH bridge transport returned no structured value');
     }
     return structured.value;
+  }
+
+  async function resolveValidatedHostId() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const candidate = candidateHostId;
+      if (candidate !== null) {
+        const status = await bridge({ action: 'status' });
+        const observers = Array.isArray(status?.observers) ? status.observers : [];
+        const now = typeof status?.now === 'number' ? status.now : Date.now();
+        const matched = observers.find((observer) =>
+          observer?.hostId === candidate
+          && typeof observer?.lastSeenAt === 'number'
+          && now - observer.lastSeenAt <= 15000
+        );
+        if (matched) {
+          hostId = candidate;
+          return hostId;
+        }
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    }
+    throw new Error('No validated browser-host identity from the DSH observer extension');
   }
 
   async function settle(messageId, outcome, error = null) {
@@ -191,6 +214,8 @@ code { font-family: ui-monospace, monospace; }
     const capabilities = result?.hostCapabilities || {};
     if (!capabilities.message) throw new Error('ChatGPT host does not advertise ui/message');
     if (!capabilities.serverTools) throw new Error('ChatGPT host does not advertise app-initiated server tools');
+
+    await resolveValidatedHostId();
 
     await bridge({
       action: 'publish',
